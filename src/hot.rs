@@ -85,24 +85,24 @@ impl HotWallet {
     pub fn build_soft_limit_return(
         &mut self,
         authorization_outpoint: OutPoint,
-        hard_limit_sats: u64,
+        monthly_limit_sats: u64,
         soft_limit_sats: u64,
         vault_script: ScriptBuf,
     ) -> Result<Option<Transaction>> {
-        if soft_limit_sats > hard_limit_sats {
-            anyhow::bail!("soft limit cannot exceed the configured hard limit");
+        if soft_limit_sats > monthly_limit_sats {
+            anyhow::bail!("soft limit cannot exceed the active monthly limit");
         }
         if self.wallet.get_utxo(authorization_outpoint).is_none() {
             anyhow::bail!(
                 "hot wallet does not contain authorization output {authorization_outpoint}"
             );
         }
-        if soft_limit_sats == hard_limit_sats {
+        if soft_limit_sats == monthly_limit_sats {
             return Ok(None);
         }
 
         let change_script = self.next_change_address()?.script_pubkey();
-        let requested_cold_return = hard_limit_sats - soft_limit_sats;
+        let requested_cold_return = monthly_limit_sats - soft_limit_sats;
         let mut builder = self.wallet.build_tx();
         builder
             .add_utxo(authorization_outpoint)?
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn bdk_hot_wallet_persists_external_and_change_derivation() {
         let dir = tempfile::tempdir().unwrap();
-        initialize(dir.path(), 10_000_000).unwrap();
+        initialize(dir.path()).unwrap();
         let (first_receive, first_change) = {
             let mut hot = HotWallet::open_or_create(dir.path()).unwrap();
             (
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn zero_value_hot_payment_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        initialize(dir.path(), 10_000_000).unwrap();
+        initialize(dir.path()).unwrap();
         let mut hot = HotWallet::open_or_create(dir.path()).unwrap();
         assert!(hot.build_payment(ScriptBuf::new(), 0).is_err());
     }

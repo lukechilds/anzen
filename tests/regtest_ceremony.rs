@@ -24,7 +24,7 @@ fn rpc_from_env() -> RegtestRpc {
 #[ignore = "requires a disposable Bitcoin Core regtest node"]
 fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let initialized = initialize(dir.path(), 10_000_000).unwrap();
+    let initialized = initialize(dir.path()).unwrap();
     let rpc = rpc_from_env();
     let vault_address = Address::from_str(&initialized.config.vault_address)
         .unwrap()
@@ -41,7 +41,7 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     let captured_now = Utc::now().timestamp().max(chain_time);
     let now = DateTime::from_timestamp(captured_now, 0).unwrap();
     let batch_dir = dir.path().join("batch");
-    let prepared = prepare(dir.path(), &rpc, now, &batch_dir).unwrap();
+    let prepared = prepare(dir.path(), &rpc, now, 10_000_000, &batch_dir).unwrap();
     assert_eq!(prepared.chunk_count, 12);
     let approved = approve_hww(dir.path(), &batch_dir).unwrap();
     assert!(approved.hww_approved);

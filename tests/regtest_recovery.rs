@@ -34,9 +34,9 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     let phone_dir = tempfile::tempdir().unwrap();
     let hww_dir = tempfile::tempdir().unwrap();
     let rotation_dir = tempfile::tempdir().unwrap();
-    let phone_vault = initialize(phone_dir.path(), 10_000_000).unwrap();
-    let hww_vault = initialize(hww_dir.path(), 10_000_000).unwrap();
-    let rotation_vault = initialize(rotation_dir.path(), 10_000_000).unwrap();
+    let phone_vault = initialize(phone_dir.path()).unwrap();
+    let hww_vault = initialize(hww_dir.path()).unwrap();
+    let rotation_vault = initialize(rotation_dir.path()).unwrap();
     let mut phone_hot = HotWallet::open_or_create(phone_dir.path()).unwrap();
     let destination = phone_hot.next_receive_address().unwrap();
 

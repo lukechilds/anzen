@@ -26,7 +26,7 @@ fn rpc_from_env() -> RegtestRpc {
 #[ignore = "requires a disposable Bitcoin Core regtest node"]
 fn real_regtest_scans_vault_and_syncs_bdk_hot_wallet() {
     let dir = tempfile::tempdir().unwrap();
-    initialize(dir.path(), 10_000_000).unwrap();
+    initialize(dir.path()).unwrap();
     let config = load_config(dir.path()).unwrap();
     let rpc = rpc_from_env();
 

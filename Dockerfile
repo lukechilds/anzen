@@ -41,9 +41,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates jq libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/vault-cli /usr/local/bin/vault-cli
+COPY --from=builder /build/target/release/vault /usr/local/bin/vault
 COPY scripts /opt/vault/scripts
 COPY vault-design.md worklog.md /opt/vault/
 
 WORKDIR /data
-ENTRYPOINT ["vault-cli"]
+ENTRYPOINT ["vault"]

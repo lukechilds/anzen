@@ -5,6 +5,11 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 description = "Regtest MVP for a renewable Bitcoin vault with bounded mobile spending"
+autobins = false
+
+[[bin]]
+name = "vault"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"

@@ -29,7 +29,8 @@ pub struct VaultConfig {
     pub vault_address: String,
     pub phone_recovery_blocks: u16,
     pub hww_recovery_blocks: u16,
-    pub hard_limit_sats: u64,
+    #[serde(default, alias = "hard_limit_sats")]
+    pub monthly_limit_sats: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,22 +46,77 @@ pub struct InitializedVault {
     pub hww_mnemonic: String,
 }
 
-pub fn initialize(data_dir: &Path, hard_limit_sats: u64) -> Result<InitializedVault> {
-    if hard_limit_sats == 0 {
-        bail!("hard limit must be greater than zero");
+#[derive(Debug)]
+pub struct InitializedDevice {
+    pub mnemonic: String,
+    pub vault_pubkey: String,
+}
+
+pub fn initialize_phone(data_dir: &Path) -> Result<InitializedDevice> {
+    let phone_path = data_dir.join(PHONE_DEVICE_FILE);
+    if phone_path.exists() {
+        bail!("phone already initialized at {}", phone_path.display());
     }
+    let secp = Secp256k1::new();
+    let phone = DeviceKeys::generate(&secp)?;
+    let phone_mnemonic = phone.mnemonic.to_string();
+    write_json(
+        &phone_path,
+        &DeviceFile {
+            kind: "phone".to_owned(),
+            mnemonic: phone_mnemonic.clone(),
+        },
+    )?;
+    Ok(InitializedDevice {
+        mnemonic: phone_mnemonic,
+        vault_pubkey: phone.vault_pubkey.to_string(),
+    })
+}
+
+pub fn initialize_hww(data_dir: &Path) -> Result<InitializedDevice> {
+    let hww_path = data_dir.join(HWW_DEVICE_FILE);
+    if hww_path.exists() {
+        bail!("HWW already initialized at {}", hww_path.display());
+    }
+    let secp = Secp256k1::new();
+    let phone_file =
+        load_device(data_dir, PHONE_DEVICE_FILE).context("initialize the phone before the HWW")?;
+    let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
+    let hww = DeviceKeys::generate(&secp)?;
+    let hww_mnemonic = hww.mnemonic.to_string();
+    write_json(
+        &hww_path,
+        &DeviceFile {
+            kind: "hww".to_owned(),
+            mnemonic: hww_mnemonic.clone(),
+        },
+    )?;
+
+    let backup = crypto::encrypt(
+        &hww.seed,
+        "phone-seed-backup",
+        phone.mnemonic.to_string().as_bytes(),
+    )?;
+    write_json(&data_dir.join(PHONE_BACKUP_FILE), &backup)?;
+    Ok(InitializedDevice {
+        mnemonic: hww_mnemonic,
+        vault_pubkey: hww.vault_pubkey.to_string(),
+    })
+}
+
+pub fn initialize_vault(data_dir: &Path) -> Result<VaultConfig> {
     if data_dir.join(CONFIG_FILE).exists() {
         bail!("vault already initialized at {}", data_dir.display());
     }
-
     let secp = Secp256k1::new();
-    let phone = DeviceKeys::generate(&secp)?;
-    let hww = DeviceKeys::generate(&secp)?;
+    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)
+        .context("initialize the phone before the vault")?;
+    let hww_file =
+        load_device(data_dir, HWW_DEVICE_FILE).context("initialize the HWW before the vault")?;
+    let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
+    let hww = DeviceKeys::parse(&secp, &hww_file.mnemonic)?;
     let policy = VaultPolicy::new(phone.vault_pubkey, hww.vault_pubkey)?;
     let (hot_external, hot_internal) = phone.hot_descriptors(&secp)?;
-
-    let phone_mnemonic = phone.mnemonic.to_string();
-    let hww_mnemonic = hww.mnemonic.to_string();
     let config = VaultConfig {
         version: 1,
         network: "regtest".to_owned(),
@@ -72,40 +128,37 @@ pub fn initialize(data_dir: &Path, hard_limit_sats: u64) -> Result<InitializedVa
         vault_address: policy.address.to_string(),
         phone_recovery_blocks: PHONE_RECOVERY_BLOCKS,
         hww_recovery_blocks: HWW_RECOVERY_BLOCKS,
-        hard_limit_sats,
+        monthly_limit_sats: 0,
     };
-
     write_json(&data_dir.join(CONFIG_FILE), &config)?;
-    write_json(
-        &data_dir.join(PHONE_DEVICE_FILE),
-        &DeviceFile {
-            kind: "phone".to_owned(),
-            mnemonic: phone_mnemonic.clone(),
-        },
-    )?;
-    write_json(
-        &data_dir.join(HWW_DEVICE_FILE),
-        &DeviceFile {
-            kind: "hww".to_owned(),
-            mnemonic: hww_mnemonic.clone(),
-        },
-    )?;
-
-    let backup = crypto::encrypt(&hww.seed, "phone-seed-backup", phone_mnemonic.as_bytes())?;
-    write_json(&data_dir.join(PHONE_BACKUP_FILE), &backup)?;
 
     // Initialize the BDK SQLite state while the device file is present.
     crate::hot::HotWallet::open_or_create(data_dir)?;
 
+    Ok(config)
+}
+
+pub fn initialize(data_dir: &Path) -> Result<InitializedVault> {
+    let phone = initialize_phone(data_dir)?;
+    let hww = initialize_hww(data_dir)?;
+    let config = initialize_vault(data_dir)?;
+
     Ok(InitializedVault {
         config,
-        phone_mnemonic,
-        hww_mnemonic,
+        phone_mnemonic: phone.mnemonic,
+        hww_mnemonic: hww.mnemonic,
     })
 }
 
 pub fn load_config(data_dir: &Path) -> Result<VaultConfig> {
     read_json(&data_dir.join(CONFIG_FILE))
+}
+
+pub fn set_monthly_limit(data_dir: &Path, monthly_limit_sats: u64) -> Result<VaultConfig> {
+    let mut config = load_config(data_dir)?;
+    config.monthly_limit_sats = monthly_limit_sats;
+    write_json(&data_dir.join(CONFIG_FILE), &config)?;
+    Ok(config)
 }
 
 pub fn load_device(data_dir: &Path, relative_path: &str) -> Result<DeviceFile> {
@@ -170,7 +223,7 @@ mod tests {
     #[test]
     fn initialization_persists_separate_devices_and_recoverable_backup() {
         let dir = tempfile::tempdir().unwrap();
-        let initialized = initialize(dir.path(), 10_000_000).unwrap();
+        let initialized = initialize(dir.path()).unwrap();
         assert_eq!(
             load_config(dir.path()).unwrap().vault_address,
             initialized.config.vault_address
@@ -187,13 +240,19 @@ mod tests {
     #[test]
     fn initialization_refuses_to_overwrite_existing_vault() {
         let dir = tempfile::tempdir().unwrap();
-        initialize(dir.path(), 10_000_000).unwrap();
-        assert!(initialize(dir.path(), 10_000_000).is_err());
+        initialize(dir.path()).unwrap();
+        assert!(initialize_vault(dir.path()).is_err());
     }
 
     #[test]
-    fn zero_hard_limit_is_rejected() {
+    fn device_and_vault_initialization_are_separate() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(initialize(dir.path(), 0).is_err());
+        let phone = initialize_phone(dir.path()).unwrap();
+        assert!(!phone.mnemonic.is_empty());
+        assert!(initialize_vault(dir.path()).is_err());
+        let hww = initialize_hww(dir.path()).unwrap();
+        assert!(!hww.mnemonic.is_empty());
+        let config = initialize_vault(dir.path()).unwrap();
+        assert_eq!(config.monthly_limit_sats, 0);
     }
 }

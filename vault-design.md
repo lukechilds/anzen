@@ -12,7 +12,7 @@ This wallet combines:
 
 The main balance normally requires both devices. The user performs an expected rollover roughly once per year, moving all funds into fresh vault outputs and resetting the relative recovery timers.
 
-The phone can also access a predefined hard spending limit each month without carrying the HWW. A lower soft limit controls how much of an unlocked allowance the phone keeps hot. No server, custodian, or online co-signer is required.
+The phone can also access a policy-defined monthly spending limit without carrying the HWW. A lower soft limit controls how much of an unlocked allowance the phone keeps hot. A new vault starts with monthly spending disabled; the limit is introduced later through an explicit phone proposal and HWW approval. No server, custodian, or online co-signer is required.
 
 ## Vault script
 
@@ -103,14 +103,16 @@ Until such a change is activated, block-based CSV is the only stateless single-o
 
 ## Monthly mobile spending
 
-During each rollover, the wallet divides the entire post-fee vault balance equally across twelve independent cold chunks and creates a pair of presigned transactions for each month. Each authorization releases the hard limit and returns that chunk's remainder to the vault address. If the balance cannot fund twelve chunks that can each release the full hard limit plus fees, the wallet warns the user, chooses the largest fundable chunk count below twelve, and creates authorizations only for those earliest consecutive months. The entire post-fee balance is still divided equally across the selected chunks; there is no separate main-vault remainder output. Any indivisible satoshi remainder is distributed deterministically across the earliest chunks.
+Vault initialization creates only the static cold-storage policy. Its monthly limit is zero, so there are no presigned monthly transactions. The phone later proposes a limit, including zero to disable spending, and the HWW confirms it through the signing protocol described below.
+
+When a positive monthly policy is activated, the wallet divides the entire post-fee vault balance equally across twelve independent cold chunks and creates a pair of presigned transactions for each month. Each authorization releases the approved monthly limit and returns that chunk's remainder to the vault address. If the balance cannot fund twelve chunks that can each release the full limit plus fees, the wallet warns the user, chooses the largest fundable chunk count below twelve, and creates authorizations only for those earliest consecutive months. The entire post-fee balance is still divided equally across the selected chunks; there is no separate main-vault remainder output. Any indivisible satoshi remainder is distributed deterministically across the earliest chunks. Activating a zero-limit policy instead creates one cold rollover output and no monthly pairs.
 
 Conceptually:
 
 ```text
 Monthly chunk i
     ├─ monthly authorization, after 00:00 UTC on day 1 of month i
-    │    ├─ hard spending limit → mobile hot wallet
+    │    ├─ monthly limit       → mobile hot wallet
     │    └─ remainder           → vault address
     └─ immediate revocation
          └─ all value, less fee      → vault address
@@ -120,7 +122,7 @@ Each monthly authorization transaction:
 
 - is signed in advance by both `M` and `H`;
 - uses absolute timestamp `nLockTime` for `00:00 UTC` on the first day of its calendar month;
-- sends exactly the hard-limit amount to a fresh address from the mobile hot wallet;
+- sends exactly the approved monthly-limit amount to a fresh address from the mobile hot wallet;
 - returns any cold remainder to the static vault address;
 - is encrypted individually with a dedicated phone-derived encryption key;
 - is stored on the phone and in encrypted cloud storage;
@@ -146,20 +148,20 @@ Loss of the presigned transactions does **not** lose bitcoin. It only removes th
 
 Presigned transactions need a reliable CPFP fee-bumping path because their original fee is chosen in advance. The MVP uses a fixed fee rate of 1 sat/vB on regtest. A production design must also ensure that a phone-broadcast revocation has a phone-available fee-bumping path; returning every spendable output directly to the 2-of-2 vault would otherwise prevent immediate phone-only CPFP. The MVP implementation should carry an explicit code `TODO` at the revocation construction/broadcast boundary so this is not mistaken for a production-safe fee strategy.
 
-### Hard and soft spending limits
+### Monthly and soft spending limits
 
-The hard limit is fixed during rollover. Both signatures on each monthly authorization commit to a transaction that releases exactly that amount to the mobile hot wallet. The limit is therefore enforced by Bitcoin signature validation of the fixed presigned transaction, not by a covenant opcode in the vault script.
+The monthly limit is fixed during policy activation. Both signatures on each monthly authorization commit to a transaction that releases exactly that amount to the mobile hot wallet. It is the effective hard limit and is enforced by Bitcoin signature validation of the fixed presigned transaction, not by a covenant opcode in the vault script.
 
-The soft limit is a phone-side preference that can be changed at any time between zero and the hard limit. To use a smaller soft limit, the phone broadcasts the hard-limit authorization and immediately spends its output in a child transaction that:
+The soft limit is a phone-side preference that can be changed at any time between zero and the approved monthly limit. To use a smaller soft limit, the phone broadcasts the full authorization and immediately spends its output in a child transaction that:
 
 - keeps the chosen soft-limit amount in the mobile hot wallet; and
 - sends the balance back to the static vault address, accounting for fees.
 
-The child can also provide CPFP fee bumping for the presigned parent. The soft limit is not a security boundary: a compromised phone can keep the full hard-limit output instead of creating the cold-return child. MVP actions are manual CLI commands; automatic broadcasting and automatic soft-limit enforcement are out of scope.
+The child can also provide CPFP fee bumping for the presigned parent. The soft limit is not a security boundary: a compromised phone can keep the full monthly-limit output instead of creating the cold-return child. MVP actions are manual CLI commands; automatic broadcasting and automatic soft-limit enforcement are out of scope.
 
 ## Wallet properties
 
-- **Phone only:** can access up to one newly authorized hard-limit chunk per month without carrying the HWW.
+- **Phone only:** can access up to one newly authorized monthly-limit chunk per month without carrying the HWW.
 - **Phone-only revocation:** can invalidate a future monthly authorization by broadcasting its presigned revocation transaction before the authorization matures.
 - **Phone + HWW:** can spend the entire balance immediately.
 - **Unused monthly allowance:** remains under full vault protection until the corresponding presigned transaction is broadcast.
@@ -168,9 +170,9 @@ The child can also provide CPFP fee bumping for the presigned parent. The soft l
 - **No provider dependency:** spending limits and recovery paths require no server co-signer.
 - **Safe long-lived receive policy:** relative timelocks start when each UTXO confirms, so payments to an old address do not enter an already-expired absolute policy.
 
-One new hard-limit authorization becomes available per month. This is not a strict rolling monthly cap: several matured but unused authorizations can accumulate until rollover.
+One new monthly-limit authorization becomes available per month. This is not a strict rolling monthly cap: several matured but unused authorizations can accumulate until rollover.
 
-The hard limit is consensus-enforced in **satoshis**, not dollars.
+The monthly limit is transaction-enforced in **satoshis**, not dollars.
 
 ## MVP implementation scope
 
@@ -185,9 +187,17 @@ For the MVP:
 - all ordinary transactions use a fixed fee rate of 1 sat/vB;
 - policy setup, rollover, signing, revocation, allowance use, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
 
-The simulated HWW protocol should present the complete high-level vault policy once, obtain one approval, validate every transaction in the batch against that approved policy, and then sign all monthly authorization and revocation transactions without requiring a prompt for each transaction. The interchange format should be based on PSBTs plus a policy/batch manifest that gives the signer enough information to independently validate the whole ceremony.
+Device operations are separated in the CLI. Phone actions live under `vault phone *`; HWW actions live under `vault hww *`. Vault initialization is likewise explicit: `vault phone init`, `vault hww init`, then `vault init`. The final command prints only the cold-storage descriptor and public policy details; hot-wallet descriptors remain internal.
 
-In addition to focused automated tests, the repository should provide a serial end-to-end terminal demonstration funded with 2 BTC and configured with a 0.1 BTC monthly hard limit. It should print human-readable seeds and public keys (regtest only), policies, timelocks, Miniscript, addresses, transaction IDs, balances, presigned transaction details, simulated calendar and block advancement, successful and revoked allowances, on-time and forgotten annual rollover, recovery actions, and the loss/theft scenarios described below.
+The monthly-policy protocol has three stages:
+
+1. `vault phone set-policy --monthly-limit SATS --output PROPOSAL.json` constructs the rollover and monthly PSBTs, signs the phone side, and emits a portable JSON policy object.
+2. `vault hww confirm-policy PROPOSAL.json --output APPROVED.json` presents the complete high-level policy once, obtains one approval, independently validates every PSBT against the manifest, and signs the complete batch without per-transaction prompts.
+3. `vault phone activate-policy APPROVED.json` verifies both approvals, broadcasts the rollover, and stores the individually encrypted monthly artifacts.
+
+The JSON interchange embeds PSBTs plus a versioned policy/batch manifest, so the simulated devices do not share an implicit signing workspace. Phone backup restoration, cooperative sweeping, and phone-key rotation use the same explicit JSON handoff model.
+
+In addition to focused automated tests, the repository should provide a serial end-to-end terminal demonstration funded with 2 BTC and configured with a 0.1 BTC monthly limit. It should print human-readable seeds and public keys (regtest only), policies, timelocks, Miniscript, addresses, transaction IDs, balances, presigned transaction details, simulated calendar and block advancement, successful and revoked allowances, on-time and forgotten annual rollover, recovery actions, and the loss/theft scenarios described below.
 
 The demonstration should derive its schedule from the actual UTC date when the test starts, with the first authorization on the next first day of a calendar month. It should still use a real Bitcoin Core regtest node. The test harness may use regtest mock time and on-demand block generation to advance the chain monotonically, mining until median-time-past is strictly later than the authorization locktime before testing a successful broadcast. Block-based recovery paths must be exercised by mining their required block counts rather than by changing mock time.
 

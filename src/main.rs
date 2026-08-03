@@ -1,9 +1,14 @@
-use anyhow::Result;
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use anyhow::{Context, Result, bail};
+use clap::{Args, Parser, Subcommand};
+use serde::{Serialize, de::DeserializeOwned};
+use std::{
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Parser)]
-#[command(name = "vault-cli", version, about)]
+#[command(name = "vault", version, about)]
 struct Cli {
     /// Directory containing simulated device, cloud, and wallet state.
     #[arg(long, default_value = ".vault-data", global = true)]
@@ -18,46 +23,117 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create simulated phone/HWW keys and the static vault policy.
-    Init {
-        /// Monthly hard limit in satoshis.
-        #[arg(long, default_value_t = vault_cli::DEFAULT_HARD_LIMIT_SATS)]
-        hard_limit_sats: u64,
-    },
-    /// Print the configured high-level vault policy.
+    /// Create the static cold-storage policy from initialized device keys.
+    Init,
+    /// Print the configured cold-storage and active monthly policy.
     Policy,
     /// Print vault and chain balances from the real regtest node.
     Status,
-    /// Derive and persist the next mobile hot-wallet receive address.
-    HotAddress,
-    /// Regtest-only node controls used by the end-to-end demonstration.
+    /// Actions performed by the simulated phone.
+    Phone {
+        #[command(subcommand)]
+        command: PhoneCommand,
+    },
+    /// Actions performed by the simulated hardware wallet.
+    Hww {
+        #[command(subcommand)]
+        command: HwwCommand,
+    },
+    /// Regtest-only node controls used by the end-to-end tests.
     Node {
         #[command(subcommand)]
         command: NodeCommand,
     },
-    /// Prepare, approve, and finalize the annual batch signing ceremony.
-    Ceremony {
-        #[command(subcommand)]
-        command: CeremonyCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum PhoneCommand {
+    /// Create the simulated phone key and hot-wallet account.
+    Init,
+    /// Derive and persist the next hot-wallet receive address.
+    ReceiveAddress,
+    /// Send an exact amount from the phone hot wallet.
+    Send { address: String, amount_sats: u64 },
+    /// Propose a monthly policy and add all phone signatures.
+    SetPolicy {
+        #[arg(long)]
+        monthly_limit: u64,
+        #[arg(long)]
+        output: PathBuf,
+        /// Override the captured current Unix time (regtest-only).
+        #[arg(long, hide = true)]
+        now: Option<i64>,
     },
-    /// Broadcast one encrypted monthly authorization or revocation.
-    Monthly {
+    /// Verify an HWW-approved policy, broadcast its rollover, and store artifacts.
+    ActivatePolicy { approved_policy: PathBuf },
+    /// Broadcast a presigned monthly authorization.
+    Authorize { month: String },
+    /// Return the difference between an authorization and a lower soft limit.
+    ApplySoftLimit {
         month: String,
-        #[arg(value_enum)]
-        action: MonthlyAction,
+        #[arg(long)]
+        limit: u64,
     },
-    /// Return the difference between a claimed hard allowance and a lower soft limit to the vault.
-    SoftLimit { month: String, soft_limit_sats: u64 },
-    /// Restore a deleted phone key from its HWW-encrypted cloud backup.
-    RestorePhone,
-    /// Sweep all currently mature vault UTXOs through one policy path.
-    Sweep {
-        #[arg(value_enum)]
-        path: CliSweepPath,
+    /// Broadcast a presigned monthly revocation.
+    Revoke { month: String },
+    /// Restore the phone key from an HWW-created recovery package.
+    Restore { recovery: PathBuf },
+    /// Sweep mature vault outputs using the phone-only recovery path.
+    Recover { destination: String },
+    /// Create and phone-sign a cooperative sweep proposal.
+    CreateSweep {
         destination: String,
+        #[arg(long)]
+        output: PathBuf,
     },
-    /// Cooperatively move all funds to a newly generated phone-key epoch.
-    RotatePhone,
+    /// Verify and broadcast an HWW-approved cooperative sweep.
+    BroadcastSweep { approved_sweep: PathBuf },
+    /// Generate a new phone key and propose a cooperative key rotation.
+    RotateKey {
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Verify and broadcast an HWW-approved phone-key rotation.
+    ActivateRotation { approved_rotation: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+enum HwwCommand {
+    /// Create the simulated HWW key and encrypt the phone backup.
+    Init,
+    /// Validate one high-level policy and sign its complete PSBT batch.
+    ConfirmPolicy {
+        proposal: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        /// Approve non-interactively; intended for deterministic tests.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Decrypt a cloud phone backup into a portable recovery package.
+    DecryptPhoneBackup {
+        backup: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Sweep mature vault outputs using the HWW-only recovery path.
+    Recover { destination: String },
+    /// Validate and sign a phone-created cooperative sweep.
+    ConfirmSweep {
+        proposal: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Validate and sign a phone-key rotation after one high-level approval.
+    ConfirmRotation {
+        proposal: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Clone, Args)]
@@ -98,296 +174,128 @@ enum NodeCommand {
     SetTime { timestamp: u64 },
     /// Mine blocks immediately to an explicit regtest address.
     Mine { blocks: u64, address: String },
-    /// Send an exact amount from the BDK hot wallet to a regtest address.
-    Send { address: String, amount_sats: u64 },
-}
-
-#[derive(Debug, Subcommand)]
-enum CeremonyCommand {
-    /// Build the rollover and all monthly PSBTs, then add the phone signatures.
-    Prepare {
-        /// Override the captured current Unix time (test-only).
-        #[arg(long)]
-        now: Option<i64>,
-        /// Override the ceremony directory.
-        #[arg(long)]
-        batch_dir: Option<PathBuf>,
-    },
-    /// Show the high-level policy and transaction batch awaiting approval.
-    Show {
-        #[arg(long)]
-        batch_dir: Option<PathBuf>,
-    },
-    /// Validate the complete policy once and add all simulated HWW signatures.
-    Approve {
-        #[arg(long)]
-        batch_dir: Option<PathBuf>,
-        /// Approve non-interactively; intended for the deterministic demo.
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Finalize every PSBT, encrypt monthly transactions, and broadcast rollover.
-    Finalize {
-        #[arg(long)]
-        batch_dir: Option<PathBuf>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum MonthlyAction {
-    Authorize,
-    Revoke,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum CliSweepPath {
-    Cooperative,
-    PhoneRecovery,
-    HwwRecovery,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Init { hard_limit_sats } => {
-            let initialized = vault_cli::state::initialize(&cli.data_dir, hard_limit_sats)?;
-            println!("Vault initialized (REGTEST ONLY)");
-            println!("Phone mnemonic: {}", initialized.phone_mnemonic);
-            println!("HWW mnemonic:   {}", initialized.hww_mnemonic);
-            println!("Phone vault key: {}", initialized.config.phone_vault_pubkey);
-            println!("HWW vault key:   {}", initialized.config.hww_vault_pubkey);
-            println!(
-                "Phone hot external descriptor: {}",
-                initialized.config.phone_hot_external_descriptor
-            );
-            println!(
-                "Phone hot change descriptor:   {}",
-                initialized.config.phone_hot_internal_descriptor
-            );
-            println!("Descriptor: {}", initialized.config.vault_descriptor);
-            println!("Vault address: {}", initialized.config.vault_address);
-            println!(
-                "Phone recovery: {} blocks",
-                initialized.config.phone_recovery_blocks
-            );
-            println!(
-                "HWW recovery:   {} blocks",
-                initialized.config.hww_recovery_blocks
-            );
-            println!(
-                "Hard limit:     {} sats",
-                initialized.config.hard_limit_sats
-            );
+        Command::Init => initialize_vault(&cli.data_dir),
+        Command::Policy => print_active_policy(&cli.data_dir),
+        Command::Status => print_status(&cli.data_dir, &cli.rpc),
+        Command::Phone { command } => run_phone(command, &cli.data_dir, &cli.rpc),
+        Command::Hww { command } => run_hww(command, &cli.data_dir, &cli.rpc),
+        Command::Node { command } => run_node(command, &cli.rpc),
+    }
+}
+
+fn initialize_vault(data_dir: &Path) -> Result<()> {
+    let config = vault_cli::state::initialize_vault(data_dir)?;
+    println!("Vault initialized (REGTEST ONLY)");
+    println!("Cold storage descriptor: {}", config.vault_descriptor);
+    println!("Vault address: {}", config.vault_address);
+    println!(
+        "Phone recovery: {} blocks (~14 months)",
+        format_number(u64::from(config.phone_recovery_blocks))
+    );
+    println!(
+        "HWW recovery:   {} blocks (~15 months)",
+        format_number(u64::from(config.hww_recovery_blocks))
+    );
+    println!("Monthly spending: disabled");
+    Ok(())
+}
+
+fn run_phone(command: PhoneCommand, data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
+    match command {
+        PhoneCommand::Init => {
+            let phone = vault_cli::state::initialize_phone(data_dir)?;
+            println!("Simulated phone initialized (REGTEST ONLY)");
+            println!("Phone mnemonic: {}", phone.mnemonic);
+            println!("Phone vault key: {}", phone.vault_pubkey);
         }
-        Command::Policy => {
-            let config = vault_cli::state::load_config(&cli.data_dir)?;
-            println!("Descriptor: {}", config.vault_descriptor);
-            println!("Vault address: {}", config.vault_address);
-            println!("Phone recovery: {} blocks", config.phone_recovery_blocks);
-            println!("HWW recovery:   {} blocks", config.hww_recovery_blocks);
-            println!("Hard limit:     {} sats", config.hard_limit_sats);
-        }
-        Command::Status => {
-            let config = vault_cli::state::load_config(&cli.data_dir)?;
-            let rpc = cli.rpc.connect()?;
-            let info = rpc.chain_info()?;
-            let utxos = rpc.scan_vault(&config)?;
-            let balance = utxos
-                .iter()
-                .map(|utxo| utxo.txout.value.to_sat())
-                .sum::<u64>();
-            println!("Network: regtest");
-            println!("Height: {}", info.blocks);
-            println!("Median time past: {}", info.median_time);
-            println!("Vault UTXOs: {}", utxos.len());
-            println!("Vault balance: {} sats", balance);
-            if let Some(oldest) = utxos.first() {
-                println!("Oldest confirmation height: {}", oldest.confirmation_height);
-                print_recovery_activation(
-                    "Phone",
-                    oldest.confirmation_height + u64::from(config.phone_recovery_blocks),
-                    info.blocks + 1,
-                    info.median_time,
-                );
-                print_recovery_activation(
-                    "HWW",
-                    oldest.confirmation_height + u64::from(config.hww_recovery_blocks),
-                    info.blocks + 1,
-                    info.median_time,
-                );
-            }
-        }
-        Command::HotAddress => {
-            let mut hot = vault_cli::hot::HotWallet::open_or_create(&cli.data_dir)?;
-            let rpc = cli.rpc.connect()?;
+        PhoneCommand::ReceiveAddress => {
+            let mut hot = vault_cli::hot::HotWallet::open_or_create(data_dir)?;
+            let rpc = rpc_args.connect()?;
             hot.sync(&rpc.client)?;
             println!("Hot receive address: {}", hot.next_receive_address()?);
         }
-        Command::Node { command } => {
-            let rpc = cli.rpc.connect()?;
-            match command {
-                NodeCommand::Info => {
-                    let info = rpc.chain_info()?;
-                    println!("Network: {}", info.chain);
-                    println!("Height: {}", info.blocks);
-                    println!("Median time past: {}", info.median_time);
-                    println!("Best block: {}", info.best_block_hash);
-                }
-                NodeCommand::SetTime { timestamp } => {
-                    rpc.set_mock_time(timestamp)?;
-                    println!("Regtest mock time set to {timestamp}");
-                }
-                NodeCommand::Mine { blocks, address } => {
-                    use bitcoin::Address;
-                    use std::str::FromStr;
-                    let address =
-                        Address::from_str(&address)?.require_network(bitcoin::Network::Regtest)?;
-                    let hashes = rpc.mine(blocks, &address)?;
-                    println!("Mined {} blocks", hashes.len());
-                    if let Some(hash) = hashes.last() {
-                        println!("New tip: {hash}");
-                    }
-                }
-                NodeCommand::Send {
-                    address,
-                    amount_sats,
-                } => {
-                    use bitcoin::Address;
-                    use bitcoincore_rpc::RpcApi;
-                    use std::str::FromStr;
-                    let address =
-                        Address::from_str(&address)?.require_network(bitcoin::Network::Regtest)?;
-                    let mut hot = vault_cli::hot::HotWallet::open_or_create(&cli.data_dir)?;
-                    hot.sync(&rpc.client)?;
-                    let (transaction, fee_sats) =
-                        hot.build_payment(address.script_pubkey(), amount_sats)?;
-                    let txid = rpc.client.send_raw_transaction(&transaction)?;
-                    println!("Hot-wallet payment broadcast: {txid}");
-                    println!("Destination: {address}");
-                    println!("Amount: {amount_sats} sats");
-                    println!("Fee: {fee_sats} sats (1 sat/vB)");
-                }
-            }
+        PhoneCommand::Send {
+            address,
+            amount_sats,
+        } => phone_send(data_dir, rpc_args, &address, amount_sats)?,
+        PhoneCommand::SetPolicy {
+            monthly_limit,
+            output,
+            now,
+        } => phone_set_policy(data_dir, rpc_args, monthly_limit, now, &output)?,
+        PhoneCommand::ActivatePolicy { approved_policy } => {
+            phone_activate_policy(data_dir, rpc_args, &approved_policy)?
         }
-        Command::Ceremony { command } => match command {
-            CeremonyCommand::Prepare { now, batch_dir } => {
-                let rpc = cli.rpc.connect()?;
-                let timestamp = now.unwrap_or_else(|| chrono::Utc::now().timestamp());
-                let now = chrono::DateTime::from_timestamp(timestamp, 0)
-                    .ok_or_else(|| anyhow::anyhow!("invalid ceremony timestamp {timestamp}"))?;
-                let batch_dir = batch_dir
-                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
-                let manifest = vault_cli::ceremony::prepare(&cli.data_dir, &rpc, now, &batch_dir)?;
-                print_manifest(&manifest, &batch_dir);
-                println!(
-                    "Phone approved and signed all {} PSBTs",
-                    1 + manifest.chunk_count * 2
-                );
-                println!("Next: review with `vault-cli ceremony approve`");
-            }
-            CeremonyCommand::Show { batch_dir } => {
-                let batch_dir = batch_dir
-                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
-                let manifest = vault_cli::ceremony::load_manifest(&batch_dir)?;
-                print_manifest(&manifest, &batch_dir);
-            }
-            CeremonyCommand::Approve { batch_dir, yes } => {
-                let batch_dir = batch_dir
-                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
-                let manifest = vault_cli::ceremony::load_manifest(&batch_dir)?;
-                println!("SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL");
-                print_manifest(&manifest, &batch_dir);
-                if !yes {
-                    use std::io::{self, Write};
-                    print!("Type `approve` to sign the complete batch: ");
-                    io::stdout().flush()?;
-                    let mut response = String::new();
-                    io::stdin().read_line(&mut response)?;
-                    if response.trim() != "approve" {
-                        anyhow::bail!("HWW policy approval declined");
-                    }
-                }
-                let approved = vault_cli::ceremony::approve_hww(&cli.data_dir, &batch_dir)?;
-                println!(
-                    "HWW validated and signed all {} PSBTs after one approval",
-                    1 + approved.chunk_count * 2
-                );
-            }
-            CeremonyCommand::Finalize { batch_dir } => {
-                let rpc = cli.rpc.connect()?;
-                let batch_dir = batch_dir
-                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
-                let schedule =
-                    vault_cli::ceremony::finalize_and_broadcast(&cli.data_dir, &rpc, &batch_dir)?;
-                println!("Rollover broadcast: {}", schedule.rollover_txid);
-                println!(
-                    "Encrypted monthly transaction pairs: {}",
-                    schedule.entries.len()
-                );
-                for entry in schedule.entries {
-                    println!(
-                        "{} unlock={} authorization={} revocation={}",
-                        entry.month,
-                        entry.unlock_timestamp,
-                        entry.authorization_txid,
-                        entry.revocation_txid
-                    );
-                }
-            }
-        },
-        Command::Monthly { month, action } => {
-            let rpc = cli.rpc.connect()?;
-            let kind = match action {
-                MonthlyAction::Authorize => vault_cli::ceremony::TransactionKind::Authorization,
-                MonthlyAction::Revoke => vault_cli::ceremony::TransactionKind::Revocation,
-            };
-            let txid = vault_cli::ceremony::broadcast_monthly(&cli.data_dir, &rpc, &month, kind)?;
-            println!("Broadcast {action:?} for {month}: {txid}");
-        }
-        Command::SoftLimit {
-            month,
-            soft_limit_sats,
-        } => {
-            let rpc = cli.rpc.connect()?;
-            match vault_cli::ceremony::apply_soft_limit(
-                &cli.data_dir,
-                &rpc,
+        PhoneCommand::Authorize { month } => {
+            broadcast_monthly(
+                data_dir,
+                rpc_args,
                 &month,
-                soft_limit_sats,
-            )? {
+                vault_cli::ceremony::TransactionKind::Authorization,
+            )?;
+        }
+        PhoneCommand::ApplySoftLimit { month, limit } => {
+            let rpc = rpc_args.connect()?;
+            match vault_cli::ceremony::apply_soft_limit(data_dir, &rpc, &month, limit)? {
                 Some(txid) => println!(
-                    "Soft limit applied for {month}: retained at most {soft_limit_sats} sats hot; cold-return txid={txid}"
+                    "Soft limit applied for {month}: retained at most {limit} sats hot; cold-return txid={txid}"
                 ),
                 None => println!(
-                    "Soft limit equals hard limit for {month}; no cold-return transaction required"
+                    "Soft limit equals the monthly limit for {month}; no cold-return transaction required"
                 ),
             }
         }
-        Command::RestorePhone => {
-            let mnemonic = vault_cli::recovery::restore_phone_from_hww_backup(&cli.data_dir)?;
-            println!("Phone key restored from HWW-encrypted backup");
+        PhoneCommand::Revoke { month } => {
+            broadcast_monthly(
+                data_dir,
+                rpc_args,
+                &month,
+                vault_cli::ceremony::TransactionKind::Revocation,
+            )?;
+        }
+        PhoneCommand::Restore { recovery } => {
+            let package: vault_cli::recovery::PhoneRecoveryPackage = read_artifact(&recovery)?;
+            let mnemonic = vault_cli::recovery::restore_phone_package(data_dir, &package)?;
+            println!("Phone key restored from HWW recovery package");
             println!("Recovered phone mnemonic: {mnemonic}");
         }
-        Command::Sweep { path, destination } => {
-            use bitcoin::Address;
-            use std::str::FromStr;
-            let destination =
-                Address::from_str(&destination)?.require_network(bitcoin::Network::Regtest)?;
-            let path = match path {
-                CliSweepPath::Cooperative => vault_cli::recovery::SweepPath::Cooperative,
-                CliSweepPath::PhoneRecovery => vault_cli::recovery::SweepPath::PhoneRecovery,
-                CliSweepPath::HwwRecovery => vault_cli::recovery::SweepPath::HwwRecovery,
-            };
-            let rpc = cli.rpc.connect()?;
-            let result = vault_cli::recovery::sweep(&cli.data_dir, &rpc, path, &destination)?;
-            println!("Vault sweep broadcast via {path:?}: {}", result.txid);
-            println!("Inputs: {}", result.input_count);
-            println!("Sent: {} sats", result.sent_sats);
-            println!("Fee: {} sats (1 sat/vB)", result.fee_sats);
+        PhoneCommand::Recover { destination } => {
+            device_recover(
+                data_dir,
+                rpc_args,
+                &destination,
+                vault_cli::recovery::SweepPath::PhoneRecovery,
+            )?;
         }
-        Command::RotatePhone => {
-            let rpc = cli.rpc.connect()?;
-            let result = vault_cli::recovery::rotate_phone(&cli.data_dir, &rpc)?;
+        PhoneCommand::CreateSweep {
+            destination,
+            output,
+        } => phone_create_sweep(data_dir, rpc_args, &destination, &output)?,
+        PhoneCommand::BroadcastSweep { approved_sweep } => {
+            let package: vault_cli::recovery::CooperativeSweepPackage =
+                read_artifact(&approved_sweep)?;
+            let rpc = rpc_args.connect()?;
+            let result =
+                vault_cli::recovery::broadcast_cooperative_sweep(data_dir, &rpc, &package)?;
+            print_sweep_result("Cooperative vault sweep broadcast", &result);
+        }
+        PhoneCommand::RotateKey { output } => {
+            let rpc = rpc_args.connect()?;
+            let package = vault_cli::recovery::create_phone_rotation(data_dir, &rpc)?;
+            report_rotation(&package, artifact_reports_to_stderr(&output))?;
+            write_artifact(&output, &package)?;
+            report_artifact(&output, "Phone-key rotation proposal")?;
+        }
+        PhoneCommand::ActivateRotation { approved_rotation } => {
+            let package: vault_cli::recovery::PhoneRotationPackage =
+                read_artifact(&approved_rotation)?;
+            let rpc = rpc_args.connect()?;
+            let result = vault_cli::recovery::activate_phone_rotation(data_dir, &rpc, &package)?;
             println!(
                 "Emergency phone-key rotation broadcast: {}",
                 result.sweep.txid
@@ -395,14 +303,452 @@ fn main() -> Result<()> {
             println!("Old vault address: {}", result.old_address);
             println!("New vault address: {}", result.new_address);
             println!("New phone mnemonic: {}", result.new_phone_mnemonic);
-            println!(
-                "Moved {} sats from {} inputs; fee={} sats",
-                result.sweep.sent_sats, result.sweep.input_count, result.sweep.fee_sats
-            );
-            println!("Old monthly authorizations are invalidated by the sweep");
+            println!("Monthly spending: disabled until a new policy is approved");
         }
     }
     Ok(())
+}
+
+fn run_hww(command: HwwCommand, data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
+    match command {
+        HwwCommand::Init => {
+            let hww = vault_cli::state::initialize_hww(data_dir)?;
+            println!("Simulated HWW initialized (REGTEST ONLY)");
+            println!("HWW mnemonic: {}", hww.mnemonic);
+            println!("HWW vault key: {}", hww.vault_pubkey);
+            println!("Phone backup encrypted for the HWW");
+        }
+        HwwCommand::ConfirmPolicy {
+            proposal,
+            output,
+            yes,
+        } => hww_confirm_policy(data_dir, &proposal, &output, yes)?,
+        HwwCommand::DecryptPhoneBackup { backup, output } => {
+            let package = vault_cli::recovery::decrypt_phone_backup_package(data_dir, &backup)?;
+            write_artifact(&output, &package)?;
+            report_artifact(&output, "Decrypted phone recovery package")?;
+        }
+        HwwCommand::Recover { destination } => {
+            device_recover(
+                data_dir,
+                rpc_args,
+                &destination,
+                vault_cli::recovery::SweepPath::HwwRecovery,
+            )?;
+        }
+        HwwCommand::ConfirmSweep {
+            proposal,
+            output,
+            yes,
+        } => {
+            let package: vault_cli::recovery::CooperativeSweepPackage = read_artifact(&proposal)?;
+            print_hww_sweep_prompt(&package, yes, proposal.as_path())?;
+            let approved = vault_cli::recovery::confirm_cooperative_sweep(data_dir, &package)?;
+            eprintln!("HWW validated and signed the cooperative sweep");
+            write_artifact(&output, &approved)?;
+            report_artifact(&output, "HWW-approved cooperative sweep")?;
+        }
+        HwwCommand::ConfirmRotation {
+            proposal,
+            output,
+            yes,
+        } => {
+            let package: vault_cli::recovery::PhoneRotationPackage = read_artifact(&proposal)?;
+            report_rotation(&package, true)?;
+            require_hww_approval(yes, proposal.as_path(), "phone-key rotation")?;
+            let approved = vault_cli::recovery::confirm_phone_rotation(data_dir, &package)?;
+            eprintln!("HWW validated and signed the phone-key rotation");
+            write_artifact(&output, &approved)?;
+            report_artifact(&output, "HWW-approved phone-key rotation")?;
+        }
+    }
+    Ok(())
+}
+
+fn phone_set_policy(
+    data_dir: &Path,
+    rpc_args: &RpcArgs,
+    monthly_limit: u64,
+    now: Option<i64>,
+    output: &Path,
+) -> Result<()> {
+    let rpc = rpc_args.connect()?;
+    let timestamp = now.unwrap_or_else(|| chrono::Utc::now().timestamp());
+    let now = chrono::DateTime::from_timestamp(timestamp, 0)
+        .with_context(|| format!("invalid policy timestamp {timestamp}"))?;
+    let workspace = data_dir.join("phone/policy-proposal");
+    reset_workspace(&workspace)?;
+    let manifest = vault_cli::ceremony::prepare(data_dir, &rpc, now, monthly_limit, &workspace)?;
+    let package = vault_cli::ceremony::package_from_batch(&workspace)?;
+    print_manifest(&manifest, artifact_reports_to_stderr(output))?;
+    write_artifact(output, &package)?;
+    report_artifact(output, "Phone-signed policy proposal")?;
+    Ok(())
+}
+
+fn hww_confirm_policy(data_dir: &Path, proposal: &Path, output: &Path, yes: bool) -> Result<()> {
+    let package: vault_cli::ceremony::PolicyPackage = read_artifact(proposal)?;
+    eprintln!("SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL");
+    print_manifest(&package.manifest, true)?;
+    require_hww_approval(yes, proposal, "complete monthly policy")?;
+    let workspace = data_dir.join("hww/policy-review");
+    reset_workspace(&workspace)?;
+    vault_cli::ceremony::materialize_policy_package(&package, &workspace)?;
+    let approved_manifest = vault_cli::ceremony::approve_hww(data_dir, &workspace)?;
+    eprintln!(
+        "HWW validated and signed all {} PSBTs after one approval",
+        1 + approved_manifest.chunk_count * 2
+    );
+    let approved = vault_cli::ceremony::package_from_batch(&workspace)?;
+    write_artifact(output, &approved)?;
+    report_artifact(output, "HWW-approved policy")?;
+    Ok(())
+}
+
+fn phone_activate_policy(data_dir: &Path, rpc_args: &RpcArgs, approved: &Path) -> Result<()> {
+    let package: vault_cli::ceremony::PolicyPackage = read_artifact(approved)?;
+    if !package.manifest.phone_approved || !package.manifest.hww_approved {
+        bail!("policy package requires both phone and HWW approval");
+    }
+    let workspace = data_dir.join("phone/policy-activation");
+    reset_workspace(&workspace)?;
+    vault_cli::ceremony::materialize_policy_package(&package, &workspace)?;
+    let rpc = rpc_args.connect()?;
+    let schedule = vault_cli::ceremony::finalize_and_broadcast(data_dir, &rpc, &workspace)?;
+    vault_cli::state::set_monthly_limit(data_dir, package.manifest.monthly_limit_sats)?;
+    println!("Rollover broadcast: {}", schedule.rollover_txid);
+    println!("Active monthly limit: {} sats", schedule.monthly_limit_sats);
+    println!(
+        "Encrypted monthly transaction pairs: {}",
+        schedule.entries.len()
+    );
+    Ok(())
+}
+
+fn phone_create_sweep(
+    data_dir: &Path,
+    rpc_args: &RpcArgs,
+    destination: &str,
+    output: &Path,
+) -> Result<()> {
+    let address = regtest_address(destination)?;
+    let rpc = rpc_args.connect()?;
+    let package = vault_cli::recovery::create_cooperative_sweep(data_dir, &rpc, &address)?;
+    report_sweep(&package, artifact_reports_to_stderr(output))?;
+    write_artifact(output, &package)?;
+    report_artifact(output, "Phone-signed cooperative sweep")?;
+    Ok(())
+}
+
+fn print_hww_sweep_prompt(
+    package: &vault_cli::recovery::CooperativeSweepPackage,
+    yes: bool,
+    proposal: &Path,
+) -> Result<()> {
+    report_sweep(package, true)?;
+    require_hww_approval(yes, proposal, "cooperative sweep")
+}
+
+fn device_recover(
+    data_dir: &Path,
+    rpc_args: &RpcArgs,
+    destination: &str,
+    path: vault_cli::recovery::SweepPath,
+) -> Result<()> {
+    let destination = regtest_address(destination)?;
+    let rpc = rpc_args.connect()?;
+    let result = vault_cli::recovery::sweep(data_dir, &rpc, path, &destination)?;
+    let label = match path {
+        vault_cli::recovery::SweepPath::PhoneRecovery => "Phone recovery sweep broadcast",
+        vault_cli::recovery::SweepPath::HwwRecovery => "HWW recovery sweep broadcast",
+        vault_cli::recovery::SweepPath::Cooperative => "Cooperative sweep broadcast",
+    };
+    print_sweep_result(label, &result);
+    Ok(())
+}
+
+fn broadcast_monthly(
+    data_dir: &Path,
+    rpc_args: &RpcArgs,
+    month: &str,
+    kind: vault_cli::ceremony::TransactionKind,
+) -> Result<()> {
+    let rpc = rpc_args.connect()?;
+    let txid = vault_cli::ceremony::broadcast_monthly(data_dir, &rpc, month, kind)?;
+    let action = match kind {
+        vault_cli::ceremony::TransactionKind::Authorization => "Authorization",
+        vault_cli::ceremony::TransactionKind::Revocation => "Revocation",
+    };
+    println!("Broadcast {action} for {month}: {txid}");
+    Ok(())
+}
+
+fn phone_send(data_dir: &Path, rpc_args: &RpcArgs, address: &str, amount_sats: u64) -> Result<()> {
+    use bitcoincore_rpc::RpcApi;
+    let address = regtest_address(address)?;
+    let rpc = rpc_args.connect()?;
+    let mut hot = vault_cli::hot::HotWallet::open_or_create(data_dir)?;
+    hot.sync(&rpc.client)?;
+    let (transaction, fee_sats) = hot.build_payment(address.script_pubkey(), amount_sats)?;
+    let txid = rpc.client.send_raw_transaction(&transaction)?;
+    println!("Hot-wallet payment broadcast: {txid}");
+    println!("Destination: {address}");
+    println!("Amount: {amount_sats} sats");
+    println!("Fee: {fee_sats} sats (1 sat/vB)");
+    Ok(())
+}
+
+fn print_active_policy(data_dir: &Path) -> Result<()> {
+    let config = vault_cli::state::load_config(data_dir)?;
+    println!("Cold storage descriptor: {}", config.vault_descriptor);
+    println!("Vault address: {}", config.vault_address);
+    println!(
+        "Phone recovery: {} blocks (~14 months)",
+        format_number(u64::from(config.phone_recovery_blocks))
+    );
+    println!(
+        "HWW recovery:   {} blocks (~15 months)",
+        format_number(u64::from(config.hww_recovery_blocks))
+    );
+    if config.monthly_limit_sats == 0 {
+        println!("Monthly spending: disabled");
+    } else {
+        println!("Monthly limit: {} sats", config.monthly_limit_sats);
+        if let Ok(schedule) = vault_cli::ceremony::load_schedule(data_dir) {
+            println!(
+                "Presigned monthly transaction pairs: {}",
+                schedule.entries.len()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_status(data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
+    let config = vault_cli::state::load_config(data_dir)?;
+    let rpc = rpc_args.connect()?;
+    let info = rpc.chain_info()?;
+    let utxos = rpc.scan_vault(&config)?;
+    let balance = utxos
+        .iter()
+        .map(|utxo| utxo.txout.value.to_sat())
+        .sum::<u64>();
+    println!("Network: regtest");
+    println!("Height: {}", info.blocks);
+    println!("Median time past: {}", info.median_time);
+    println!("Vault UTXOs: {}", utxos.len());
+    println!("Vault balance: {} sats", balance);
+    println!(
+        "Monthly spending: {}",
+        if config.monthly_limit_sats == 0 {
+            "disabled".to_owned()
+        } else {
+            format!("{} sats", config.monthly_limit_sats)
+        }
+    );
+    if let Some(oldest) = utxos.first() {
+        println!("Oldest confirmation height: {}", oldest.confirmation_height);
+        print_recovery_activation(
+            "Phone",
+            oldest.confirmation_height + u64::from(config.phone_recovery_blocks),
+            info.blocks + 1,
+            info.median_time,
+        );
+        print_recovery_activation(
+            "HWW",
+            oldest.confirmation_height + u64::from(config.hww_recovery_blocks),
+            info.blocks + 1,
+            info.median_time,
+        );
+    }
+    Ok(())
+}
+
+fn run_node(command: NodeCommand, rpc_args: &RpcArgs) -> Result<()> {
+    let rpc = rpc_args.connect()?;
+    match command {
+        NodeCommand::Info => {
+            let info = rpc.chain_info()?;
+            println!("Network: {}", info.chain);
+            println!("Height: {}", info.blocks);
+            println!("Median time past: {}", info.median_time);
+            println!("Best block: {}", info.best_block_hash);
+        }
+        NodeCommand::SetTime { timestamp } => {
+            rpc.set_mock_time(timestamp)?;
+            println!("Regtest mock time set to {timestamp}");
+        }
+        NodeCommand::Mine { blocks, address } => {
+            let address = regtest_address(&address)?;
+            let hashes = rpc.mine(blocks, &address)?;
+            println!("Mined {} blocks", hashes.len());
+            if let Some(hash) = hashes.last() {
+                println!("New tip: {hash}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, stderr: bool) -> Result<()> {
+    let mut output: Box<dyn Write> = if stderr {
+        Box::new(io::stderr().lock())
+    } else {
+        Box::new(io::stdout().lock())
+    };
+    writeln!(output, "PHONE POLICY PROPOSAL")?;
+    writeln!(
+        output,
+        "Cold storage descriptor: {}",
+        manifest.vault_descriptor
+    )?;
+    writeln!(output, "Vault address: {}", manifest.vault_address)?;
+    if manifest.monthly_limit_sats == 0 {
+        writeln!(output, "Monthly spending: disabled")?;
+    } else {
+        writeln!(
+            output,
+            "Monthly limit: {} sats",
+            manifest.monthly_limit_sats
+        )?;
+    }
+    writeln!(output, "Fee rate: {} sat/vB", manifest.fee_rate_sat_vb)?;
+    writeln!(output, "Total input: {} sats", manifest.total_input_sats)?;
+    writeln!(output, "Monthly pairs: {}", manifest.chunk_count)?;
+    if manifest.chunk_count < vault_cli::MONTHS_PER_ROLLOVER && manifest.monthly_limit_sats > 0 {
+        writeln!(
+            output,
+            "WARNING: balance funds only {} of {} monthly allowances",
+            manifest.chunk_count,
+            vault_cli::MONTHS_PER_ROLLOVER
+        )?;
+    }
+    writeln!(output, "Rollover txid: {}", manifest.rollover.unsigned_txid)?;
+    writeln!(output, "Rollover fee: {} sats", manifest.rollover.fee_sats)?;
+    writeln!(
+        output,
+        "Phone signed PSBTs: {}",
+        1 + manifest.chunk_count * 2
+    )?;
+    Ok(())
+}
+
+fn report_sweep(
+    package: &vault_cli::recovery::CooperativeSweepPackage,
+    stderr: bool,
+) -> Result<()> {
+    let mut output: Box<dyn Write> = if stderr {
+        Box::new(io::stderr().lock())
+    } else {
+        Box::new(io::stdout().lock())
+    };
+    writeln!(output, "COOPERATIVE VAULT SWEEP")?;
+    writeln!(output, "Destination: {}", package.destination)?;
+    writeln!(output, "Inputs: {}", package.input_count)?;
+    writeln!(output, "Sent: {} sats", package.sent_sats)?;
+    writeln!(output, "Fee: {} sats (1 sat/vB)", package.fee_sats)?;
+    writeln!(output, "Phone signed: {}", package.phone_approved)?;
+    if package.hww_approved {
+        writeln!(output, "HWW signed: true")?;
+    }
+    Ok(())
+}
+
+fn report_rotation(
+    package: &vault_cli::recovery::PhoneRotationPackage,
+    stderr: bool,
+) -> Result<()> {
+    let mut output: Box<dyn Write> = if stderr {
+        Box::new(io::stderr().lock())
+    } else {
+        Box::new(io::stdout().lock())
+    };
+    writeln!(output, "PHONE-KEY ROTATION")?;
+    writeln!(
+        output,
+        "New phone vault key: {}",
+        package.new_phone_vault_pubkey
+    )?;
+    writeln!(
+        output,
+        "New cold storage descriptor: {}",
+        package.new_vault_descriptor
+    )?;
+    writeln!(output, "New vault address: {}", package.new_vault_address)?;
+    writeln!(output, "Inputs: {}", package.sweep.input_count)?;
+    writeln!(output, "Sent: {} sats", package.sweep.sent_sats)?;
+    writeln!(output, "Fee: {} sats (1 sat/vB)", package.sweep.fee_sats)?;
+    Ok(())
+}
+
+fn require_hww_approval(yes: bool, input: &Path, description: &str) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+    if input == Path::new("-") {
+        bail!("--yes is required when the proposal is read from stdin");
+    }
+    print!("Type `approve` to confirm the {description}: ");
+    io::stdout().flush()?;
+    let mut response = String::new();
+    io::stdin().read_line(&mut response)?;
+    if response.trim() != "approve" {
+        bail!("HWW approval declined");
+    }
+    Ok(())
+}
+
+fn print_sweep_result(label: &str, result: &vault_cli::recovery::SweepResult) {
+    println!("{label}: {}", result.txid);
+    println!("Inputs: {}", result.input_count);
+    println!("Sent: {} sats", result.sent_sats);
+    println!("Fee: {} sats (1 sat/vB)", result.fee_sats);
+}
+
+fn reset_workspace(path: &Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_dir_all(path)
+            .with_context(|| format!("failed to reset workspace {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn read_artifact<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    if path == Path::new("-") {
+        serde_json::from_reader(io::stdin().lock())
+            .context("failed to read JSON artifact from stdin")
+    } else {
+        vault_cli::state::read_json(path)
+    }
+}
+
+fn write_artifact<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if path == Path::new("-") {
+        let mut stdout = io::stdout().lock();
+        serde_json::to_writer_pretty(&mut stdout, value)?;
+        writeln!(stdout)?;
+        Ok(())
+    } else {
+        vault_cli::state::write_json(path, value)
+    }
+}
+
+fn artifact_reports_to_stderr(path: &Path) -> bool {
+    path == Path::new("-")
+}
+
+fn report_artifact(path: &Path, description: &str) -> Result<()> {
+    if path != Path::new("-") {
+        println!("{description}: {}", path.display());
+    }
+    Ok(())
+}
+
+fn regtest_address(text: &str) -> Result<bitcoin::Address> {
+    use std::str::FromStr;
+    bitcoin::Address::from_str(text)?
+        .require_network(bitcoin::Network::Regtest)
+        .map_err(Into::into)
 }
 
 fn print_recovery_activation(label: &str, valid_height: u64, next_height: u64, median_time: u64) {
@@ -422,34 +768,14 @@ fn print_recovery_activation(label: &str, valid_height: u64, next_height: u64, m
     }
 }
 
-fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, batch_dir: &std::path::Path) {
-    println!("Batch directory: {}", batch_dir.display());
-    println!("Vault address: {}", manifest.vault_address);
-    println!("Descriptor: {}", manifest.vault_descriptor);
-    println!("Hard limit: {} sats", manifest.hard_limit_sats);
-    println!("Fee rate: {} sat/vB", manifest.fee_rate_sat_vb);
-    println!("Total input: {} sats", manifest.total_input_sats);
-    println!("Equal chunks: {}", manifest.chunk_count);
-    if manifest.chunk_count < vault_cli::MONTHS_PER_ROLLOVER {
-        println!(
-            "WARNING: balance funds only {} of {} monthly allowances; continuing with the earliest consecutive months",
-            manifest.chunk_count,
-            vault_cli::MONTHS_PER_ROLLOVER
-        );
+fn format_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            formatted.push(',');
+        }
+        formatted.push(character);
     }
-    println!("Rollover txid: {}", manifest.rollover.unsigned_txid);
-    println!("Rollover fee: {} sats", manifest.rollover.fee_sats);
-    for month in &manifest.months {
-        println!(
-            "{} unlock={} chunk={} sats hot={} auth={} revoke={}",
-            month.month,
-            month.unlock_timestamp,
-            month.chunk_value_sats,
-            month.hot_address,
-            month.authorization.unsigned_txid,
-            month.revocation.unsigned_txid
-        );
-    }
-    println!("Phone approved: {}", manifest.phone_approved);
-    println!("HWW approved: {}", manifest.hww_approved);
+    formatted
 }

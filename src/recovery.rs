@@ -1,5 +1,5 @@
 use crate::{
-    HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
+    DEFAULT_FEE_RATE_SAT_VB, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
     ceremony::{DEFAULT_BATCH_DIR, SCHEDULE_FILE},
     crypto,
     hot::HotWallet,
@@ -8,21 +8,27 @@ use crate::{
     rpc::{RegtestRpc, VaultUtxo},
     state::{
         CONFIG_FILE, DeviceFile, HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE,
-        VaultConfig, load_config, load_device, recover_phone_mnemonic, write_json,
+        VaultConfig, load_config, load_device, read_json, recover_phone_mnemonic, write_json,
     },
-    transactions::{create_vault_psbt, estimate_vault_vsize, finalize_vault_psbt, sign_vault_psbt},
+    transactions::{
+        create_vault_psbt, estimate_vault_vsize, finalize_vault_psbt, sign_vault_psbt,
+        verify_vault_psbt_signature,
+    },
 };
 use anyhow::{Context, Result, bail};
 use bitcoin::{
-    Address, Amount, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness, absolute,
-    key::Secp256k1, transaction::Version,
+    Address, Amount, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness, absolute,
+    key::Secp256k1, secp256k1::XOnlyPublicKey, transaction::Version,
 };
 use bitcoincore_rpc::RpcApi;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
+
+pub const PENDING_PHONE_ROTATION_FILE: &str = "phone/pending-rotation.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -72,6 +78,91 @@ pub struct RotationResult {
     pub old_address: String,
     pub new_address: String,
     pub new_phone_mnemonic: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhoneRecoveryPackage {
+    pub version: u8,
+    pub kind: String,
+    pub phone_mnemonic: String,
+    pub phone_vault_pubkey: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CooperativeSweepPackage {
+    pub version: u8,
+    pub kind: String,
+    pub vault_descriptor: String,
+    pub destination: String,
+    pub psbt: String,
+    pub input_count: usize,
+    pub sent_sats: u64,
+    pub fee_sats: u64,
+    pub phone_approved: bool,
+    pub hww_approved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhoneRotationPackage {
+    pub version: u8,
+    pub kind: String,
+    pub old_vault_descriptor: String,
+    pub new_phone_vault_pubkey: String,
+    pub new_vault_descriptor: String,
+    pub new_vault_address: String,
+    pub sweep: CooperativeSweepPackage,
+    pub encrypted_phone_backup: Option<crate::crypto::EncryptedBlob>,
+}
+
+pub fn decrypt_phone_backup_package(
+    data_dir: &Path,
+    backup_path: &Path,
+) -> Result<PhoneRecoveryPackage> {
+    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
+    let hww = DeviceKeys::parse(&Secp256k1::new(), &hww_file.mnemonic)?;
+    let backup: crate::crypto::EncryptedBlob = read_json(backup_path)?;
+    let words = crypto::decrypt(&hww.seed, "phone-seed-backup", &backup)?;
+    let words =
+        String::from_utf8(words.to_vec()).context("decrypted phone backup was not UTF-8")?;
+    let phone = DeviceKeys::parse(&Secp256k1::new(), &words)?;
+    let config = load_config(data_dir)?;
+    if phone.vault_pubkey.to_string() != config.phone_vault_pubkey {
+        bail!("decrypted phone backup does not match the configured vault policy");
+    }
+    Ok(PhoneRecoveryPackage {
+        version: 1,
+        kind: "phone-recovery".to_owned(),
+        phone_mnemonic: words,
+        phone_vault_pubkey: phone.vault_pubkey.to_string(),
+    })
+}
+
+pub fn restore_phone_package(data_dir: &Path, package: &PhoneRecoveryPackage) -> Result<String> {
+    if package.version != 1 || package.kind != "phone-recovery" {
+        bail!("unsupported phone recovery package");
+    }
+    let phone_path = data_dir.join(PHONE_DEVICE_FILE);
+    if phone_path.exists() {
+        bail!(
+            "phone key still exists at {}; refusing to overwrite it",
+            phone_path.display()
+        );
+    }
+    let phone = DeviceKeys::parse(&Secp256k1::new(), &package.phone_mnemonic)?;
+    let config = load_config(data_dir)?;
+    if phone.vault_pubkey.to_string() != package.phone_vault_pubkey
+        || package.phone_vault_pubkey != config.phone_vault_pubkey
+    {
+        bail!("phone recovery package does not match the configured vault policy");
+    }
+    write_json(
+        &phone_path,
+        &DeviceFile {
+            kind: "phone".to_owned(),
+            mnemonic: package.phone_mnemonic.clone(),
+        },
+    )?;
+    Ok(package.phone_mnemonic.clone())
 }
 
 pub fn restore_phone_from_hww_backup(data_dir: &Path) -> Result<String> {
@@ -178,48 +269,227 @@ pub fn sweep(
     })
 }
 
-pub fn rotate_phone(data_dir: &Path, rpc: &RegtestRpc) -> Result<RotationResult> {
-    let old_config = load_config(data_dir)?;
-    let old_phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-    let secp = Secp256k1::new();
-    let old_phone = DeviceKeys::parse(&secp, &old_phone_file.mnemonic)?;
-    let hww = DeviceKeys::parse(&secp, &hww_file.mnemonic)?;
-    let new_phone = DeviceKeys::generate(&secp)?;
-    let new_policy = VaultPolicy::new(new_phone.vault_pubkey, hww.vault_pubkey)?;
-    let (hot_external, hot_internal) = new_phone.hot_descriptors(&secp)?;
-
-    let old_policy = VaultPolicy::from_descriptor(&old_config.vault_descriptor)?;
-    let utxos = rpc.scan_vault(&old_config)?;
+pub fn create_cooperative_sweep(
+    data_dir: &Path,
+    rpc: &RegtestRpc,
+    destination: &Address,
+) -> Result<CooperativeSweepPackage> {
+    let config = load_config(data_dir)?;
+    let policy = VaultPolicy::from_descriptor(&config.vault_descriptor)?;
+    let utxos = rpc.scan_vault(&config)?;
     if utxos.is_empty() {
-        bail!("vault has no confirmed UTXOs to rotate");
+        bail!("vault has no confirmed UTXOs to sweep");
     }
-    let (mut psbt, fee_sats, sent_sats) = build_sweep_psbt(
-        &old_policy,
-        &utxos,
-        SweepPath::Cooperative,
-        &new_policy.address,
-    )?;
+    let (mut psbt, fee_sats, sent_sats) =
+        build_sweep_psbt(&policy, &utxos, SweepPath::Cooperative, destination)?;
+    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
+    let phone = DeviceKeys::parse(&Secp256k1::new(), &phone_file.mnemonic)?;
     sign_vault_psbt(
         &mut psbt,
-        &old_policy,
+        &policy,
         SpendPath::Cooperative,
-        &old_phone.vault_keypair,
+        &phone.vault_keypair,
     )?;
+    Ok(CooperativeSweepPackage {
+        version: 1,
+        kind: "cooperative-sweep".to_owned(),
+        vault_descriptor: config.vault_descriptor,
+        destination: destination.to_string(),
+        psbt: psbt.to_string(),
+        input_count: utxos.len(),
+        sent_sats,
+        fee_sats,
+        phone_approved: true,
+        hww_approved: false,
+    })
+}
+
+pub fn confirm_cooperative_sweep(
+    data_dir: &Path,
+    package: &CooperativeSweepPackage,
+) -> Result<CooperativeSweepPackage> {
+    let (policy, mut psbt) = validate_cooperative_sweep(data_dir, package)?;
+    let config = load_config(data_dir)?;
+    let phone_pubkey = XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
+    verify_vault_psbt_signature(&psbt, &policy, SpendPath::Cooperative, phone_pubkey)?;
+    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
+    let hww = DeviceKeys::parse(&Secp256k1::new(), &hww_file.mnemonic)?;
     sign_vault_psbt(
         &mut psbt,
-        &old_policy,
+        &policy,
         SpendPath::Cooperative,
         &hww.vault_keypair,
+    )?;
+    let mut approved = package.clone();
+    approved.psbt = psbt.to_string();
+    approved.hww_approved = true;
+    Ok(approved)
+}
+
+pub fn broadcast_cooperative_sweep(
+    data_dir: &Path,
+    rpc: &RegtestRpc,
+    package: &CooperativeSweepPackage,
+) -> Result<SweepResult> {
+    if !package.phone_approved || !package.hww_approved {
+        bail!("both phone and HWW approval are required for a cooperative sweep");
+    }
+    let (policy, psbt) = validate_cooperative_sweep(data_dir, package)?;
+    let config = load_config(data_dir)?;
+    verify_vault_psbt_signature(
+        &psbt,
+        &policy,
+        SpendPath::Cooperative,
+        XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?,
+    )?;
+    verify_vault_psbt_signature(
+        &psbt,
+        &policy,
+        SpendPath::Cooperative,
+        XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?,
     )?;
     let transaction = finalize_vault_psbt(psbt)?;
     let txid = rpc
         .client
         .send_raw_transaction(&transaction)
-        .context("failed to broadcast emergency phone-key rotation")?;
+        .context("failed to broadcast cooperative vault sweep")?;
+    Ok(SweepResult {
+        txid,
+        input_count: package.input_count,
+        sent_sats: package.sent_sats,
+        fee_sats: package.fee_sats,
+    })
+}
 
-    archive_old_epoch(data_dir, &old_config, txid)?;
-    let new_phone_mnemonic = new_phone.mnemonic.to_string();
+fn validate_cooperative_sweep(
+    data_dir: &Path,
+    package: &CooperativeSweepPackage,
+) -> Result<(VaultPolicy, Psbt)> {
+    if package.version != 1 || package.kind != "cooperative-sweep" || !package.phone_approved {
+        bail!("unsupported or unsigned cooperative sweep package");
+    }
+    let config = load_config(data_dir)?;
+    if package.vault_descriptor != config.vault_descriptor {
+        bail!("cooperative sweep package does not match the configured vault policy");
+    }
+    let policy = VaultPolicy::from_descriptor(&config.vault_descriptor)?;
+    let destination =
+        Address::from_str(&package.destination)?.require_network(bitcoin::Network::Regtest)?;
+    let psbt = Psbt::from_str(&package.psbt).context("invalid cooperative sweep PSBT")?;
+    let transaction = &psbt.unsigned_tx;
+    if transaction.input.len() != package.input_count
+        || psbt.inputs.len() != package.input_count
+        || transaction.input.is_empty()
+        || transaction
+            .input
+            .iter()
+            .any(|input| input.sequence != Sequence::MAX)
+        || transaction.output.len() != 1
+        || transaction.output[0].script_pubkey != destination.script_pubkey()
+        || transaction.output[0].value.to_sat() != package.sent_sats
+    {
+        bail!("cooperative sweep transaction does not match its package");
+    }
+    let vault_script = policy.address.script_pubkey();
+    let input_sats = psbt.inputs.iter().try_fold(0_u64, |total, input| {
+        let prevout = input
+            .witness_utxo
+            .as_ref()
+            .context("cooperative sweep input lacks witness UTXO")?;
+        if prevout.script_pubkey != vault_script {
+            bail!("cooperative sweep input is outside the vault policy");
+        }
+        total
+            .checked_add(prevout.value.to_sat())
+            .context("cooperative sweep input sum overflowed")
+    })?;
+    let fee_sats = input_sats
+        .checked_sub(package.sent_sats)
+        .context("cooperative sweep outputs exceed its inputs")?;
+    let expected_fee = estimate_vault_vsize(transaction, &policy, SpendPath::Cooperative)?
+        * DEFAULT_FEE_RATE_SAT_VB;
+    if fee_sats != package.fee_sats || fee_sats != expected_fee {
+        bail!("cooperative sweep fee does not match its package");
+    }
+    Ok((policy, psbt))
+}
+
+pub fn rotate_phone(data_dir: &Path, rpc: &RegtestRpc) -> Result<RotationResult> {
+    let proposal = create_phone_rotation(data_dir, rpc)?;
+    let approved = confirm_phone_rotation(data_dir, &proposal)?;
+    activate_phone_rotation(data_dir, rpc, &approved)
+}
+
+pub fn create_phone_rotation(data_dir: &Path, rpc: &RegtestRpc) -> Result<PhoneRotationPackage> {
+    let old_config = load_config(data_dir)?;
+    let secp = Secp256k1::new();
+    let new_phone = DeviceKeys::generate(&secp)?;
+    let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
+    let new_policy = VaultPolicy::new(new_phone.vault_pubkey, hww_pubkey)?;
+    write_json(
+        &data_dir.join(PENDING_PHONE_ROTATION_FILE),
+        &DeviceFile {
+            kind: "pending-phone-rotation".to_owned(),
+            mnemonic: new_phone.mnemonic.to_string(),
+        },
+    )?;
+    let sweep = create_cooperative_sweep(data_dir, rpc, &new_policy.address)?;
+    Ok(PhoneRotationPackage {
+        version: 1,
+        kind: "phone-key-rotation".to_owned(),
+        old_vault_descriptor: old_config.vault_descriptor,
+        new_phone_vault_pubkey: new_phone.vault_pubkey.to_string(),
+        new_vault_descriptor: new_policy.descriptor_string(),
+        new_vault_address: new_policy.address.to_string(),
+        sweep,
+        encrypted_phone_backup: None,
+    })
+}
+
+pub fn confirm_phone_rotation(
+    data_dir: &Path,
+    package: &PhoneRotationPackage,
+) -> Result<PhoneRotationPackage> {
+    validate_phone_rotation(data_dir, package)?;
+    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
+    let hww = DeviceKeys::parse(&Secp256k1::new(), &hww_file.mnemonic)?;
+    let pending: DeviceFile = read_json(&data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
+    let pending_phone = DeviceKeys::parse(&Secp256k1::new(), &pending.mnemonic)?;
+    if pending_phone.vault_pubkey.to_string() != package.new_phone_vault_pubkey {
+        bail!("pending phone key does not match the rotation proposal");
+    }
+    let mut approved = package.clone();
+    approved.sweep = confirm_cooperative_sweep(data_dir, &package.sweep)?;
+    approved.encrypted_phone_backup = Some(crypto::encrypt(
+        &hww.seed,
+        "phone-seed-backup",
+        pending.mnemonic.as_bytes(),
+    )?);
+    Ok(approved)
+}
+
+pub fn activate_phone_rotation(
+    data_dir: &Path,
+    rpc: &RegtestRpc,
+    package: &PhoneRotationPackage,
+) -> Result<RotationResult> {
+    validate_phone_rotation(data_dir, package)?;
+    let backup = package
+        .encrypted_phone_backup
+        .as_ref()
+        .context("HWW-approved phone backup is missing from the rotation package")?;
+    if !package.sweep.hww_approved {
+        bail!("HWW approval is missing from the rotation package");
+    }
+    let old_config = load_config(data_dir)?;
+    let pending: DeviceFile = read_json(&data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
+    let new_phone = DeviceKeys::parse(&Secp256k1::new(), &pending.mnemonic)?;
+    if new_phone.vault_pubkey.to_string() != package.new_phone_vault_pubkey {
+        bail!("pending phone key does not match the approved rotation");
+    }
+    let sweep = broadcast_cooperative_sweep(data_dir, rpc, &package.sweep)?;
+    archive_old_epoch(data_dir, &old_config, sweep.txid)?;
+    let (hot_external, hot_internal) = new_phone.hot_descriptors(&Secp256k1::new())?;
     let new_config = VaultConfig {
         version: old_config.version,
         network: old_config.network.clone(),
@@ -227,39 +497,55 @@ pub fn rotate_phone(data_dir: &Path, rpc: &RegtestRpc) -> Result<RotationResult>
         hww_vault_pubkey: old_config.hww_vault_pubkey.clone(),
         phone_hot_external_descriptor: hot_external,
         phone_hot_internal_descriptor: hot_internal,
-        vault_descriptor: new_policy.descriptor_string(),
-        vault_address: new_policy.address.to_string(),
+        vault_descriptor: package.new_vault_descriptor.clone(),
+        vault_address: package.new_vault_address.clone(),
         phone_recovery_blocks: old_config.phone_recovery_blocks,
         hww_recovery_blocks: old_config.hww_recovery_blocks,
-        hard_limit_sats: old_config.hard_limit_sats,
+        monthly_limit_sats: 0,
     };
     write_json(&data_dir.join(CONFIG_FILE), &new_config)?;
     write_json(
         &data_dir.join(PHONE_DEVICE_FILE),
         &DeviceFile {
             kind: "phone".to_owned(),
-            mnemonic: new_phone_mnemonic.clone(),
+            mnemonic: pending.mnemonic.clone(),
         },
     )?;
-    let backup = crypto::encrypt(
-        &hww.seed,
-        "phone-seed-backup",
-        new_phone_mnemonic.as_bytes(),
-    )?;
     write_json(&data_dir.join(PHONE_BACKUP_FILE), &backup)?;
+    if data_dir.join(PENDING_PHONE_ROTATION_FILE).exists() {
+        fs::remove_file(data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
+    }
     HotWallet::open_or_create(data_dir)?;
 
     Ok(RotationResult {
-        sweep: SweepResult {
-            txid,
-            input_count: utxos.len(),
-            sent_sats,
-            fee_sats,
-        },
+        sweep,
         old_address: old_config.vault_address,
         new_address: new_config.vault_address,
-        new_phone_mnemonic,
+        new_phone_mnemonic: pending.mnemonic,
     })
+}
+
+fn validate_phone_rotation(data_dir: &Path, package: &PhoneRotationPackage) -> Result<()> {
+    if package.version != 1 || package.kind != "phone-key-rotation" {
+        bail!("unsupported phone rotation package");
+    }
+    let config = load_config(data_dir)?;
+    if package.old_vault_descriptor != config.vault_descriptor
+        || package.sweep.vault_descriptor != config.vault_descriptor
+        || package.sweep.destination != package.new_vault_address
+    {
+        bail!("phone rotation package does not match the current vault");
+    }
+    let hww_pubkey = XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?;
+    let phone_pubkey = XOnlyPublicKey::from_str(&package.new_phone_vault_pubkey)?;
+    let policy = VaultPolicy::new(phone_pubkey, hww_pubkey)?;
+    if policy.descriptor_string() != package.new_vault_descriptor
+        || policy.address.to_string() != package.new_vault_address
+    {
+        bail!("phone rotation destination does not match the proposed new keys");
+    }
+    validate_cooperative_sweep(data_dir, &package.sweep)?;
+    Ok(())
 }
 
 fn mature_utxos(utxos: &[VaultUtxo], path: SweepPath, tip_height: u64) -> Vec<VaultUtxo> {
@@ -360,7 +646,7 @@ mod tests {
     #[test]
     fn hww_backup_restores_a_deleted_phone_key() {
         let dir = tempfile::tempdir().unwrap();
-        let initialized = initialize(dir.path(), 10_000_000).unwrap();
+        let initialized = initialize(dir.path()).unwrap();
         fs::remove_file(dir.path().join(PHONE_DEVICE_FILE)).unwrap();
         let restored = restore_phone_from_hww_backup(dir.path()).unwrap();
         assert_eq!(restored, initialized.phone_mnemonic);
@@ -370,7 +656,7 @@ mod tests {
     #[test]
     fn phone_backup_cannot_be_recovered_without_the_hww() {
         let dir = tempfile::tempdir().unwrap();
-        initialize(dir.path(), 10_000_000).unwrap();
+        initialize(dir.path()).unwrap();
         fs::remove_file(dir.path().join(PHONE_DEVICE_FILE)).unwrap();
         fs::remove_file(dir.path().join(HWW_DEVICE_FILE)).unwrap();
         assert!(restore_phone_from_hww_backup(dir.path()).is_err());

@@ -23,8 +23,9 @@ use bitcoincore_rpc::RpcApi;
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
 };
 
@@ -56,7 +57,8 @@ pub struct BatchManifest {
     pub network: String,
     pub vault_descriptor: String,
     pub vault_address: String,
-    pub hard_limit_sats: u64,
+    #[serde(alias = "hard_limit_sats")]
+    pub monthly_limit_sats: u64,
     pub fee_rate_sat_vb: u64,
     pub total_input_sats: u64,
     pub chunk_count: usize,
@@ -107,22 +109,89 @@ pub struct ScheduleEntry {
 pub struct Schedule {
     pub version: u8,
     pub rollover_txid: String,
+    pub monthly_limit_sats: u64,
     pub entries: Vec<ScheduleEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyPackage {
+    pub version: u8,
+    pub kind: String,
+    pub manifest: BatchManifest,
+    pub psbts: BTreeMap<String, String>,
 }
 
 pub fn default_batch_path(data_dir: &Path) -> PathBuf {
     data_dir.join(DEFAULT_BATCH_DIR)
 }
 
+pub fn package_from_batch(batch_dir: &Path) -> Result<PolicyPackage> {
+    let manifest = load_manifest(batch_dir)?;
+    let mut psbts = BTreeMap::new();
+    for transaction in manifest_transactions(&manifest) {
+        let text = fs::read_to_string(batch_dir.join(&transaction.psbt_file))
+            .with_context(|| format!("failed to read packaged PSBT {}", transaction.psbt_file))?;
+        psbts.insert(transaction.psbt_file.clone(), text.trim().to_owned());
+    }
+    Ok(PolicyPackage {
+        version: 1,
+        kind: "monthly-policy".to_owned(),
+        manifest,
+        psbts,
+    })
+}
+
+pub fn materialize_policy_package(package: &PolicyPackage, batch_dir: &Path) -> Result<()> {
+    if package.version != 1 || package.kind != "monthly-policy" {
+        bail!("unsupported policy package");
+    }
+    if batch_dir.exists() && batch_dir.read_dir()?.next().is_some() {
+        bail!("policy workspace {} is not empty", batch_dir.display());
+    }
+    let expected = manifest_transactions(&package.manifest)
+        .into_iter()
+        .map(|transaction| transaction.psbt_file.clone())
+        .collect::<BTreeSet<_>>();
+    let actual = package.psbts.keys().cloned().collect::<BTreeSet<_>>();
+    if actual != expected {
+        bail!("policy package PSBT set does not match its manifest");
+    }
+    fs::create_dir_all(batch_dir)?;
+    write_json(&batch_dir.join("manifest.json"), &package.manifest)?;
+    for (relative, psbt) in &package.psbts {
+        let relative_path = Path::new(relative);
+        if relative_path.is_absolute()
+            || relative_path
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            bail!("policy package contains an unsafe PSBT path");
+        }
+        write_private(
+            &batch_dir.join(relative_path),
+            format!("{psbt}\n").as_bytes(),
+        )?;
+    }
+    Ok(())
+}
+
 pub fn prepare(
     data_dir: &Path,
     rpc: &RegtestRpc,
     now: DateTime<Utc>,
+    monthly_limit_sats: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
     let config = load_config(data_dir)?;
     let utxos = rpc.scan_vault(&config)?;
-    prepare_from_utxos(data_dir, &config, &utxos, now, batch_dir)
+    prepare_from_utxos(
+        data_dir,
+        &config,
+        &utxos,
+        now,
+        monthly_limit_sats,
+        batch_dir,
+    )
 }
 
 pub fn prepare_from_utxos(
@@ -130,6 +199,7 @@ pub fn prepare_from_utxos(
     config: &VaultConfig,
     utxos: &[VaultUtxo],
     now: DateTime<Utc>,
+    monthly_limit_sats: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
     if utxos.is_empty() {
@@ -155,12 +225,18 @@ pub fn prepare_from_utxos(
         .collect::<Vec<_>>();
 
     let mut selected = None;
-    for count in (1..=MONTHS_PER_ROLLOVER).rev() {
+    let candidate_counts: Vec<usize> = if monthly_limit_sats == 0 {
+        vec![0]
+    } else {
+        (1..=MONTHS_PER_ROLLOVER).rev().collect()
+    };
+    for count in candidate_counts {
+        let output_count = count.max(1);
         let template = Transaction {
             version: Version::TWO,
             lock_time: absolute::LockTime::ZERO,
             input: input_template.clone(),
-            output: (0..count)
+            output: (0..output_count)
                 .map(|_| TxOut {
                     value: Amount::from_sat(1),
                     script_pubkey: vault_script.clone(),
@@ -173,14 +249,18 @@ pub fn prepare_from_utxos(
             continue;
         }
         let distributable = total_input_sats - rollover_fee;
+        if monthly_limit_sats == 0 {
+            selected = Some((0, rollover_fee, distributable));
+            break;
+        }
         let smallest_chunk = distributable / count as u64;
-        if smallest_chunk <= config.hard_limit_sats {
+        if smallest_chunk <= monthly_limit_sats {
             continue;
         }
         let child_template = authorization_template(
             OutPoint::null(),
             smallest_chunk,
-            config.hard_limit_sats,
+            monthly_limit_sats,
             500_000_001,
             vault_script.clone(),
             vault_script.clone(),
@@ -191,8 +271,7 @@ pub fn prepare_from_utxos(
                 * DEFAULT_FEE_RATE_SAT_VB;
         let minimum_remainder = vault_script.minimal_non_dust().to_sat();
         if smallest_chunk
-            >= config
-                .hard_limit_sats
+            >= monthly_limit_sats
                 .saturating_add(authorization_fee)
                 .saturating_add(minimum_remainder)
         {
@@ -201,13 +280,14 @@ pub fn prepare_from_utxos(
         }
     }
     let (chunk_count, rollover_fee, distributable) = selected.context(
-        "vault balance cannot fund even one hard-limit authorization plus fees and cold change",
+        "vault balance cannot fund even one monthly authorization plus fees and cold change",
     )?;
 
-    let mut chunk_values = vec![distributable / chunk_count as u64; chunk_count];
+    let output_count = chunk_count.max(1);
+    let mut chunk_values = vec![distributable / output_count as u64; output_count];
     for value in chunk_values
         .iter_mut()
-        .take((distributable % chunk_count as u64) as usize)
+        .take((distributable % output_count as u64) as usize)
     {
         *value += 1;
     }
@@ -252,7 +332,7 @@ pub fn prepare_from_utxos(
             &policy,
             chunk_outpoint,
             chunk_value,
-            config.hard_limit_sats,
+            monthly_limit_sats,
             unlock_timestamp,
             hot_address.script_pubkey(),
             vault_script.clone(),
@@ -260,7 +340,7 @@ pub fn prepare_from_utxos(
         let authorization_tx = authorization_template(
             chunk_outpoint,
             chunk_value,
-            config.hard_limit_sats,
+            monthly_limit_sats,
             unlock_timestamp,
             hot_address.script_pubkey(),
             vault_script.clone(),
@@ -328,7 +408,7 @@ pub fn prepare_from_utxos(
         network: "regtest".to_owned(),
         vault_descriptor: config.vault_descriptor.clone(),
         vault_address: config.vault_address.clone(),
-        hard_limit_sats: config.hard_limit_sats,
+        monthly_limit_sats,
         fee_rate_sat_vb: DEFAULT_FEE_RATE_SAT_VB,
         total_input_sats,
         chunk_count,
@@ -433,6 +513,7 @@ pub fn finalize_and_broadcast(
     let schedule = Schedule {
         version: 1,
         rollover_txid: rollover_tx.compute_txid().to_string(),
+        monthly_limit_sats: manifest.monthly_limit_sats,
         entries,
     };
     write_json(&data_dir.join(SCHEDULE_FILE), &schedule)?;
@@ -488,8 +569,8 @@ pub fn apply_soft_limit(
     month: &str,
     soft_limit_sats: u64,
 ) -> Result<Option<Txid>> {
-    let config = load_config(data_dir)?;
     let schedule = load_schedule(data_dir)?;
+    let config = load_config(data_dir)?;
     let entry = schedule
         .entries
         .iter()
@@ -500,7 +581,7 @@ pub fn apply_soft_limit(
     hot.sync(&rpc.client)?;
     let transaction = hot.build_soft_limit_return(
         OutPoint::new(authorization_txid, 0),
-        config.hard_limit_sats,
+        schedule.monthly_limit_sats,
         soft_limit_sats,
         Address::from_str(&config.vault_address)?
             .require_network(Network::Regtest)?
@@ -526,13 +607,15 @@ pub fn validate_batch(
     }
     if manifest.vault_descriptor != config.vault_descriptor
         || manifest.vault_address != config.vault_address
-        || manifest.hard_limit_sats != config.hard_limit_sats
     {
         bail!("ceremony policy does not match configured vault policy");
     }
-    if manifest.chunk_count == 0
-        || manifest.chunk_count > MONTHS_PER_ROLLOVER
-        || manifest.months.len() != manifest.chunk_count
+    let disabled = manifest.monthly_limit_sats == 0;
+    if (disabled && (manifest.chunk_count != 0 || !manifest.months.is_empty()))
+        || (!disabled
+            && (manifest.chunk_count == 0
+                || manifest.chunk_count > MONTHS_PER_ROLLOVER
+                || manifest.months.len() != manifest.chunk_count))
     {
         bail!("invalid ceremony chunk count");
     }
@@ -544,7 +627,7 @@ pub fn validate_batch(
     let rollover = read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?;
     let rollover_tx = &rollover.unsigned_tx;
     if rollover_tx.compute_txid().to_string() != manifest.rollover.unsigned_txid
-        || rollover_tx.output.len() != manifest.chunk_count
+        || rollover_tx.output.len() != manifest.chunk_count.max(1)
         || rollover_tx.input.len() != rollover.inputs.len()
     {
         bail!("rollover PSBT does not match its manifest");
@@ -600,7 +683,7 @@ pub fn validate_batch(
         if auth_tx.lock_time.to_consensus_u32() != month.unlock_timestamp
             || auth_tx.input[0].sequence != Sequence::ENABLE_LOCKTIME_NO_RBF
             || auth_tx.output.len() != 2
-            || auth_tx.output[0].value.to_sat() != manifest.hard_limit_sats
+            || auth_tx.output[0].value.to_sat() != manifest.monthly_limit_sats
             || auth_tx.output[0].script_pubkey != hot_script
             || auth_tx.output[1].script_pubkey != vault_script
         {
@@ -660,7 +743,7 @@ fn authorization_fee(
     policy: &VaultPolicy,
     outpoint: OutPoint,
     chunk_value: u64,
-    hard_limit: u64,
+    monthly_limit: u64,
     unlock_timestamp: u32,
     hot_script: ScriptBuf,
     vault_script: ScriptBuf,
@@ -668,7 +751,7 @@ fn authorization_fee(
     let template = authorization_template(
         outpoint,
         chunk_value,
-        hard_limit,
+        monthly_limit,
         unlock_timestamp,
         hot_script,
         vault_script,
@@ -680,16 +763,16 @@ fn authorization_fee(
 fn authorization_template(
     outpoint: OutPoint,
     chunk_value: u64,
-    hard_limit: u64,
+    monthly_limit: u64,
     unlock_timestamp: u32,
     hot_script: ScriptBuf,
     vault_script: ScriptBuf,
     fee: u64,
 ) -> Result<Transaction> {
     let remainder = chunk_value
-        .checked_sub(hard_limit)
+        .checked_sub(monthly_limit)
         .and_then(|value| value.checked_sub(fee))
-        .context("chunk cannot fund the hard limit and authorization fee")?;
+        .context("chunk cannot fund the monthly limit and authorization fee")?;
     Ok(Transaction {
         version: Version::TWO,
         lock_time: absolute::LockTime::from_time(unlock_timestamp)
@@ -697,7 +780,7 @@ fn authorization_template(
         input: vec![vault_input(outpoint, Sequence::ENABLE_LOCKTIME_NO_RBF)],
         output: vec![
             TxOut {
-                value: Amount::from_sat(hard_limit),
+                value: Amount::from_sat(monthly_limit),
                 script_pubkey: hot_script,
             },
             TxOut {
@@ -884,7 +967,7 @@ mod tests {
     #[test]
     fn two_btc_creates_twelve_equal_consecutive_months() {
         let dir = tempfile::tempdir().unwrap();
-        let initialized = initialize(dir.path(), 10_000_000).unwrap();
+        let initialized = initialize(dir.path()).unwrap();
         let batch = dir.path().join("batch");
         let now = Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap();
         let manifest = prepare_from_utxos(
@@ -892,6 +975,7 @@ mod tests {
             &initialized.config,
             &[fake_utxo(&initialized.config, 200_000_000)],
             now,
+            10_000_000,
             &batch,
         )
         .unwrap();
@@ -912,7 +996,7 @@ mod tests {
             .unwrap();
         assert!(max - min <= 1);
         assert!(manifest.months.iter().all(|month| {
-            month.chunk_value_sats > initialized.config.hard_limit_sats
+            month.chunk_value_sats > manifest.monthly_limit_sats
                 && batch.join(&month.authorization.psbt_file).exists()
                 && batch.join(&month.revocation.psbt_file).exists()
         }));
@@ -922,12 +1006,13 @@ mod tests {
     #[test]
     fn insufficient_balance_reduces_the_number_of_funded_months() {
         let dir = tempfile::tempdir().unwrap();
-        let initialized = initialize(dir.path(), 10_000_000).unwrap();
+        let initialized = initialize(dir.path()).unwrap();
         let manifest = prepare_from_utxos(
             dir.path(),
             &initialized.config,
             &[fake_utxo(&initialized.config, 35_000_000)],
             Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
             &dir.path().join("batch"),
         )
         .unwrap();
@@ -938,13 +1023,14 @@ mod tests {
     #[test]
     fn hww_validates_and_signs_the_complete_batch_once() {
         let dir = tempfile::tempdir().unwrap();
-        let initialized = initialize(dir.path(), 10_000_000).unwrap();
+        let initialized = initialize(dir.path()).unwrap();
         let batch = dir.path().join("batch");
         prepare_from_utxos(
             dir.path(),
             &initialized.config,
             &[fake_utxo(&initialized.config, 200_000_000)],
             Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
             &batch,
         )
         .unwrap();
@@ -960,15 +1046,16 @@ mod tests {
     }
 
     #[test]
-    fn hww_rejects_a_tampered_hard_limit_output() {
+    fn hww_rejects_a_tampered_monthly_limit_output() {
         let dir = tempfile::tempdir().unwrap();
-        let initialized = initialize(dir.path(), 10_000_000).unwrap();
+        let initialized = initialize(dir.path()).unwrap();
         let batch = dir.path().join("batch");
         let manifest = prepare_from_utxos(
             dir.path(),
             &initialized.config,
             &[fake_utxo(&initialized.config, 200_000_000)],
             Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
             &batch,
         )
         .unwrap();
@@ -977,5 +1064,46 @@ mod tests {
         psbt.unsigned_tx.output[0].value = Amount::from_sat(10_000_001);
         write_psbt(&path, &psbt).unwrap();
         assert!(approve_hww(dir.path(), &batch).is_err());
+    }
+
+    #[test]
+    fn zero_monthly_limit_creates_only_a_cold_rollover() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        let manifest = prepare_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 200_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            0,
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(manifest.monthly_limit_sats, 0);
+        assert_eq!(manifest.chunk_count, 0);
+        assert!(manifest.months.is_empty());
+        validate_batch(&initialized.config, &manifest, &batch).unwrap();
+    }
+
+    #[test]
+    fn policy_package_round_trips_all_psbts() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        prepare_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 200_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
+            &batch,
+        )
+        .unwrap();
+        let package = package_from_batch(&batch).unwrap();
+        let imported = dir.path().join("imported");
+        materialize_policy_package(&package, &imported).unwrap();
+        validate_batch(&initialized.config, &package.manifest, &imported).unwrap();
+        assert_eq!(package.psbts.len(), 25);
     }
 }
