@@ -1,25 +1,70 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEMO_ROOT=/demo
-MAIN="$DEMO_ROOT/main"
-STOLEN_PHONE="$DEMO_ROOT/stolen-phone"
-LOST_HWW="$DEMO_ROOT/lost-hww"
-STOLEN_HWW="$DEMO_ROOT/stolen-hww"
-NO_CLOUD="$DEMO_ROOT/lost-phone-no-cloud"
-BOTH_LOST="$DEMO_ROOT/both-lost"
-CLOUD_SOURCE="$DEMO_ROOT/cloud-source"
-FORGOTTEN="$DEMO_ROOT/forgotten-rollover"
-BOTH_COMPROMISED="$DEMO_ROOT/both-compromised"
-PARTIAL="$DEMO_ROOT/partial-funding"
+readonly DEMO_ROOT=/demo
+readonly DEFAULT_HARD_LIMIT_SATS=10000000
+readonly DEFAULT_FUNDING_SATS=200000000
+readonly PHONE_RECOVERY_BLOCKS=61200
+readonly HWW_RECOVERY_BLOCKS=65535
 
-section() {
-    printf '\n\n================================================================================\n'
-    printf '%s\n' "$1"
-    printf '================================================================================\n'
+readonly FLOWS=(
+    setup-policy
+    monthly-spend
+    monthly-revoke
+    partial-funding
+    lost-phone
+    stolen-phone
+    lost-hww
+    stolen-hww
+    lost-phone-no-cloud
+    both-lost
+    cloud-compromise
+    both-compromised
+    rollover-forgotten
+)
+
+list_flows() {
+    printf '%s\n' "${FLOWS[@]}"
 }
 
-note() {
+usage() {
+    printf 'Usage: %s <flow>\n\n' "$0"
+    printf 'Run exactly one isolated user flow. Use scripts/run-e2e.sh to run one,\n'
+    printf 'several, or all flows with a fresh regtest node for each flow.\n\n'
+    printf 'Available flows:\n'
+    list_flows | sed 's/^/  /'
+}
+
+if [[ ${1:-} == --list ]]; then
+    list_flows
+    exit 0
+fi
+
+if [[ $# -ne 1 ]]; then
+    usage >&2
+    exit 2
+fi
+
+FLOW=$1
+case " ${FLOWS[*]} " in
+    *" $FLOW "*) ;;
+    *)
+        printf 'Unknown flow: %s\n\n' "$FLOW" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
+MAIN="$DEMO_ROOT/$FLOW"
+MINING_ADDRESS=
+NOW=
+FUNDING_HEIGHT=
+
+heading() {
+    printf '\n=== %s ===\n' "$1"
+}
+
+step() {
     printf '\n--- %s ---\n' "$1"
 }
 
@@ -30,42 +75,82 @@ show_command() {
     printf '\n'
 }
 
-vc() {
+show_file_command() {
+    printf '$'
+    printf ' %q' "$@"
+    printf '\n'
+}
+
+vault() {
     local data_dir=$1
     shift
     show_command "$data_dir" "$@"
     vault-cli --data-dir "$data_dir" "$@"
 }
 
-capture_vc() {
+vault_capture() {
     local variable_name=$1
     local data_dir=$2
-    shift 2
     local output
+    shift 2
     show_command "$data_dir" "$@"
     output=$(vault-cli --data-dir "$data_dir" "$@")
     printf '%s\n' "$output"
     printf -v "$variable_name" '%s' "$output"
 }
 
+vault_silent() {
+    local data_dir=$1
+    local output
+    local status
+    shift
+    set +e
+    output=$(vault-cli --data-dir "$data_dir" "$@" 2>&1)
+    status=$?
+    set -e
+    if [[ $status -ne 0 ]]; then
+        printf '%s\n' "$output" >&2
+        return "$status"
+    fi
+}
+
+vault_filtered() {
+    local filter=$1
+    local data_dir=$2
+    local output
+    shift 2
+    show_command "$data_dir" "$@"
+    if ! output=$(vault-cli --data-dir "$data_dir" "$@" 2>&1); then
+        printf '%s\n' "$output" >&2
+        return 1
+    fi
+    printf '%s\n' "$output" | awk "$filter"
+}
+
 expect_failure() {
     local explanation=$1
     local data_dir=$2
-    shift 2
     local output
     local status
-    printf '\nEXPECTED FAILURE: %s\n' "$explanation"
+    local error_line
+    shift 2
+    printf '\nExpected rejection: %s\n' "$explanation"
     show_command "$data_dir" "$@"
     set +e
     output=$(vault-cli --data-dir "$data_dir" "$@" 2>&1)
     status=$?
     set -e
-    printf '%s\n' "$output"
     if [[ $status -eq 0 ]]; then
         printf 'ERROR: command unexpectedly succeeded\n' >&2
         exit 1
     fi
-    printf 'Result: safely rejected (exit %s)\n' "$status"
+    error_line=$(printf '%s\n' "$output" | sed -n '/^Error:/ {p;q;}')
+    if [[ -n $error_line ]]; then
+        printf '%s\n' "$error_line"
+    else
+        printf '%s\n' "$output" | sed -n '1p'
+    fi
+    printf 'Safely rejected.\n'
 }
 
 node_height() {
@@ -76,14 +161,68 @@ node_mtp() {
     vault-cli --data-dir "$MAIN" node info | awk '/^Median time past:/ {print $4}'
 }
 
-advance_mtp_to() {
-    local target=$1
-    note "Advance Median Time Past strictly beyond $target ($(date -u -d "@$target" '+%Y-%m-%d %H:%M:%S UTC'))"
-    vc "$MAIN" node set-time "$((target + 60))"
-    while (( $(node_mtp) <= target )); do
-        vc "$MAIN" node mine 1 "$MINING_ADDRESS"
+format_duration() {
+    local seconds=$1
+    if (( seconds < 60 )); then
+        printf '%ss' "$seconds"
+    elif (( seconds < 3600 )); then
+        printf '%sm%02ss' "$((seconds / 60))" "$((seconds % 60))"
+    else
+        printf '%sh%02sm' "$((seconds / 3600))" "$(((seconds % 3600) / 60))"
+    fi
+}
+
+mining_progress() {
+    local completed=$1
+    local total=$2
+    local started_at=$3
+    local now elapsed percent filled empty eta
+    now=$(date +%s)
+    elapsed=$((now - started_at))
+    percent=$((completed * 100 / total))
+    filled=$((percent / 5))
+    empty=$((20 - filled))
+    eta=0
+    if (( completed > 0 && completed < total )); then
+        eta=$((elapsed * (total - completed) / completed))
+    fi
+    printf '\rMining: ['
+    printf '%*s' "$filled" '' | tr ' ' '#'
+    printf '%*s' "$empty" '' | tr ' ' '-'
+    printf '] %3s%% (%s/%s blocks), ETA %s' \
+        "$percent" "$completed" "$total" "$(format_duration "$eta")"
+}
+
+mine_blocks() {
+    local blocks=$1
+    local label=$2
+    local completed=0
+    local batch
+    local mtp
+    local started_at
+    show_command "$MAIN" node mine "$blocks" "$MINING_ADDRESS"
+    if (( blocks <= 5000 )); then
+        vault_silent "$MAIN" node mine "$blocks" "$MINING_ADDRESS"
+        printf '%s: mined %s block(s); height is now %s.\n' \
+            "$label" "$blocks" "$(node_height)"
+        return
+    fi
+    printf '%s; this may take a while.\n' "$label"
+    started_at=$(date +%s)
+    while (( completed < blocks )); do
+        batch=$((blocks - completed))
+        if (( batch > 5000 )); then
+            batch=5000
+        fi
+        if (( blocks > 5000 )); then
+            mtp=$(node_mtp)
+            vault_silent "$MAIN" node set-time "$((mtp + batch + 60))"
+        fi
+        vault_silent "$MAIN" node mine "$batch" "$MINING_ADDRESS"
+        completed=$((completed + batch))
+        mining_progress "$completed" "$blocks" "$started_at"
     done
-    vc "$MAIN" node info
+    printf '\nReached block height %s.\n' "$(node_height)"
 }
 
 mine_to_next_height() {
@@ -91,320 +230,405 @@ mine_to_next_height() {
     local label=$2
     local current
     local remaining
-    local batch
-    local mtp
     current=$(node_height)
     remaining=$((target - (current + 1)))
     if (( remaining < 0 )); then
-        printf 'ERROR: target next height %s is behind current next height %s\n' "$target" "$((current + 1))" >&2
+        printf 'ERROR: next-block target %s is behind current next-block height %s\n' \
+            "$target" "$((current + 1))" >&2
         exit 1
     fi
-    note "$label: mine $remaining real blocks to next-block height $target"
-    while (( remaining > 0 )); do
-        batch=$remaining
-        if (( batch > 5000 )); then
-            batch=5000
-        fi
-        mtp=$(node_mtp)
-        vc "$MAIN" node set-time "$((mtp + batch + 60))"
-        vc "$MAIN" node mine "$batch" "$MINING_ADDRESS"
-        remaining=$((remaining - batch))
-    done
+    if (( remaining == 0 )); then
+        printf 'Recovery path is already valid at next-block height %s.\n' "$target"
+        return
+    fi
+    mine_blocks "$remaining" "$label"
     if (( $(node_height) + 1 != target )); then
-        printf 'ERROR: height advancement did not stop at requested next-block height\n' >&2
+        printf 'ERROR: height advancement did not stop at next-block height %s\n' "$target" >&2
         exit 1
     fi
-    vc "$MAIN" node info
 }
 
-init_scenario() {
-    local data_dir=$1
+advance_calendar_to() {
+    local target=$1
     local label=$2
-    local output
-    output=$(vault-cli --data-dir "$data_dir" init --hard-limit-sats 100000)
-    printf '%-28s %s\n' "$label" "$(printf '%s\n' "$output" | awk -F': ' '/^Vault address:/ {print $2}')"
-    printf '  %s\n' "$(printf '%s\n' "$output" | awk -F': ' '/^Phone vault key:/ {print $0}')"
-    printf '  %s\n' "$(printf '%s\n' "$output" | awk -F': ' '/^HWW vault key:/ {print $0}')"
+    local target_display
+    target_display=$(date -u -d "@$target" '+%Y-%m-%d %H:%M:%S UTC')
+    step "$label"
+    show_command "$MAIN" node set-time "$((target + 60))"
+    vault_silent "$MAIN" node set-time "$((target + 60))"
+    show_command "$MAIN" node mine 11 "$MINING_ADDRESS"
+    vault_silent "$MAIN" node mine 11 "$MINING_ADDRESS"
+    if (( $(node_mtp) <= target )); then
+        printf 'ERROR: Median Time Past did not advance beyond %s\n' "$target_display" >&2
+        exit 1
+    fi
+    printf 'Regtest calendar is now beyond %s.\n' "$target_display"
 }
 
-fund_scenario() {
-    local data_dir=$1
-    local label=$2
+init_vault() {
+    local hard_limit=$1
+    vault_filtered '
+        /^(Vault initialized|Phone mnemonic:|HWW mnemonic:|Phone vault key:|HWW vault key:|Descriptor:|Vault address:|Phone recovery:|HWW recovery:|Hard limit:)/ { print }
+    ' "$MAIN" init --hard-limit-sats "$hard_limit"
+}
+
+show_backup_metadata() {
+    printf 'Encrypted phone backup: HWW-derived key, %s-byte nonce, %s-byte ciphertext.\n' \
+        "$(jq -r '.nonce | length' "$MAIN/cloud/phone-seed-backup.json")" \
+        "$(jq -r '.ciphertext | length' "$MAIN/cloud/phone-seed-backup.json")"
+}
+
+ceremony() {
+    local now=$1
+    vault_filtered '
+        /^(Batch directory:|Vault address:|Descriptor:|Hard limit:|Fee rate:|Total input:|Equal chunks:|WARNING:|Rollover txid:|Rollover fee:|Phone approved and signed)/ { print }
+    ' "$MAIN" ceremony prepare --now "$now"
+    vault_filtered '
+        /^(SIMULATED HWW|HWW validated and signed)/ { print }
+    ' "$MAIN" ceremony approve --yes
+    vault_filtered '
+        /^(Rollover broadcast:|Encrypted monthly transaction pairs:)/ { print }
+    ' "$MAIN" ceremony finalize
+}
+
+status_compact() {
+    vault_filtered '
+        /^(Network:|Height:|Vault UTXOs:|Vault balance:)/ { print }
+    ' "$MAIN" status
+}
+
+setup_vault() {
+    local funding_sats=${1:-$DEFAULT_FUNDING_SATS}
+    local hard_limit_sats=${2:-$DEFAULT_HARD_LIMIT_SATS}
+    local hot_output
     local vault_address
-    vault_address=$(jq -r .vault_address "$data_dir/vault.json")
-    note "Fund $label with 0.02 BTC"
-    vc "$MAIN" node send "$vault_address" 2000000
+
+    NOW=$(date -u +%s)
+    step "Set up the simulated phone, HWW, hot wallet, and static vault"
+    init_vault "$hard_limit_sats"
+    show_backup_metadata
+    vault_capture hot_output "$MAIN" hot-address
+    MINING_ADDRESS=$(printf '%s\n' "$hot_output" | awk '/^Hot receive address:/ {print $4}')
+    vault "$MAIN" node set-time "$NOW"
+
+    step "Mine spendable regtest coins and fund the vault"
+    mine_blocks 101 "Creating spendable regtest coins"
+    vault_address=$(jq -r .vault_address "$MAIN/vault.json")
+    vault "$MAIN" node send "$vault_address" "$funding_sats"
+    mine_blocks 1 "Confirming the vault funding transaction"
+    FUNDING_HEIGHT=$(node_height)
+    status_compact
 }
 
-section "RENEWABLE BITCOIN VAULT — COMPLETE REGTEST MVP DEMONSTRATION"
-printf 'Demo started at: %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-printf 'Bitcoin Core RPC: %s\n' "${VAULT_RPC_URL:-http://127.0.0.1:18443}"
-printf 'All keys and funds below are disposable regtest data.\n'
+make_receiver() {
+    local variable_name=$1
+    local label=$2
+    local receiver_dir="$DEMO_ROOT/receiver-$label"
+    local receiver_output
+    step "$label creates a fresh receiving wallet"
+    show_command "$receiver_dir" init --hard-limit-sats "$DEFAULT_HARD_LIMIT_SATS"
+    vault-cli --data-dir "$receiver_dir" init --hard-limit-sats "$DEFAULT_HARD_LIMIT_SATS" >/dev/null
+    vault_capture receiver_output "$receiver_dir" hot-address
+    printf -v "$variable_name" '%s' "$(printf '%s\n' "$receiver_output" | awk '/^Hot receive address:/ {print $4}')"
+}
 
-if (( $(vault-cli --data-dir "$MAIN" node info | awk '/^Height:/ {print $2}') != 0 )); then
-    printf 'ERROR: the narrative demo requires a fresh height-zero regtest node.\n' >&2
-    printf 'Run ./scripts/run-e2e.sh so Compose resets the node first.\n' >&2
+confirm_transaction() {
+    mine_blocks 1 "$1"
+}
+
+flow_setup_policy() {
+    NOW=$(date -u +%s)
+    step "Set up the simulated phone, HWW, hot wallet, and static vault"
+    init_vault "$DEFAULT_HARD_LIMIT_SATS"
+    show_backup_metadata
+    vault "$MAIN" policy
+    printf 'Policy timestamps are derived from the current UTC date when a ceremony begins.\n'
+}
+
+flow_monthly_spend() {
+    local first_month first_unlock
+    setup_vault
+
+    step "Approve one annual policy and presign all monthly transactions"
+    ceremony "$NOW"
+    confirm_transaction "Confirming the annual rollover"
+    first_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
+    first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
+    printf 'First allowance: %s at %s.\n' \
+        "$first_month" "$(date -u -d "@$first_unlock" '+%Y-%m-%d %H:%M:%S UTC')"
+    printf 'Each authorization and revocation is stored as its own phone-key-encrypted artifact.\n'
+
+    expect_failure "the allowance is locked before 00:00 UTC on the first of its month" \
+        "$MAIN" monthly "$first_month" authorize
+    advance_calendar_to "$first_unlock" "Fast-forward to the first monthly allowance"
+    vault "$MAIN" monthly "$first_month" authorize
+    vault "$MAIN" soft-limit "$first_month" 1000000
+    confirm_transaction "Confirming the authorization and soft-limit return"
+    printf 'The 0.1 BTC hard allowance retained 0.01 BTC hot and returned 0.09 BTC to cold storage (fees paid from hot funds).\n'
+    status_compact
+}
+
+flow_monthly_revoke() {
+    local second_month second_unlock first_unlock revoke_time
+    setup_vault
+
+    step "Approve one annual policy and presign all monthly transactions"
+    ceremony "$NOW"
+    confirm_transaction "Confirming the annual rollover"
+    first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
+    second_month=$(jq -r '.entries[1].month' "$MAIN/phone/schedule.json")
+    second_unlock=$(jq -r '.entries[1].unlock_timestamp' "$MAIN/phone/schedule.json")
+    revoke_time=$((first_unlock + 14 * 24 * 60 * 60))
+
+    advance_calendar_to "$revoke_time" "Fast-forward two weeks into the first allowance month"
+    step "Revoke the next month's allowance from the phone before it unlocks"
+    vault "$MAIN" monthly "$second_month" revoke
+    confirm_transaction "Confirming the phone-only revocation"
+    printf 'The %s chunk returned to the static vault before its allowance became spendable.\n' "$second_month"
+
+    advance_calendar_to "$second_unlock" "Fast-forward to the revoked allowance month"
+    expect_failure "the authorization conflicts with the already-confirmed revocation" \
+        "$MAIN" monthly "$second_month" authorize
+}
+
+flow_partial_funding() {
+    setup_vault 350000 100000
+    step "Run rollover with only enough funds for the earliest allowances"
+    ceremony "$NOW"
+    confirm_transaction "Confirming the partial annual rollover"
+    status_compact
+}
+
+flow_lost_phone() {
+    local old_address new_address current_mtp
+    setup_vault
+    old_address=$(jq -r .vault_address "$MAIN/vault.json")
+
+    step "Simulate losing the phone"
+    show_file_command rm -- "$MAIN/phone/device.json"
+    rm -- "$MAIN/phone/device.json"
+    expect_failure "the hot wallet cannot open without its phone key" "$MAIN" hot-address
+
+    step "Use the HWW to decrypt the cloud backup, then rotate the phone key"
+    vault "$MAIN" restore-phone
+    vault "$MAIN" rotate-phone
+    new_address=$(jq -r .vault_address "$MAIN/vault.json")
+    if [[ $old_address == "$new_address" ]]; then
+        printf 'ERROR: emergency key rotation reused the vault address\n' >&2
+        exit 1
+    fi
+    confirm_transaction "Confirming emergency key rotation"
+    vault "$MAIN" status
+
+    step "Create a fresh annual schedule for the new phone-key epoch"
+    current_mtp=$(node_mtp)
+    ceremony "$current_mtp"
+    confirm_transaction "Confirming the renewed annual rollover"
+    vault "$MAIN" status
+}
+
+flow_stolen_phone() {
+    local attacker_dir="$DEMO_ROOT/stolen-phone-attacker"
+    local attacker_address
+    setup_vault
+    make_receiver attacker_address "Attacker"
+
+    step "Simulate theft of the phone key and hot-wallet state"
+    show_file_command cp -a "$MAIN" "$attacker_dir"
+    cp -a "$MAIN" "$attacker_dir"
+    show_file_command rm -- "$attacker_dir/hww/device.json"
+    rm -- "$attacker_dir/hww/device.json"
+    vault "$attacker_dir" node send "$attacker_address" 500000
+    expect_failure "the stolen phone lacks H for an immediate cold-vault sweep" \
+        "$attacker_dir" sweep cooperative "$attacker_address"
+    expect_failure "the stolen phone recovery path is not mature" \
+        "$attacker_dir" sweep phone-recovery "$attacker_address"
+
+    step "The owner restores the phone backup with the HWW and rotates immediately"
+    show_file_command rm -- "$MAIN/phone/device.json"
+    rm -- "$MAIN/phone/device.json"
+    vault "$MAIN" restore-phone
+    vault "$MAIN" rotate-phone
+    confirm_transaction "Confirming emergency key rotation"
+    vault "$MAIN" status
+}
+
+flow_lost_hww() {
+    local month unlock latest_height recovery_address target
+    setup_vault
+
+    step "Presign the annual schedule before the HWW is lost"
+    ceremony "$NOW"
+    confirm_transaction "Confirming the annual rollover"
+    month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
+    unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
+    show_file_command rm -- "$MAIN/hww/device.json"
+    rm -- "$MAIN/hww/device.json"
+
+    advance_calendar_to "$unlock" "Fast-forward to a presigned monthly allowance"
+    vault "$MAIN" monthly "$month" authorize
+    confirm_transaction "Confirming the phone-held monthly authorization"
+    vault_capture recovery_address "$MAIN" hot-address
+    recovery_address=$(printf '%s\n' "$recovery_address" | awk '/^Hot receive address:/ {print $4}')
+    latest_height=$(node_height)
+    target=$((latest_height + PHONE_RECOVERY_BLOCKS))
+    expect_failure "phone-only recovery is not mature yet" \
+        "$MAIN" sweep phone-recovery "$recovery_address"
+
+    step "Wait for phone-only recovery"
+    mine_to_next_height "$target" "Mining the real 61,200-block phone recovery delay"
+    vault "$MAIN" sweep phone-recovery "$recovery_address"
+    confirm_transaction "Confirming the phone-only recovery sweep"
+    status_compact
+}
+
+flow_stolen_hww() {
+    local attacker_dir="$DEMO_ROOT/stolen-hww-attacker"
+    local owner_address attacker_address phone_target hww_target
+    setup_vault
+    make_receiver attacker_address "Attacker"
+    vault_capture owner_address "$MAIN" hot-address
+    owner_address=$(printf '%s\n' "$owner_address" | awk '/^Hot receive address:/ {print $4}')
+
+    step "Simulate HWW theft: the attacker has H and the owner retains M"
+    show_file_command cp -a "$MAIN" "$attacker_dir"
+    cp -a "$MAIN" "$attacker_dir"
+    show_file_command rm -- "$attacker_dir/phone/device.json"
+    rm -- "$attacker_dir/phone/device.json"
+    show_file_command rm -- "$MAIN/hww/device.json"
+    rm -- "$MAIN/hww/device.json"
+    expect_failure "HWW recovery is still inside the phone-priority window" \
+        "$attacker_dir" sweep hww-recovery "$attacker_address"
+
+    phone_target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
+    step "The legitimate phone reaches its earlier recovery window"
+    mine_to_next_height "$phone_target" "Mining the real 61,200-block phone recovery delay"
+    vault "$MAIN" sweep phone-recovery "$owner_address"
+    confirm_transaction "Confirming the legitimate phone recovery sweep"
+
+    hww_target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
+    step "The stolen HWW eventually reaches its later recovery window"
+    mine_to_next_height "$hww_target" "Mining the remaining blocks to HWW recovery"
+    expect_failure "the legitimate phone already spent the old vault output" \
+        "$attacker_dir" sweep hww-recovery "$attacker_address"
+}
+
+flow_lost_phone_no_cloud() {
+    local recovery_address target
+    setup_vault
+    make_receiver recovery_address "Recovered owner"
+
+    step "Simulate losing the phone and its cloud backup"
+    show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/cloud/phone-seed-backup.json"
+    rm -- "$MAIN/phone/device.json" "$MAIN/cloud/phone-seed-backup.json"
+    expect_failure "there is no encrypted phone backup to restore" "$MAIN" restore-phone
+    expect_failure "the HWW fallback is not mature yet" \
+        "$MAIN" sweep hww-recovery "$recovery_address"
+
+    target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
+    step "Wait for HWW-only recovery"
+    mine_to_next_height "$target" "Mining the real 65,535-block HWW recovery delay"
+    vault "$MAIN" sweep hww-recovery "$recovery_address"
+    confirm_transaction "Confirming the HWW-only recovery sweep"
+    status_compact
+}
+
+flow_both_lost() {
+    local recovery_address target
+    setup_vault
+    make_receiver recovery_address "Replacement owner"
+
+    step "Simulate losing both devices while encrypted cloud data survives"
+    show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
+    rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
+    expect_failure "the backup cannot be decrypted without the HWW" "$MAIN" restore-phone
+
+    target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
+    step "Wait until every consensus recovery path is mature"
+    mine_to_next_height "$target" "Mining the real 65,535-block HWW recovery delay"
+    expect_failure "no surviving key can sign either mature recovery path" \
+        "$MAIN" sweep hww-recovery "$recovery_address"
+    printf 'Without the optional social-recovery mechanism (outside MVP scope), the funds are unrecoverable.\n'
+}
+
+flow_cloud_compromise() {
+    local attacker_dir="$DEMO_ROOT/cloud-attacker"
+    local attacker_address
+    setup_vault
+    make_receiver attacker_address "Attacker"
+
+    step "Simulate theft of only the encrypted cloud backup"
+    show_file_command mkdir -p "$attacker_dir/cloud"
+    mkdir -p "$attacker_dir/cloud"
+    show_file_command cp "$MAIN/vault.json" "$attacker_dir/vault.json"
+    cp "$MAIN/vault.json" "$attacker_dir/vault.json"
+    show_file_command cp "$MAIN/cloud/phone-seed-backup.json" "$attacker_dir/cloud/phone-seed-backup.json"
+    cp "$MAIN/cloud/phone-seed-backup.json" "$attacker_dir/cloud/phone-seed-backup.json"
+    expect_failure "cloud ciphertext alone cannot restore the phone" "$attacker_dir" restore-phone
+    expect_failure "cloud ciphertext alone cannot sign a cooperative sweep" \
+        "$attacker_dir" sweep cooperative "$attacker_address"
+}
+
+flow_both_compromised() {
+    local attacker_dir="$DEMO_ROOT/both-keys-attacker"
+    local attacker_address
+    setup_vault
+    make_receiver attacker_address "Attacker"
+
+    step "Simulate compromise of both phone and HWW keys"
+    show_file_command cp -a "$MAIN" "$attacker_dir"
+    cp -a "$MAIN" "$attacker_dir"
+    vault "$attacker_dir" sweep cooperative "$attacker_address"
+    confirm_transaction "Confirming the attacker's immediate cooperative sweep"
+    status_compact
+}
+
+flow_rollover_forgotten() {
+    local phone_target hww_target current_mtp
+    setup_vault
+
+    step "Forget the annual rollover and inspect the original vault output"
+    vault "$MAIN" status
+
+    phone_target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
+    mine_to_next_height "$phone_target" "Mining until phone-only recovery activates"
+    vault "$MAIN" status
+
+    hww_target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
+    mine_to_next_height "$hww_target" "Mining until HWW-only recovery also activates"
+    vault "$MAIN" status
+
+    step "Perform a late cooperative rollover to renew both timers"
+    current_mtp=$(node_mtp)
+    ceremony "$current_mtp"
+    confirm_transaction "Confirming the late annual rollover"
+    vault "$MAIN" status
+}
+
+if (( $(node_height) != 0 )); then
+    printf 'ERROR: flow %s requires a fresh height-zero regtest node.\n' "$FLOW" >&2
+    printf 'Run it through ./scripts/run-e2e.sh so the node is reset first.\n' >&2
     exit 1
 fi
 
-section "1. SET UP THE SIMULATED PHONE, HWW, HOT WALLET, AND STATIC VAULT"
-NOW=$(date -u +%s)
-vc "$MAIN" init --hard-limit-sats 10000000
-vc "$MAIN" policy
+heading "Vault user flow: $FLOW"
+printf 'Started at %s. All keys and funds are disposable regtest data.\n' \
+    "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-printf '\nHWW-encrypted phone backup metadata (ciphertext is local cloud stand-in):\n'
-jq '{version, purpose, nonce_bytes: (.nonce | length), ciphertext_bytes: (.ciphertext | length)}' \
-    "$MAIN/cloud/phone-seed-backup.json"
+case "$FLOW" in
+    setup-policy) flow_setup_policy ;;
+    monthly-spend) flow_monthly_spend ;;
+    monthly-revoke) flow_monthly_revoke ;;
+    partial-funding) flow_partial_funding ;;
+    lost-phone) flow_lost_phone ;;
+    stolen-phone) flow_stolen_phone ;;
+    lost-hww) flow_lost_hww ;;
+    stolen-hww) flow_stolen_hww ;;
+    lost-phone-no-cloud) flow_lost_phone_no_cloud ;;
+    both-lost) flow_both_lost ;;
+    cloud-compromise) flow_cloud_compromise ;;
+    both-compromised) flow_both_compromised ;;
+    rollover-forgotten) flow_rollover_forgotten ;;
+esac
 
-capture_vc HOT_ADDRESS_OUTPUT "$MAIN" hot-address
-MINING_ADDRESS=$(printf '%s\n' "$HOT_ADDRESS_OUTPUT" | awk '/^Hot receive address:/ {print $4}')
-vc "$MAIN" node set-time "$NOW"
-
-note "Initialize independent funded states for every loss/theft scenario"
-init_scenario "$STOLEN_PHONE" "Stolen phone"
-init_scenario "$LOST_HWW" "Lost HWW"
-init_scenario "$STOLEN_HWW" "Stolen HWW"
-init_scenario "$NO_CLOUD" "Lost phone, no cloud"
-init_scenario "$BOTH_LOST" "Both devices lost"
-init_scenario "$CLOUD_SOURCE" "Cloud compromised"
-init_scenario "$FORGOTTEN" "Rollover forgotten"
-init_scenario "$BOTH_COMPROMISED" "Both keys compromised"
-init_scenario "$PARTIAL" "Only three months fundable"
-
-section "2. MINE SPENDABLE REGTEST COINS AND FUND THE MAIN VAULT WITH EXACTLY 2 BTC"
-vc "$MAIN" node mine 101 "$MINING_ADDRESS"
-MAIN_VAULT_ADDRESS=$(jq -r .vault_address "$MAIN/vault.json")
-vc "$MAIN" node send "$MAIN_VAULT_ADDRESS" 200000000
-fund_scenario "$STOLEN_PHONE" "stolen-phone scenario"
-fund_scenario "$LOST_HWW" "lost-HWW scenario"
-fund_scenario "$STOLEN_HWW" "stolen-HWW scenario"
-fund_scenario "$NO_CLOUD" "lost-phone/no-cloud scenario"
-fund_scenario "$BOTH_LOST" "both-lost scenario"
-fund_scenario "$CLOUD_SOURCE" "cloud-compromise scenario"
-fund_scenario "$FORGOTTEN" "forgotten-rollover scenario"
-fund_scenario "$BOTH_COMPROMISED" "both-compromised scenario"
-PARTIAL_ADDRESS=$(jq -r .vault_address "$PARTIAL/vault.json")
-note "Fund partial-rollover scenario with only 0.0035 BTC"
-vc "$MAIN" node send "$PARTIAL_ADDRESS" 350000
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-FUNDING_HEIGHT=$(node_height)
-printf 'All scenario vault outputs confirmed at height: %s\n' "$FUNDING_HEIGHT"
-vc "$MAIN" status
-
-note "Insufficient balance does not fail rollover: warn and fund the earliest months only"
-vc "$PARTIAL" ceremony prepare --now "$NOW"
-vc "$PARTIAL" ceremony approve --yes
-vc "$PARTIAL" ceremony finalize
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$PARTIAL" status
-
-section "3. ANNUAL SIGNING CEREMONY: 12 EQUAL CHUNKS, AUTHORIZATIONS, AND REVOCATIONS"
-vc "$MAIN" ceremony prepare --now "$NOW"
-vc "$MAIN" ceremony approve --yes
-vc "$MAIN" ceremony finalize
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$MAIN" status
-
-printf '\nIndividually encrypted phone transaction artifacts:\n'
-for artifact in "$MAIN"/phone/transactions/*.json; do
-    jq -r '"\(.month) \(.kind): txid=\(.txid) nonce-bytes=\(.encrypted_transaction.nonce|length) ciphertext-bytes=\(.encrypted_transaction.ciphertext|length)"' "$artifact"
-done
-
-FIRST_MONTH=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
-SECOND_MONTH=$(jq -r '.entries[1].month' "$MAIN/phone/schedule.json")
-FIRST_UNLOCK=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
-SECOND_UNLOCK=$(jq -r '.entries[1].unlock_timestamp' "$MAIN/phone/schedule.json")
-printf '\nCurrent-date-derived schedule: first=%s (%s), second=%s (%s)\n' \
-    "$FIRST_MONTH" "$(date -u -d "@$FIRST_UNLOCK" '+%Y-%m-%d %H:%M:%S UTC')" \
-    "$SECOND_MONTH" "$(date -u -d "@$SECOND_UNLOCK" '+%Y-%m-%d %H:%M:%S UTC')"
-
-section "4. CALENDAR ALLOWANCES, DYNAMIC SOFT LIMIT, AND PHONE-ONLY REVOCATION"
-expect_failure "the first authorization is non-final before 00:00 UTC on the first of its month" \
-    "$MAIN" monthly "$FIRST_MONTH" authorize
-
-advance_mtp_to "$FIRST_UNLOCK"
-vc "$MAIN" monthly "$FIRST_MONTH" authorize
-vc "$MAIN" soft-limit "$FIRST_MONTH" 1000000
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-printf 'The hard authorization was 0.1 BTC; the phone retained at most 0.01 BTC and returned exactly 0.09 BTC to cold storage, with its fee paid from hot funds.\n'
-vc "$MAIN" status
-
-note "Extracted phone key steals ordinary hot-wallet funds immediately"
-capture_vc THIEF_ADDRESS_OUTPUT "$BOTH_COMPROMISED" hot-address
-THIEF_ADDRESS=$(printf '%s\n' "$THIEF_ADDRESS_OUTPUT" | awk '/^Hot receive address:/ {print $4}')
-EXTRACTED_PHONE="$DEMO_ROOT/extracted-main-phone"
-cp -a "$MAIN" "$EXTRACTED_PHONE"
-rm -- "$EXTRACTED_PHONE/hww/device.json"
-vc "$EXTRACTED_PHONE" node send "$THIEF_ADDRESS" 500000
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-printf 'The copied phone could spend hot funds, but its cold-vault sweep still requires H or CSV maturity.\n'
-expect_failure "extracted phone key cannot immediately spend the cold vault" \
-    "$EXTRACTED_PHONE" sweep cooperative "$THIEF_ADDRESS"
-
-advance_mtp_to "$((FIRST_UNLOCK + 14 * 24 * 60 * 60))"
-vc "$MAIN" monthly "$SECOND_MONTH" revoke
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-printf 'The %s revocation returned its entire chunk (less 1 sat/vB fee) to the static vault.\n' "$SECOND_MONTH"
-
-advance_mtp_to "$SECOND_UNLOCK"
-expect_failure "the revoked monthly authorization conflicts with an already-confirmed revocation" \
-    "$MAIN" monthly "$SECOND_MONTH" authorize
-
-section "5. LOST PHONE: HWW-DECRYPTED BACKUP, NEW PHONE KEY, NEW STATIC ADDRESS"
-rm -- "$MAIN/phone/device.json"
-expect_failure "the hot wallet cannot open after the phone key is deleted" "$MAIN" hot-address
-vc "$MAIN" restore-phone
-OLD_MAIN_ADDRESS=$(jq -r .vault_address "$MAIN/vault.json")
-vc "$MAIN" rotate-phone
-NEW_MAIN_ADDRESS=$(jq -r .vault_address "$MAIN/vault.json")
-if [[ $OLD_MAIN_ADDRESS == "$NEW_MAIN_ADDRESS" ]]; then
-    printf 'ERROR: emergency key rotation reused the vault address\n' >&2
-    exit 1
-fi
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$MAIN" status
-printf '\nArchived obsolete public state and presigned ciphertext:\n'
-find "$MAIN/history" -maxdepth 4 -type f -print | sort
-
-note "Recreate the annual schedule under the recovered phone's new key epoch"
-CURRENT_MTP=$(node_mtp)
-vc "$MAIN" ceremony prepare --now "$CURRENT_MTP"
-vc "$MAIN" ceremony approve --yes
-vc "$MAIN" ceremony finalize
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$MAIN" status
-
-capture_vc RECOVERY_ADDRESS_OUTPUT "$MAIN" hot-address
-RECOVERY_ADDRESS=$(printf '%s\n' "$RECOVERY_ADDRESS_OUTPUT" | awk '/^Hot receive address:/ {print $4}')
-capture_vc ATTACKER_ADDRESS_OUTPUT "$MAIN" hot-address
-ATTACKER_ADDRESS=$(printf '%s\n' "$ATTACKER_ADDRESS_OUTPUT" | awk '/^Hot receive address:/ {print $4}')
-
-section "6. IMMEDIATE LOSS/THEFT SCENARIOS BEFORE RECOVERY PATHS MATURE"
-
-note "Cloud account compromised: ciphertext without the HWW cannot restore the phone"
-CLOUD_ATTACKER="$DEMO_ROOT/cloud-attacker"
-mkdir -p "$CLOUD_ATTACKER/cloud"
-cp "$CLOUD_SOURCE/vault.json" "$CLOUD_ATTACKER/vault.json"
-cp "$CLOUD_SOURCE/cloud/phone-seed-backup.json" "$CLOUD_ATTACKER/cloud/phone-seed-backup.json"
-expect_failure "the cloud attacker has no HWW decryption key" "$CLOUD_ATTACKER" restore-phone
-
-note "Both keys compromised: the immediate cooperative path can steal the full vault"
-vc "$BOTH_COMPROMISED" sweep cooperative "$ATTACKER_ADDRESS"
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$BOTH_COMPROMISED" status
-
-note "Stolen phone: copied M cannot spend cold funds yet; HWW owner restores M and rotates immediately"
-STOLEN_PHONE_ATTACKER="$DEMO_ROOT/stolen-phone-attacker"
-cp -a "$STOLEN_PHONE" "$STOLEN_PHONE_ATTACKER"
-rm -- "$STOLEN_PHONE_ATTACKER/hww/device.json"
-expect_failure "stolen phone lacks H for the immediate 2-of-2 path" \
-    "$STOLEN_PHONE_ATTACKER" sweep cooperative "$ATTACKER_ADDRESS"
-expect_failure "stolen phone's 61,200-block fallback is not mature" \
-    "$STOLEN_PHONE_ATTACKER" sweep phone-recovery "$ATTACKER_ADDRESS"
-rm -- "$STOLEN_PHONE/phone/device.json"
-vc "$STOLEN_PHONE" restore-phone
-vc "$STOLEN_PHONE" rotate-phone
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$STOLEN_PHONE" status
-
-note "Lost HWW: presign first, remove H, then continue using a phone-held monthly authorization"
-CURRENT_MTP=$(node_mtp)
-vc "$LOST_HWW" ceremony prepare --now "$CURRENT_MTP"
-vc "$LOST_HWW" ceremony approve --yes
-vc "$LOST_HWW" ceremony finalize
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-rm -- "$LOST_HWW/hww/device.json"
-vc "$LOST_HWW" hot-address
-LOST_HWW_MONTH=$(jq -r '.entries[0].month' "$LOST_HWW/phone/schedule.json")
-LOST_HWW_UNLOCK=$(jq -r '.entries[0].unlock_timestamp' "$LOST_HWW/phone/schedule.json")
-advance_mtp_to "$LOST_HWW_UNLOCK"
-vc "$LOST_HWW" monthly "$LOST_HWW_MONTH" authorize
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-LOST_HWW_LATEST_HEIGHT=$(node_height)
-vc "$LOST_HWW" status
-
-note "Stolen HWW: attacker gets H only; legitimate state keeps M only"
-STOLEN_HWW_ATTACKER="$DEMO_ROOT/stolen-hww-attacker"
-cp -a "$STOLEN_HWW" "$STOLEN_HWW_ATTACKER"
-rm -- "$STOLEN_HWW_ATTACKER/phone/device.json"
-rm -- "$STOLEN_HWW/hww/device.json"
-expect_failure "stolen HWW cannot use its later fallback during the phone priority window" \
-    "$STOLEN_HWW_ATTACKER" sweep hww-recovery "$ATTACKER_ADDRESS"
-
-note "Lost phone and unavailable cloud backup: only the eventual HWW fallback remains"
-rm -- "$NO_CLOUD/phone/device.json" "$NO_CLOUD/cloud/phone-seed-backup.json"
-expect_failure "there is no encrypted phone backup to restore" "$NO_CLOUD" restore-phone
-expect_failure "the HWW fallback is not mature yet" \
-    "$NO_CLOUD" sweep hww-recovery "$RECOVERY_ADDRESS"
-
-note "Both devices lost: encrypted backup remains, but its HWW decryption key is gone"
-rm -- "$BOTH_LOST/phone/device.json" "$BOTH_LOST/hww/device.json"
-expect_failure "phone backup cannot be decrypted without either surviving device" "$BOTH_LOST" restore-phone
-
-note "Rollover forgotten: status reports activation heights from the oldest live UTXO"
-vc "$FORGOTTEN" status
-
-section "7. MINE THE REAL 61,200-BLOCK PHONE RECOVERY DELAY"
-PHONE_TARGET=$((LOST_HWW_LATEST_HEIGHT + 61200))
-mine_to_next_height "$PHONE_TARGET" "Phone-only recovery activation"
-
-note "Lost HWW: phone recovers every now-mature vault UTXO alone"
-vc "$LOST_HWW" sweep phone-recovery "$RECOVERY_ADDRESS"
-
-note "Stolen HWW: legitimate phone uses its approximately one-month priority window"
-vc "$STOLEN_HWW" sweep phone-recovery "$RECOVERY_ADDRESS"
-expect_failure "HWW attacker is still below its 65,535-block fallback" \
-    "$STOLEN_HWW_ATTACKER" sweep hww-recovery "$ATTACKER_ADDRESS"
-
-note "The old stolen-phone key sees no UTXO after the owner's emergency rotation"
-expect_failure "rotation already invalidated the stolen phone's old policy outputs" \
-    "$STOLEN_PHONE_ATTACKER" sweep phone-recovery "$ATTACKER_ADDRESS"
-
-note "Forgotten rollover now shows phone recovery active while HWW recovery remains pending"
-vc "$FORGOTTEN" status
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$LOST_HWW" status
-vc "$STOLEN_HWW" status
-
-section "8. MINE TO THE REAL 65,535-BLOCK HWW RECOVERY DELAY"
-HWW_TARGET=$((FUNDING_HEIGHT + 65535))
-mine_to_next_height "$HWW_TARGET" "HWW-only recovery activation"
-
-note "Lost phone plus no cloud: surviving HWW now recovers the vault alone"
-vc "$NO_CLOUD" sweep hww-recovery "$RECOVERY_ADDRESS"
-
-note "Stolen HWW attacker is too late because the phone swept during its priority window"
-expect_failure "the old vault output was spent by the legitimate phone" \
-    "$STOLEN_HWW_ATTACKER" sweep hww-recovery "$ATTACKER_ADDRESS"
-
-note "Cloud ciphertext still grants no signing or decryption capability at maturity"
-expect_failure "cloud-only attacker has no HWW key" \
-    "$CLOUD_ATTACKER" sweep hww-recovery "$ATTACKER_ADDRESS"
-
-note "Both devices permanently lost: consensus paths are mature but no signing key survives"
-expect_failure "no HWW key exists to sign the mature HWW path" \
-    "$BOTH_LOST" sweep hww-recovery "$RECOVERY_ADDRESS"
-printf 'Without the optional social-recovery mechanism (out of MVP scope), these funds are unrecoverable.\n'
-
-note "Forgotten rollover now shows both single-device paths active"
-vc "$FORGOTTEN" status
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$NO_CLOUD" status
-
-note "A late cooperative rollover still renews the forgotten vault and resets both timers"
-CURRENT_MTP=$(node_mtp)
-vc "$FORGOTTEN" ceremony prepare --now "$CURRENT_MTP"
-vc "$FORGOTTEN" ceremony approve --yes
-vc "$FORGOTTEN" ceremony finalize
-vc "$MAIN" node mine 1 "$MINING_ADDRESS"
-vc "$FORGOTTEN" status
-
-section "9. DEMO COMPLETE"
-printf 'Verified on a real Bitcoin Core regtest node:\n'
-printf '  - exact 2 BTC funding and 12 equal cold chunks\n'
-printf '  - one HWW policy approval for all authorization/revocation PSBTs\n'
-printf '  - first-of-month UTC/MTP enforcement, 0.1 BTC hard limit, 0.01 BTC soft limit\n'
-printf '  - phone-only pre-maturity revocation and rejected conflicting authorization\n'
-printf '  - HWW-encrypted phone backup restoration and emergency static-address rotation\n'
-printf '  - all documented device-loss, key-theft, cloud, and forgotten-rollover outcomes\n'
-printf '  - real 61,200-block and 65,535-block CSV recovery spends\n'
+heading "Flow passed: $FLOW"

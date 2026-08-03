@@ -2,15 +2,22 @@
 
 This repository contains a regtest-only Rust/BDK implementation of the renewable Bitcoin vault described in [vault-design.md](vault-design.md). It uses a real Bitcoin Core node for policy validation, transaction relay, calendar locktimes, and block-based recovery.
 
-## Run the narrative end-to-end demo
+## Run the end-to-end user flows
 
 Docker is the only host dependency:
 
 ```bash
-./scripts/run-e2e.sh
+./scripts/run-e2e.sh --list
+./scripts/run-e2e.sh monthly-spend
+./scripts/run-e2e.sh lost-phone lost-hww
+./scripts/run-e2e.sh all
 ```
 
-The script always removes this Compose project's old containers and volumes, starts a fresh regtest chain, and runs every behavior serially. It funds the primary vault with exactly 2 BTC, creates the twelve 0.1 BTC monthly authorizations and revocations, exercises calendar and soft-limit behavior, then mines the real 61,200/65,535-block recovery delays while demonstrating every documented loss/theft scenario. The recovery portion is intentionally slow.
+With no arguments, the runner behaves like `all`. Selected flows run serially, and each gets a fresh regtest chain and vault state so it can be read and reproduced independently. Output is limited to user actions, the corresponding CLI commands, essential policy/transaction results, expected safety rejections, and compact mining progress.
+
+The named flows cover setup/policy, monthly spend, monthly revoke, partial funding, lost or stolen phone, lost or stolen HWW, missing cloud backup, both devices lost, cloud compromise, both keys compromised, and forgotten rollover. The spend demonstrations fund exactly 2 BTC and build twelve 0.1 BTC allowances.
+
+Recovery flows mine the real 61,200/65,535-block CSV delays. Running one is intentionally slow; running `all` is substantially slower because every recovery flow proves its delay on an independent chain.
 
 ## Run all tests
 
