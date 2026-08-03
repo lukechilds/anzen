@@ -6,6 +6,7 @@ readonly DEFAULT_HARD_LIMIT_SATS=10000000
 readonly DEFAULT_FUNDING_SATS=200000000
 readonly PHONE_RECOVERY_BLOCKS=61200
 readonly HWW_RECOVERY_BLOCKS=65535
+readonly BLOCKS_PER_YEAR=52560
 
 CLI_OUTPUT_COLOR=$'\033[90m'
 COLOR_RESET=$'\033[0m'
@@ -28,6 +29,7 @@ readonly TESTS=(
     both-lost
     cloud-compromise
     both-compromised
+    rollover-on-time
     rollover-forgotten
 )
 
@@ -308,15 +310,20 @@ show_backup_metadata() {
 
 ceremony() {
     local now=$1
+    local batch_dir=${2:-}
+    local batch_args=()
+    if [[ -n $batch_dir ]]; then
+        batch_args=(--batch-dir "$batch_dir")
+    fi
     vault_filtered '
         /^(Batch directory:|Vault address:|Descriptor:|Hard limit:|Fee rate:|Total input:|Equal chunks:|WARNING:|Rollover txid:|Rollover fee:|Phone approved and signed)/ { print }
-    ' "$MAIN" ceremony prepare --now "$now"
+    ' "$MAIN" ceremony prepare --now "$now" "${batch_args[@]}"
     vault_filtered '
         /^(SIMULATED HWW|HWW validated and signed)/ { print }
-    ' "$MAIN" ceremony approve --yes
+    ' "$MAIN" ceremony approve "${batch_args[@]}" --yes
     vault_filtered '
         /^(Rollover broadcast:|Encrypted monthly transaction pairs:)/ { print }
-    ' "$MAIN" ceremony finalize
+    ' "$MAIN" ceremony finalize "${batch_args[@]}"
 }
 
 status_compact() {
@@ -647,6 +654,69 @@ test_both_compromised() {
     success "Both compromised keys drained the vault immediately."
 }
 
+test_rollover_on_time() {
+    local initial_rollover_height annual_next_height pre_calendar_target anniversary
+    local old_phone_target old_month old_schedule current_mtp renewal_dir
+    local renewed_rollover_height renewed_oldest renewed_phone_target
+    setup_vault
+
+    step "Create the first annual schedule"
+    ceremony "$NOW"
+    confirm_transaction "Confirming the first annual rollover"
+    initial_rollover_height=$(node_height)
+    old_phone_target=$((initial_rollover_height + PHONE_RECOVERY_BLOCKS))
+    old_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
+    old_schedule="$DEMO_ROOT/rollover-on-time-old-schedule"
+    cp -a "$MAIN" "$old_schedule"
+    vault "$MAIN" status
+    success "Initial annual rollover confirmed with twelve monthly pairs."
+
+    annual_next_height=$((initial_rollover_height + BLOCKS_PER_YEAR))
+    pre_calendar_target=$((annual_next_height - 11))
+    anniversary=$((NOW + 365 * 24 * 60 * 60))
+    step "Wait one year without crossing either recovery deadline"
+    mine_to_next_height "$pre_calendar_target" \
+        "Mining one year of real block height for the scheduled rollover"
+    advance_calendar_to "$anniversary" "Advance the calendar to the annual rollover date"
+    vault "$MAIN" status
+    expect_failure "phone recovery is still locked at the scheduled rollover" \
+        "$MAIN" sweep phone-recovery "$MINING_ADDRESS"
+    expect_failure "HWW recovery is still locked at the scheduled rollover" \
+        "$MAIN" sweep hww-recovery "$MINING_ADDRESS"
+    success "Annual rollover date reached before either recovery path activated."
+
+    step "Perform the scheduled cooperative rollover"
+    current_mtp=$(node_mtp)
+    renewal_dir="$MAIN/ceremony/on-time-renewal"
+    ceremony "$current_mtp" "$renewal_dir"
+    confirm_transaction "Confirming the on-time annual rollover"
+    renewed_rollover_height=$(node_height)
+    vault "$MAIN" status
+    renewed_oldest=$(vault-cli --data-dir "$MAIN" status | \
+        awk '/^Oldest confirmation height:/ {print $4}')
+    renewed_phone_target=$(vault-cli --data-dir "$MAIN" status | \
+        awk '/^Phone recovery: valid next-block height/ {print $6}')
+    if [[ $renewed_oldest != "$renewed_rollover_height" || \
+        $renewed_phone_target != "$((renewed_rollover_height + PHONE_RECOVERY_BLOCKS))" ]]; then
+        printf 'ERROR: on-time rollover did not reset the recovery timers\n' >&2
+        exit 1
+    fi
+    success "All funds rolled over and both recovery timers reset."
+
+    step "Try a retained authorization from the previous annual schedule"
+    expect_failure "the confirmed rollover spent every old monthly chunk" \
+        "$old_schedule" monthly "$old_month" authorize
+    success "Old monthly authorizations were invalidated by the rollover."
+
+    step "Reach the old phone-recovery deadline"
+    mine_to_next_height "$old_phone_target" \
+        "Mining until the previous schedule's phone-recovery deadline"
+    vault "$MAIN" status
+    expect_failure "the renewed outputs have a fresh phone-recovery delay" \
+        "$MAIN" sweep phone-recovery "$MINING_ADDRESS"
+    success "Old recovery deadline passed while renewed funds stayed locked."
+}
+
 test_rollover_forgotten() {
     local phone_target hww_target current_mtp
     setup_vault
@@ -693,6 +763,7 @@ case "$E2E_TEST" in
     both-lost) test_both_lost ;;
     cloud-compromise) test_cloud_compromise ;;
     both-compromised) test_both_compromised ;;
+    rollover-on-time) test_rollover_on_time ;;
     rollover-forgotten) test_rollover_forgotten ;;
 esac
 
