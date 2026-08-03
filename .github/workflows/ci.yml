@@ -85,8 +85,8 @@ jobs:
         env:
           VAULT_SKIP_DOCKER_BUILD: "1"
 
-  user-flows:
-    name: End-to-end user flows
+  e2e-tests:
+    name: End-to-end tests
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -115,7 +115,7 @@ jobs:
             type=gha,scope=vault-tests
           cache-to: type=gha,mode=max,scope=vault-runtime,timeout=20m,ignore-error=true
 
-      - name: Run every isolated flow serially
+      - name: Run every isolated test serially
         run: ./scripts/run-e2e.sh all
         env:
           VAULT_SKIP_DOCKER_BUILD: "1"

@@ -5,10 +5,10 @@ cd "$(dirname "$0")/.."
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/run-e2e.sh [--list | all | FLOW...]
+Usage: ./scripts/run-e2e.sh [--list | all | TEST...]
 
-Run one or more user flows serially. Every flow gets a fresh Bitcoin Core
-regtest chain and fresh vault state. With no arguments, all flows run.
+Run one or more end-to-end tests serially. Every test gets a fresh Bitcoin Core
+regtest chain and fresh vault state. With no arguments, all tests run.
 
 Examples:
   ./scripts/run-e2e.sh --list
@@ -28,33 +28,33 @@ if [[ ${1:-} == --list ]]; then
     exit 0
 fi
 
-ALL_FLOWS=()
-while IFS= read -r flow; do
-    ALL_FLOWS[${#ALL_FLOWS[@]}]=$flow
+ALL_TESTS=()
+while IFS= read -r test_name; do
+    ALL_TESTS[${#ALL_TESTS[@]}]=$test_name
 done < <(scripts/e2e-demo.sh --list)
 
 if [[ $# -eq 0 || ${1:-} == all ]]; then
     if [[ $# -gt 1 ]]; then
-        printf '`all` cannot be combined with individual flow names.\n' >&2
+        printf '`all` cannot be combined with individual test names.\n' >&2
         exit 2
     fi
-    SELECTED_FLOWS=("${ALL_FLOWS[@]}")
+    SELECTED_TESTS=("${ALL_TESTS[@]}")
 else
-    SELECTED_FLOWS=("$@")
+    SELECTED_TESTS=("$@")
 fi
 
-for selected in "${SELECTED_FLOWS[@]}"; do
+for selected in "${SELECTED_TESTS[@]}"; do
     valid=false
-    for known in "${ALL_FLOWS[@]}"; do
+    for known in "${ALL_TESTS[@]}"; do
         if [[ $selected == "$known" ]]; then
             valid=true
             break
         fi
     done
     if [[ $valid != true ]]; then
-        printf 'Unknown flow: %s\n\n' "$selected" >&2
+        printf 'Unknown test: %s\n\n' "$selected" >&2
         usage >&2
-        printf '\nAvailable flows:\n' >&2
+        printf '\nAvailable tests:\n' >&2
         scripts/e2e-demo.sh --list | sed 's/^/  /' >&2
         exit 2
     fi
@@ -73,16 +73,15 @@ if [[ ${VAULT_SKIP_DOCKER_BUILD:-0} != 1 ]]; then
     COMPOSE_PROGRESS=quiet docker compose build demo
 fi
 
-total=${#SELECTED_FLOWS[@]}
+total=${#SELECTED_TESTS[@]}
 index=0
-for flow in "${SELECTED_FLOWS[@]}"; do
+for test_name in "${SELECTED_TESTS[@]}"; do
     index=$((index + 1))
     cleanup
-    printf '\n############################################################\n'
-    printf 'Flow %s/%s: %s (fresh regtest chain)\n' "$index" "$total" "$flow"
-    printf '############################################################\n'
+    printf '\n🔧 Test %s/%s: %s (fresh regtest chain)\n' \
+        "$index" "$total" "$test_name"
     COMPOSE_PROGRESS=quiet docker compose up --detach --wait bitcoind >/dev/null
-    COMPOSE_PROGRESS=quiet docker compose run --rm --no-deps demo "$flow"
+    COMPOSE_PROGRESS=quiet docker compose run --rm --no-deps demo "$test_name"
 done
 
-printf '\nAll %s selected flow(s) passed.\n' "$total"
+printf '\n✨ All %s selected tests passed.\n' "$total"

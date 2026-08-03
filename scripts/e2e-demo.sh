@@ -7,7 +7,15 @@ readonly DEFAULT_FUNDING_SATS=200000000
 readonly PHONE_RECOVERY_BLOCKS=61200
 readonly HWW_RECOVERY_BLOCKS=65535
 
-readonly FLOWS=(
+CLI_OUTPUT_COLOR=$'\033[90m'
+COLOR_RESET=$'\033[0m'
+if [[ -n ${NO_COLOR:-} ]]; then
+    CLI_OUTPUT_COLOR=
+    COLOR_RESET=
+fi
+readonly CLI_OUTPUT_COLOR COLOR_RESET
+
+readonly TESTS=(
     setup-policy
     monthly-spend
     monthly-revoke
@@ -23,20 +31,20 @@ readonly FLOWS=(
     rollover-forgotten
 )
 
-list_flows() {
-    printf '%s\n' "${FLOWS[@]}"
+list_tests() {
+    printf '%s\n' "${TESTS[@]}"
 }
 
 usage() {
-    printf 'Usage: %s <flow>\n\n' "$0"
-    printf 'Run exactly one isolated user flow. Use scripts/run-e2e.sh to run one,\n'
-    printf 'several, or all flows with a fresh regtest node for each flow.\n\n'
-    printf 'Available flows:\n'
-    list_flows | sed 's/^/  /'
+    printf 'Usage: %s <test>\n\n' "$0"
+    printf 'Run exactly one isolated end-to-end test. Use scripts/run-e2e.sh to run\n'
+    printf 'one, several, or all tests with a fresh regtest node for each test.\n\n'
+    printf 'Available tests:\n'
+    list_tests | sed 's/^/  /'
 }
 
 if [[ ${1:-} == --list ]]; then
-    list_flows
+    list_tests
     exit 0
 fi
 
@@ -45,31 +53,34 @@ if [[ $# -ne 1 ]]; then
     exit 2
 fi
 
-FLOW=$1
-case " ${FLOWS[*]} " in
-    *" $FLOW "*) ;;
+E2E_TEST=$1
+case " ${TESTS[*]} " in
+    *" $E2E_TEST "*) ;;
     *)
-        printf 'Unknown flow: %s\n\n' "$FLOW" >&2
+        printf 'Unknown test: %s\n\n' "$E2E_TEST" >&2
         usage >&2
         exit 2
         ;;
 esac
 
-MAIN="$DEMO_ROOT/$FLOW"
+MAIN="$DEMO_ROOT/$E2E_TEST"
 MINING_ADDRESS=
 NOW=
 FUNDING_HEIGHT=
-
-heading() {
-    printf '\n=== %s ===\n' "$1"
-}
 
 step() {
     printf '\n--- %s ---\n' "$1"
 }
 
 success() {
-    printf '✅ %s\n' "$1"
+    printf '\n✅ %s\n' "$1"
+}
+
+print_cli_output() {
+    local output=$1
+    if [[ -n $output ]]; then
+        printf '%s%s%s\n' "$CLI_OUTPUT_COLOR" "$output" "$COLOR_RESET"
+    fi
 }
 
 show_command() {
@@ -87,9 +98,16 @@ show_file_command() {
 
 vault() {
     local data_dir=$1
+    local output
+    local vault_exit
     shift
     show_command "$data_dir" "$@"
-    vault-cli --data-dir "$data_dir" "$@"
+    set +e
+    output=$(vault-cli --data-dir "$data_dir" "$@" 2>&1)
+    vault_exit=$?
+    set -e
+    print_cli_output "$output"
+    return "$vault_exit"
 }
 
 vault_capture() {
@@ -98,8 +116,11 @@ vault_capture() {
     local output
     shift 2
     show_command "$data_dir" "$@"
-    output=$(vault-cli --data-dir "$data_dir" "$@")
-    printf '%s\n' "$output"
+    if ! output=$(vault-cli --data-dir "$data_dir" "$@" 2>&1); then
+        print_cli_output "$output"
+        return 1
+    fi
+    print_cli_output "$output"
     printf -v "$variable_name" '%s' "$output"
 }
 
@@ -113,7 +134,7 @@ vault_silent() {
     status=$?
     set -e
     if [[ $status -ne 0 ]]; then
-        printf '%s\n' "$output" >&2
+        print_cli_output "$output" >&2
         return "$status"
     fi
 }
@@ -125,10 +146,11 @@ vault_filtered() {
     shift 2
     show_command "$data_dir" "$@"
     if ! output=$(vault-cli --data-dir "$data_dir" "$@" 2>&1); then
-        printf '%s\n' "$output" >&2
+        print_cli_output "$output" >&2
         return 1
     fi
-    printf '%s\n' "$output" | awk "$filter"
+    output=$(printf '%s\n' "$output" | awk "$filter")
+    print_cli_output "$output"
 }
 
 expect_failure() {
@@ -150,9 +172,10 @@ expect_failure() {
     fi
     error_line=$(printf '%s\n' "$output" | sed -n '/^Error:/ {p;q;}')
     if [[ -n $error_line ]]; then
-        printf '%s\n' "$error_line"
+        print_cli_output "$error_line"
     else
-        printf '%s\n' "$output" | sed -n '1p'
+        error_line=$(printf '%s\n' "$output" | sed -n '1p')
+        print_cli_output "$error_line"
     fi
     printf 'Safely rejected.\n'
 }
@@ -344,7 +367,7 @@ confirm_transaction() {
     mine_blocks 1 "$1"
 }
 
-flow_setup_policy() {
+test_setup_policy() {
     NOW=$(date -u +%s)
     step "Set up the simulated phone, HWW, hot wallet, and static vault"
     init_vault "$DEFAULT_HARD_LIMIT_SATS"
@@ -354,7 +377,7 @@ flow_setup_policy() {
     success "Vault policy configured and verified."
 }
 
-flow_monthly_spend() {
+test_monthly_spend() {
     local first_month first_unlock
     setup_vault
 
@@ -384,7 +407,7 @@ flow_monthly_spend() {
     success "0.01 BTC retained; 0.09 BTC returned cold."
 }
 
-flow_monthly_revoke() {
+test_monthly_revoke() {
     local second_month second_unlock first_unlock revoke_time
     setup_vault
 
@@ -412,7 +435,7 @@ flow_monthly_revoke() {
     success "Revoked allowance remained unspendable."
 }
 
-flow_partial_funding() {
+test_partial_funding() {
     setup_vault 350000 100000
     step "Run rollover with only enough funds for the earliest allowances"
     ceremony "$NOW"
@@ -421,7 +444,7 @@ flow_partial_funding() {
     success "Earliest three allowances funded; rollover continued."
 }
 
-flow_lost_phone() {
+test_lost_phone() {
     local old_address new_address current_mtp
     setup_vault
     old_address=$(jq -r .vault_address "$MAIN/vault.json")
@@ -452,7 +475,7 @@ flow_lost_phone() {
     success "Annual schedule renewed for the new phone."
 }
 
-flow_stolen_phone() {
+test_stolen_phone() {
     local attacker_dir="$DEMO_ROOT/stolen-phone-attacker"
     local attacker_address
     setup_vault
@@ -480,7 +503,7 @@ flow_stolen_phone() {
     success "Owner restored and rotated away from stolen key."
 }
 
-flow_lost_hww() {
+test_lost_hww() {
     local month unlock latest_height recovery_address target
     setup_vault
 
@@ -514,7 +537,7 @@ flow_lost_hww() {
     success "Phone recovered the full remaining vault balance."
 }
 
-flow_stolen_hww() {
+test_stolen_hww() {
     local attacker_dir="$DEMO_ROOT/stolen-hww-attacker"
     local owner_address attacker_address phone_target hww_target
     setup_vault
@@ -548,7 +571,7 @@ flow_stolen_hww() {
     success "Stolen HWW reached maturity too late."
 }
 
-flow_lost_phone_no_cloud() {
+test_lost_phone_no_cloud() {
     local recovery_address target
     setup_vault
     make_receiver recovery_address "Recovered owner"
@@ -570,7 +593,7 @@ flow_lost_phone_no_cloud() {
     success "Surviving HWW recovered the vault after maturity."
 }
 
-flow_both_lost() {
+test_both_lost() {
     local recovery_address target
     setup_vault
     make_receiver recovery_address "Replacement owner"
@@ -590,7 +613,7 @@ flow_both_lost() {
     success "Mature funds remain unrecoverable without a key."
 }
 
-flow_cloud_compromise() {
+test_cloud_compromise() {
     local attacker_dir="$DEMO_ROOT/cloud-attacker"
     local attacker_address
     setup_vault
@@ -609,7 +632,7 @@ flow_cloud_compromise() {
     success "Cloud ciphertext revealed no spending capability."
 }
 
-flow_both_compromised() {
+test_both_compromised() {
     local attacker_dir="$DEMO_ROOT/both-keys-attacker"
     local attacker_address
     setup_vault
@@ -624,7 +647,7 @@ flow_both_compromised() {
     success "Both compromised keys drained the vault immediately."
 }
 
-flow_rollover_forgotten() {
+test_rollover_forgotten() {
     local phone_target hww_target current_mtp
     setup_vault
 
@@ -649,29 +672,28 @@ flow_rollover_forgotten() {
 }
 
 if (( $(node_height) != 0 )); then
-    printf 'ERROR: flow %s requires a fresh height-zero regtest node.\n' "$FLOW" >&2
+    printf 'ERROR: test %s requires a fresh height-zero regtest node.\n' "$E2E_TEST" >&2
     printf 'Run it through ./scripts/run-e2e.sh so the node is reset first.\n' >&2
     exit 1
 fi
 
-heading "Vault user flow: $FLOW"
 printf 'Started at %s. All keys and funds are disposable regtest data.\n' \
     "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-case "$FLOW" in
-    setup-policy) flow_setup_policy ;;
-    monthly-spend) flow_monthly_spend ;;
-    monthly-revoke) flow_monthly_revoke ;;
-    partial-funding) flow_partial_funding ;;
-    lost-phone) flow_lost_phone ;;
-    stolen-phone) flow_stolen_phone ;;
-    lost-hww) flow_lost_hww ;;
-    stolen-hww) flow_stolen_hww ;;
-    lost-phone-no-cloud) flow_lost_phone_no_cloud ;;
-    both-lost) flow_both_lost ;;
-    cloud-compromise) flow_cloud_compromise ;;
-    both-compromised) flow_both_compromised ;;
-    rollover-forgotten) flow_rollover_forgotten ;;
+case "$E2E_TEST" in
+    setup-policy) test_setup_policy ;;
+    monthly-spend) test_monthly_spend ;;
+    monthly-revoke) test_monthly_revoke ;;
+    partial-funding) test_partial_funding ;;
+    lost-phone) test_lost_phone ;;
+    stolen-phone) test_stolen_phone ;;
+    lost-hww) test_lost_hww ;;
+    stolen-hww) test_stolen_hww ;;
+    lost-phone-no-cloud) test_lost_phone_no_cloud ;;
+    both-lost) test_both_lost ;;
+    cloud-compromise) test_cloud_compromise ;;
+    both-compromised) test_both_compromised ;;
+    rollover-forgotten) test_rollover_forgotten ;;
 esac
 
-heading "Flow passed: $FLOW"
+printf '\n✨ Test passed: %s\n' "$E2E_TEST"
