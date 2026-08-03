@@ -4,8 +4,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
-use bdk_wallet::{KeychainKind, PersistedWallet, Wallet, rusqlite::Connection};
-use bitcoin::{Address, Network, key::Secp256k1};
+use bdk_wallet::{KeychainKind, PersistedWallet, SignOptions, Wallet, rusqlite::Connection};
+use bitcoin::{
+    Address, Amount, FeeRate, Network, OutPoint, ScriptBuf, Transaction, key::Secp256k1,
+};
 use bitcoincore_rpc::Client;
 use std::{fs, path::Path};
 
@@ -78,6 +80,50 @@ impl HotWallet {
         self.wallet.apply_evicted_txs(mempool.evicted);
         self.wallet.persist(&mut self.db)?;
         Ok(())
+    }
+
+    pub fn build_soft_limit_return(
+        &mut self,
+        authorization_outpoint: OutPoint,
+        hard_limit_sats: u64,
+        soft_limit_sats: u64,
+        vault_script: ScriptBuf,
+    ) -> Result<Option<Transaction>> {
+        if soft_limit_sats > hard_limit_sats {
+            anyhow::bail!("soft limit cannot exceed the configured hard limit");
+        }
+        if self.wallet.get_utxo(authorization_outpoint).is_none() {
+            anyhow::bail!(
+                "hot wallet does not contain authorization output {authorization_outpoint}"
+            );
+        }
+        if soft_limit_sats == hard_limit_sats {
+            return Ok(None);
+        }
+
+        let change_script = self.next_change_address()?.script_pubkey();
+        let requested_cold_return = hard_limit_sats - soft_limit_sats;
+        let mut builder = self.wallet.build_tx();
+        builder
+            .add_utxo(authorization_outpoint)?
+            .manually_selected_only()
+            .fee_rate(FeeRate::from_sat_per_vb(1).expect("1 sat/vB is valid"))
+            .drain_to(change_script);
+        if soft_limit_sats == 0 {
+            // With a zero soft limit there is no hot remainder from which to pay the child fee.
+            // Draining the input to the vault makes the fee come out of the cold return instead.
+            builder.drain_to(vault_script);
+        } else {
+            builder.add_recipient(vault_script, Amount::from_sat(requested_cold_return));
+        }
+        let mut psbt = builder.finish()?;
+        let finalized = self.wallet.sign(&mut psbt, SignOptions::default())?;
+        if !finalized {
+            anyhow::bail!("BDK could not finalize the soft-limit return transaction");
+        }
+        let transaction = psbt.extract_tx()?;
+        self.wallet.persist(&mut self.db)?;
+        Ok(Some(transaction))
     }
 }
 

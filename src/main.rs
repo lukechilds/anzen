@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -35,6 +35,19 @@ enum Command {
         #[command(subcommand)]
         command: NodeCommand,
     },
+    /// Prepare, approve, and finalize the annual batch signing ceremony.
+    Ceremony {
+        #[command(subcommand)]
+        command: CeremonyCommand,
+    },
+    /// Broadcast one encrypted monthly authorization or revocation.
+    Monthly {
+        month: String,
+        #[arg(value_enum)]
+        action: MonthlyAction,
+    },
+    /// Return the difference between a claimed hard allowance and a lower soft limit to the vault.
+    SoftLimit { month: String, soft_limit_sats: u64 },
 }
 
 #[derive(Debug, Clone, Args)]
@@ -75,6 +88,43 @@ enum NodeCommand {
     SetTime { timestamp: u64 },
     /// Mine blocks immediately to an explicit regtest address.
     Mine { blocks: u64, address: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum CeremonyCommand {
+    /// Build the rollover and all monthly PSBTs, then add the phone signatures.
+    Prepare {
+        /// Override the captured current Unix time (test-only).
+        #[arg(long)]
+        now: Option<i64>,
+        /// Override the ceremony directory.
+        #[arg(long)]
+        batch_dir: Option<PathBuf>,
+    },
+    /// Show the high-level policy and transaction batch awaiting approval.
+    Show {
+        #[arg(long)]
+        batch_dir: Option<PathBuf>,
+    },
+    /// Validate the complete policy once and add all simulated HWW signatures.
+    Approve {
+        #[arg(long)]
+        batch_dir: Option<PathBuf>,
+        /// Approve non-interactively; intended for the deterministic demo.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Finalize every PSBT, encrypt monthly transactions, and broadcast rollover.
+    Finalize {
+        #[arg(long)]
+        batch_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum MonthlyAction {
+    Authorize,
+    Revoke,
 }
 
 fn main() -> Result<()> {
@@ -161,6 +211,125 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Ceremony { command } => match command {
+            CeremonyCommand::Prepare { now, batch_dir } => {
+                let rpc = cli.rpc.connect()?;
+                let timestamp = now.unwrap_or_else(|| chrono::Utc::now().timestamp());
+                let now = chrono::DateTime::from_timestamp(timestamp, 0)
+                    .ok_or_else(|| anyhow::anyhow!("invalid ceremony timestamp {timestamp}"))?;
+                let batch_dir = batch_dir
+                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
+                let manifest = vault_cli::ceremony::prepare(&cli.data_dir, &rpc, now, &batch_dir)?;
+                print_manifest(&manifest, &batch_dir);
+                println!(
+                    "Phone approved and signed all {} PSBTs",
+                    1 + manifest.chunk_count * 2
+                );
+                println!("Next: review with `vault-cli ceremony approve`");
+            }
+            CeremonyCommand::Show { batch_dir } => {
+                let batch_dir = batch_dir
+                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
+                let manifest = vault_cli::ceremony::load_manifest(&batch_dir)?;
+                print_manifest(&manifest, &batch_dir);
+            }
+            CeremonyCommand::Approve { batch_dir, yes } => {
+                let batch_dir = batch_dir
+                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
+                let manifest = vault_cli::ceremony::load_manifest(&batch_dir)?;
+                println!("SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL");
+                print_manifest(&manifest, &batch_dir);
+                if !yes {
+                    use std::io::{self, Write};
+                    print!("Type `approve` to sign the complete batch: ");
+                    io::stdout().flush()?;
+                    let mut response = String::new();
+                    io::stdin().read_line(&mut response)?;
+                    if response.trim() != "approve" {
+                        anyhow::bail!("HWW policy approval declined");
+                    }
+                }
+                let approved = vault_cli::ceremony::approve_hww(&cli.data_dir, &batch_dir)?;
+                println!(
+                    "HWW validated and signed all {} PSBTs after one approval",
+                    1 + approved.chunk_count * 2
+                );
+            }
+            CeremonyCommand::Finalize { batch_dir } => {
+                let rpc = cli.rpc.connect()?;
+                let batch_dir = batch_dir
+                    .unwrap_or_else(|| vault_cli::ceremony::default_batch_path(&cli.data_dir));
+                let schedule =
+                    vault_cli::ceremony::finalize_and_broadcast(&cli.data_dir, &rpc, &batch_dir)?;
+                println!("Rollover broadcast: {}", schedule.rollover_txid);
+                println!(
+                    "Encrypted monthly transaction pairs: {}",
+                    schedule.entries.len()
+                );
+                for entry in schedule.entries {
+                    println!(
+                        "{} unlock={} authorization={} revocation={}",
+                        entry.month,
+                        entry.unlock_timestamp,
+                        entry.authorization_txid,
+                        entry.revocation_txid
+                    );
+                }
+            }
+        },
+        Command::Monthly { month, action } => {
+            let rpc = cli.rpc.connect()?;
+            let kind = match action {
+                MonthlyAction::Authorize => vault_cli::ceremony::TransactionKind::Authorization,
+                MonthlyAction::Revoke => vault_cli::ceremony::TransactionKind::Revocation,
+            };
+            let txid = vault_cli::ceremony::broadcast_monthly(&cli.data_dir, &rpc, &month, kind)?;
+            println!("Broadcast {action:?} for {month}: {txid}");
+        }
+        Command::SoftLimit {
+            month,
+            soft_limit_sats,
+        } => {
+            let rpc = cli.rpc.connect()?;
+            match vault_cli::ceremony::apply_soft_limit(
+                &cli.data_dir,
+                &rpc,
+                &month,
+                soft_limit_sats,
+            )? {
+                Some(txid) => println!(
+                    "Soft limit applied for {month}: retained at most {soft_limit_sats} sats hot; cold-return txid={txid}"
+                ),
+                None => println!(
+                    "Soft limit equals hard limit for {month}; no cold-return transaction required"
+                ),
+            }
+        }
     }
     Ok(())
+}
+
+fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, batch_dir: &std::path::Path) {
+    println!("Batch directory: {}", batch_dir.display());
+    println!("Vault address: {}", manifest.vault_address);
+    println!("Descriptor: {}", manifest.vault_descriptor);
+    println!("Hard limit: {} sats", manifest.hard_limit_sats);
+    println!("Fee rate: {} sat/vB", manifest.fee_rate_sat_vb);
+    println!("Total input: {} sats", manifest.total_input_sats);
+    println!("Equal chunks: {}", manifest.chunk_count);
+    println!("Rollover txid: {}", manifest.rollover.unsigned_txid);
+    println!("Rollover fee: {} sats", manifest.rollover.fee_sats);
+    for month in &manifest.months {
+        println!(
+            "{} unlock={} chunk={} sats hot={} auth={} revoke={}",
+            month.month,
+            month.unlock_timestamp,
+            month.chunk_value_sats,
+            month.hot_address,
+            month.authorization.unsigned_txid,
+            month.revocation.unsigned_txid
+        );
+    }
+    println!("Phone approved: {}", manifest.phone_approved);
+    println!("HWW approved: {}", manifest.hww_approved);
 }

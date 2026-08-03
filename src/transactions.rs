@@ -73,6 +73,36 @@ pub fn sign_vault_psbt(
     Ok(())
 }
 
+pub fn verify_vault_psbt_signature(
+    psbt: &Psbt,
+    policy: &VaultPolicy,
+    path: SpendPath,
+    signing_pubkey: XOnlyPublicKey,
+) -> Result<()> {
+    let secp = Secp256k1::verification_only();
+    let leaf = policy.leaf(path)?;
+    for index in 0..psbt.inputs.len() {
+        let signature = psbt.inputs[index]
+            .tap_script_sigs
+            .get(&(signing_pubkey, leaf.leaf_hash))
+            .with_context(|| {
+                format!("PSBT input {index} lacks the expected signature from {signing_pubkey}")
+            })?;
+        if signature.sighash_type != TapSighashType::Default {
+            bail!("PSBT input {index} uses a non-default Taproot sighash");
+        }
+        let unsigned_tx = psbt.unsigned_tx.clone();
+        let mut cache = SighashCache::new(&unsigned_tx);
+        let message = match psbt.sighash_msg(index, &mut cache, Some(leaf.leaf_hash))? {
+            PsbtSighashMsg::TapSighash(sighash) => Message::from_digest(sighash.to_byte_array()),
+            _ => bail!("vault input {index} did not produce a Taproot sighash"),
+        };
+        secp.verify_schnorr(&signature.signature, &message, &signing_pubkey)
+            .with_context(|| format!("invalid vault signature on PSBT input {index}"))?;
+    }
+    Ok(())
+}
+
 pub fn finalize_vault_psbt(mut psbt: Psbt) -> Result<Transaction> {
     let secp = Secp256k1::verification_only();
     psbt.finalize_mut(&secp)
@@ -83,6 +113,29 @@ pub fn finalize_vault_psbt(mut psbt: Psbt) -> Result<Transaction> {
 
 pub fn signed_vsize(transaction: &Transaction) -> u64 {
     transaction.vsize() as u64
+}
+
+pub fn estimate_vault_vsize(
+    transaction: &Transaction,
+    policy: &VaultPolicy,
+    path: SpendPath,
+) -> Result<u64> {
+    let leaf = policy.leaf(path)?;
+    let signature_count = match path {
+        SpendPath::Cooperative => 2,
+        SpendPath::PhoneRecovery | SpendPath::HwwRecovery => 1,
+    };
+    let mut estimated = transaction.clone();
+    for input in &mut estimated.input {
+        let mut witness = Witness::new();
+        for _ in 0..signature_count {
+            witness.push([0_u8; 64]);
+        }
+        witness.push(leaf.script.as_bytes());
+        witness.push(leaf.control_block.serialize());
+        input.witness = witness;
+    }
+    Ok(estimated.vsize() as u64)
 }
 
 pub fn witness_for_path(
@@ -147,6 +200,8 @@ mod tests {
             &phone.vault_keypair,
         )
         .unwrap();
+        verify_vault_psbt_signature(&psbt, &policy, SpendPath::Cooperative, phone.vault_pubkey)
+            .unwrap();
         assert!(finalize_vault_psbt(psbt.clone()).is_err());
         sign_vault_psbt(
             &mut psbt,
@@ -158,6 +213,10 @@ mod tests {
         let tx = finalize_vault_psbt(psbt).unwrap();
         assert_eq!(tx.input[0].witness.len(), 4);
         assert!(signed_vsize(&tx) > 0);
+        assert_eq!(
+            estimate_vault_vsize(&tx, &policy, SpendPath::Cooperative).unwrap(),
+            signed_vsize(&tx)
+        );
     }
 
     #[test]

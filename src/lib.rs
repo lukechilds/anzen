@@ -1,3 +1,4 @@
+pub mod ceremony;
 pub mod crypto;
 pub mod hot;
 pub mod keys;

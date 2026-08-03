@@ -132,6 +132,16 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
+    set_private_permissions(path)?;
+    Ok(())
+}
+
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("invalid JSON in {}", path.display()))
