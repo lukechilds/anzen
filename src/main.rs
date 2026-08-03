@@ -98,6 +98,8 @@ enum NodeCommand {
     SetTime { timestamp: u64 },
     /// Mine blocks immediately to an explicit regtest address.
     Mine { blocks: u64, address: String },
+    /// Send an exact amount from the BDK hot wallet to a regtest address.
+    Send { address: String, amount_sats: u64 },
 }
 
 #[derive(Debug, Subcommand)]
@@ -154,6 +156,14 @@ fn main() -> Result<()> {
             println!("HWW mnemonic:   {}", initialized.hww_mnemonic);
             println!("Phone vault key: {}", initialized.config.phone_vault_pubkey);
             println!("HWW vault key:   {}", initialized.config.hww_vault_pubkey);
+            println!(
+                "Phone hot external descriptor: {}",
+                initialized.config.phone_hot_external_descriptor
+            );
+            println!(
+                "Phone hot change descriptor:   {}",
+                initialized.config.phone_hot_internal_descriptor
+            );
             println!("Descriptor: {}", initialized.config.vault_descriptor);
             println!("Vault address: {}", initialized.config.vault_address);
             println!(
@@ -197,11 +207,13 @@ fn main() -> Result<()> {
                     "Phone",
                     oldest.confirmation_height + u64::from(config.phone_recovery_blocks),
                     info.blocks + 1,
+                    info.median_time,
                 );
                 print_recovery_activation(
                     "HWW",
                     oldest.confirmation_height + u64::from(config.hww_recovery_blocks),
                     info.blocks + 1,
+                    info.median_time,
                 );
             }
         }
@@ -235,6 +247,25 @@ fn main() -> Result<()> {
                     if let Some(hash) = hashes.last() {
                         println!("New tip: {hash}");
                     }
+                }
+                NodeCommand::Send {
+                    address,
+                    amount_sats,
+                } => {
+                    use bitcoin::Address;
+                    use bitcoincore_rpc::RpcApi;
+                    use std::str::FromStr;
+                    let address =
+                        Address::from_str(&address)?.require_network(bitcoin::Network::Regtest)?;
+                    let mut hot = vault_cli::hot::HotWallet::open_or_create(&cli.data_dir)?;
+                    hot.sync(&rpc.client)?;
+                    let (transaction, fee_sats) =
+                        hot.build_payment(address.script_pubkey(), amount_sats)?;
+                    let txid = rpc.client.send_raw_transaction(&transaction)?;
+                    println!("Hot-wallet payment broadcast: {txid}");
+                    println!("Destination: {address}");
+                    println!("Amount: {amount_sats} sats");
+                    println!("Fee: {fee_sats} sats (1 sat/vB)");
                 }
             }
         }
@@ -374,13 +405,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_recovery_activation(label: &str, valid_height: u64, next_height: u64) {
+fn print_recovery_activation(label: &str, valid_height: u64, next_height: u64, median_time: u64) {
     if next_height >= valid_height {
         println!("{label} recovery: ACTIVE (valid next-block height {valid_height})");
     } else {
+        let remaining = valid_height - next_height;
+        let estimated_timestamp = median_time.saturating_add(remaining.saturating_mul(600));
+        let estimated = i64::try_from(estimated_timestamp)
+            .ok()
+            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+            .map(|date| date.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            .unwrap_or_else(|| "outside displayable range".to_owned());
         println!(
-            "{label} recovery: valid next-block height {valid_height} ({} blocks remaining)",
-            valid_height - next_height
+            "{label} recovery: valid next-block height {valid_height} ({remaining} blocks remaining; estimated {estimated} at 10-minute blocks)"
         );
     }
 }
@@ -393,6 +430,13 @@ fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, batch_dir: &std
     println!("Fee rate: {} sat/vB", manifest.fee_rate_sat_vb);
     println!("Total input: {} sats", manifest.total_input_sats);
     println!("Equal chunks: {}", manifest.chunk_count);
+    if manifest.chunk_count < vault_cli::MONTHS_PER_ROLLOVER {
+        println!(
+            "WARNING: balance funds only {} of {} monthly allowances; continuing with the earliest consecutive months",
+            manifest.chunk_count,
+            vault_cli::MONTHS_PER_ROLLOVER
+        );
+    }
     println!("Rollover txid: {}", manifest.rollover.unsigned_txid);
     println!("Rollover fee: {} sats", manifest.rollover.fee_sats);
     for month in &manifest.months {

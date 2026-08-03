@@ -12,6 +12,12 @@ fn init_and_policy_commands_show_the_regtest_policy() {
         .stdout(predicate::str::contains("Vault initialized (REGTEST ONLY)"))
         .stdout(predicate::str::contains("Phone mnemonic:"))
         .stdout(predicate::str::contains("HWW mnemonic:"))
+        .stdout(predicate::str::contains(
+            "Phone hot external descriptor: tr(",
+        ))
+        .stdout(predicate::str::contains(
+            "Phone hot change descriptor:   tr(",
+        ))
         .stdout(predicate::str::contains("Phone recovery: 61200 blocks"))
         .stdout(predicate::str::contains("HWW recovery:   65535 blocks"))
         .stdout(predicate::str::contains("Hard limit:     10000000 sats"));

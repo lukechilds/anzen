@@ -1,0 +1,5 @@
+.git
+.vault-data
+target
+**/*.swp
+**/.DS_Store

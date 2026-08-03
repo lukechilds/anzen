@@ -125,6 +125,29 @@ impl HotWallet {
         self.wallet.persist(&mut self.db)?;
         Ok(Some(transaction))
     }
+
+    pub fn build_payment(
+        &mut self,
+        destination: ScriptBuf,
+        amount_sats: u64,
+    ) -> Result<(Transaction, u64)> {
+        if amount_sats == 0 {
+            anyhow::bail!("payment amount must be greater than zero");
+        }
+        let mut builder = self.wallet.build_tx();
+        builder
+            .add_recipient(destination, Amount::from_sat(amount_sats))
+            .fee_rate(FeeRate::from_sat_per_vb(1).expect("1 sat/vB is valid"));
+        let mut psbt = builder.finish()?;
+        let finalized = self.wallet.sign(&mut psbt, SignOptions::default())?;
+        if !finalized {
+            anyhow::bail!("BDK could not finalize the hot-wallet payment");
+        }
+        let transaction = psbt.extract_tx()?;
+        let fee_sats = self.wallet.calculate_fee(&transaction)?.to_sat();
+        self.wallet.persist(&mut self.db)?;
+        Ok((transaction, fee_sats))
+    }
 }
 
 #[cfg(test)]
@@ -148,5 +171,13 @@ mod tests {
         let mut reopened = HotWallet::open_or_create(dir.path()).unwrap();
         assert_ne!(first_receive, reopened.next_receive_address().unwrap());
         assert_ne!(first_change, reopened.next_change_address().unwrap());
+    }
+
+    #[test]
+    fn zero_value_hot_payment_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        initialize(dir.path(), 10_000_000).unwrap();
+        let mut hot = HotWallet::open_or_create(dir.path()).unwrap();
+        assert!(hot.build_payment(ScriptBuf::new(), 0).is_err());
     }
 }

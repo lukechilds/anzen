@@ -1,0 +1,64 @@
+services:
+  bitcoind:
+    image: bitcoin/bitcoin:28.1
+    command:
+      - -regtest=1
+      - -server=1
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcuser=vault
+      - -rpcpassword=vault
+      - -fallbackfee=0.00001
+      - -printtoconsole=0
+    healthcheck:
+      test:
+        - CMD
+        - bitcoin-cli
+        - -regtest
+        - -rpcconnect=127.0.0.1
+        - -rpcuser=vault
+        - -rpcpassword=vault
+        - getblockchaininfo
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  demo:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    environment: &rpc-environment
+      VAULT_RPC_URL: http://bitcoind:18443
+      VAULT_RPC_USER: vault
+      VAULT_RPC_PASSWORD: vault
+    tmpfs:
+      - /demo
+    working_dir: /demo
+    entrypoint: ["/opt/vault/scripts/e2e-demo.sh"]
+
+  tests:
+    build:
+      context: .
+      target: test
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    environment: *rpc-environment
+
+  cli:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    environment: *rpc-environment
+    volumes:
+      - vault-state:/data
+    profiles: ["manual"]
+
+volumes:
+  vault-state:
