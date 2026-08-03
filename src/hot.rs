@@ -3,8 +3,10 @@ use crate::{
     state::{PHONE_DEVICE_FILE, hot_db_path, load_device},
 };
 use anyhow::{Context, Result};
+use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
 use bdk_wallet::{KeychainKind, PersistedWallet, Wallet, rusqlite::Connection};
 use bitcoin::{Address, Network, key::Secp256k1};
+use bitcoincore_rpc::Client;
 use std::{fs, path::Path};
 
 pub struct HotWallet {
@@ -55,6 +57,27 @@ impl HotWallet {
             .address;
         self.wallet.persist(&mut self.db)?;
         Ok(address)
+    }
+
+    pub fn sync(&mut self, client: &Client) -> Result<()> {
+        let mut emitter = Emitter::new(
+            client,
+            self.wallet.latest_checkpoint(),
+            0,
+            NO_EXPECTED_MEMPOOL_TXS,
+        );
+        while let Some(event) = emitter.next_block()? {
+            self.wallet.apply_block_connected_to(
+                &event.block,
+                event.block_height(),
+                event.connected_to(),
+            )?;
+        }
+        let mempool = emitter.mempool()?;
+        self.wallet.apply_unconfirmed_txs(mempool.update);
+        self.wallet.apply_evicted_txs(mempool.evicted);
+        self.wallet.persist(&mut self.db)?;
+        Ok(())
     }
 }
 

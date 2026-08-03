@@ -10,4 +10,5 @@ This file records implementation decisions and unforeseen constraints that were 
 - Derive the static phone and HWW vault signing keys from a dedicated regtest-only path, separate from the phone hot-wallet account. Encryption keys are domain-separated from signing keys with HKDF-SHA256.
 - Store protocol metadata as human-readable JSON and BDK hot-wallet chain state in SQLite. Device secrets and encrypted artifacts are separate files so loss/theft scenarios can remove or copy realistic subsets of state.
 - The simulated HWW encrypts the phone mnemonic with a symmetric key derived from the HWW seed. A production HWW integration will need a device-defined authenticated encryption/decryption API; the MVP deliberately models the capability without claiming compatibility with an existing device.
-
+- Synchronize the ranged phone hot wallet through BDK's Bitcoin Core emitter and persist its chain graph in SQLite. Discover static vault UTXOs with Bitcoin Core's `scantxoutset` RPC. This avoids importing private keys or making the node wallet part of the vault security model while still validating all transactions against a real node.
+- Keep the RPC client regtest-only and fail closed if Bitcoin Core reports any other network. The CLI exposes mock-time and on-demand mining controls solely to support the Dockerized demonstration.

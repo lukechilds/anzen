@@ -15,7 +15,7 @@ bitcoin = { version = "0.32.9", features = ["base64", "rand-std", "serde"] }
 bitcoincore-rpc = "0.19.0"
 chacha20poly1305 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 hkdf = "0.12"
 miniscript = { version = "12.3.5", features = ["serde"] }
 rand = "0.8"
@@ -32,4 +32,3 @@ tempfile = "3.23"
 [profile.release]
 lto = "thin"
 strip = true
-

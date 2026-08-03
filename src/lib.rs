@@ -2,6 +2,7 @@ pub mod crypto;
 pub mod hot;
 pub mod keys;
 pub mod policy;
+pub mod rpc;
 pub mod state;
 
 pub const PHONE_RECOVERY_BLOCKS: u16 = 61_200;
