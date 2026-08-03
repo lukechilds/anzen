@@ -4,6 +4,7 @@ pub mod keys;
 pub mod policy;
 pub mod rpc;
 pub mod state;
+pub mod transactions;
 
 pub const PHONE_RECOVERY_BLOCKS: u16 = 61_200;
 pub const HWW_RECOVERY_BLOCKS: u16 = 65_535;
