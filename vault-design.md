@@ -12,7 +12,7 @@ This wallet combines:
 
 The main balance normally requires both devices. The user performs an expected rollover roughly once per year, moving all funds into fresh vault outputs and resetting the relative recovery timers.
 
-The phone can also access a predefined hard spending limit each month without carrying the HWW. No server, custodian, or online co-signer is required.
+The phone can also access a predefined hard spending limit each month without carrying the HWW. A lower soft limit controls how much of an unlocked allowance the phone keeps hot. No server, custodian, or online co-signer is required.
 
 ## Vault script
 
@@ -24,10 +24,10 @@ Conceptually:
 tr(
   NUMS,
   {
-    multi_a(2, M_i, H_i),
+    multi_a(2, M, H),
     {
-      and_v(v:older(61200), pk(M_i)),
-      and_v(v:older(65535), pk(H_i))
+      and_v(v:older(61200), pk(M)),
+      and_v(v:older(65535), pk(H))
     }
   }
 )
@@ -49,6 +49,8 @@ Assuming ten-minute blocks:
 
 The cooperative leaf is placed at the shallowest level of the binary Taproot tree because it is expected to be used most often. The two recovery leaves are logically independent alternatives; their nesting only determines Merkle-tree depth and witness size.
 
+The normal receive policy deliberately reuses the same `M` and `H` keys and the same Taproot address for every vault output, including rollover outputs and cold change. This sacrifices address-level privacy in favor of a simple, durable single vault address. An emergency rotation after a key compromise necessarily creates a new policy and address.
+
 ## Expected rollover schedule
 
 The wallet should prompt the user to roll over all vault funds approximately once per year.
@@ -58,7 +60,7 @@ With the delays above, a 12-month expected rollover gives roughly:
 - **two months of grace** before the phone-only path activates;
 - **three months of grace** before the HWW-only path activates.
 
-The rollover should consume every current vault UTXO and every unused monthly-spending chunk, then recreate them under fresh outputs with newly reset relative timers.
+The rollover should consume every current vault UTXO and every unused monthly-spending chunk, then recreate them as new outputs to the same vault address with newly reset relative timers.
 
 The expected calendar date is a UX reminder. The actual deadlines are based on the confirmation height of each UTXO, so the wallet must track the oldest live vault output and show an estimated recovery date.
 
@@ -101,36 +103,64 @@ Until such a change is activated, block-based CSV is the only stateless single-o
 
 ## Monthly mobile spending
 
-During each rollover, the wallet splits part of the vault into twelve independent cold chunks and creates one presigned transaction for each month.
+During each rollover, the wallet divides the entire post-fee vault balance equally across twelve independent cold chunks and creates a pair of presigned transactions for each month. Each authorization releases the hard limit and returns that chunk's remainder to the vault address. If the balance cannot fund twelve chunks that can each release the full hard limit plus fees, the wallet warns the user, chooses the largest fundable chunk count below twelve, and creates authorizations only for those earliest consecutive months. The entire post-fee balance is still divided equally across the selected chunks; there is no separate main-vault remainder output. Any indivisible satoshi remainder is distributed deterministically across the earliest chunks.
 
 Conceptually:
 
 ```text
 Monthly chunk i
-    └─ after calendar date i
-         ├─ hard spending limit → mobile hot wallet
-         └─ remainder           → fresh vault output
+    ├─ monthly authorization, after 00:00 UTC on day 1 of month i
+    │    ├─ hard spending limit → mobile hot wallet
+    │    └─ remainder           → vault address
+    └─ immediate revocation
+         └─ all value, less fee      → vault address
 ```
 
-Each transaction:
+Each monthly authorization transaction:
 
 - is signed in advance by both `M` and `H`;
-- uses absolute `nLockTime` for its exact monthly date;
-- is encrypted with a dedicated phone-derived encryption key;
+- uses absolute timestamp `nLockTime` for `00:00 UTC` on the first day of its calendar month;
+- sends exactly the hard-limit amount to a fresh address from the mobile hot wallet;
+- returns any cold remainder to the static vault address;
+- is encrypted individually with a dedicated phone-derived encryption key;
 - is stored on the phone and in encrypted cloud storage;
 - can be decrypted and broadcast by the phone after its date.
 
-Because the chunks are independent, only twelve transactions are needed.
+Timestamp locktimes are evaluated using Bitcoin median-time-past. `00:00 UTC` is therefore the earliest policy time, not a promise of inclusion at exactly that wall-clock instant.
 
-If a month is unused, its transaction is not broadcast and the chunk remains cold. The next annual rollover spends the original chunk, permanently invalidating any retained copy of the old presigned transaction.
+Each monthly chunk also has a conflicting presigned revocation transaction. It:
+
+- is signed in advance by both `M` and `H` during the same signing ceremony;
+- has no monthly absolute timelock and can be broadcast from the phone immediately;
+- returns the chunk to the static vault address, less its transaction fee;
+- is encrypted individually with the same dedicated phone-derived encryption key used for monthly transaction storage;
+- invalidates the corresponding monthly authorization once it confirms because both transactions spend the same chunk.
+
+The phone should revoke before the authorization matures. Until the revocation confirms, the two transactions remain conflicting alternatives; revoking after maturity can become a fee and confirmation race.
+
+Because the chunks are independent, at most twelve authorization transactions and twelve matching revocation transactions are needed.
+
+If a month is unused, neither transaction needs to be broadcast and the chunk remains cold. The next annual rollover spends the original chunk, permanently invalidating retained copies of both presigned transactions.
 
 Loss of the presigned transactions does **not** lose bitcoin. It only removes the phone-only convenience path; the underlying chunks remain recoverable through the vault script.
 
-Presigned transactions need a reliable CPFP fee-bumping path because their original fee is chosen in advance.
+Presigned transactions need a reliable CPFP fee-bumping path because their original fee is chosen in advance. The MVP uses a fixed fee rate of 1 sat/vB on regtest. A production design must also ensure that a phone-broadcast revocation has a phone-available fee-bumping path; returning every spendable output directly to the 2-of-2 vault would otherwise prevent immediate phone-only CPFP. The MVP implementation should carry an explicit code `TODO` at the revocation construction/broadcast boundary so this is not mistaken for a production-safe fee strategy.
+
+### Hard and soft spending limits
+
+The hard limit is fixed during rollover. Both signatures on each monthly authorization commit to a transaction that releases exactly that amount to the mobile hot wallet. The limit is therefore enforced by Bitcoin signature validation of the fixed presigned transaction, not by a covenant opcode in the vault script.
+
+The soft limit is a phone-side preference that can be changed at any time between zero and the hard limit. To use a smaller soft limit, the phone broadcasts the hard-limit authorization and immediately spends its output in a child transaction that:
+
+- keeps the chosen soft-limit amount in the mobile hot wallet; and
+- sends the balance back to the static vault address, accounting for fees.
+
+The child can also provide CPFP fee bumping for the presigned parent. The soft limit is not a security boundary: a compromised phone can keep the full hard-limit output instead of creating the cold-return child. MVP actions are manual CLI commands; automatic broadcasting and automatic soft-limit enforcement are out of scope.
 
 ## Wallet properties
 
 - **Phone only:** can access up to one newly authorized hard-limit chunk per month without carrying the HWW.
+- **Phone-only revocation:** can invalidate a future monthly authorization by broadcasting its presigned revocation transaction before the authorization matures.
 - **Phone + HWW:** can spend the entire balance immediately.
 - **Unused monthly allowance:** remains under full vault protection until the corresponding presigned transaction is broadcast.
 - **Annual rollover:** resets the recovery timers and invalidates all unused old monthly authorizations.
@@ -141,6 +171,25 @@ Presigned transactions need a reliable CPFP fee-bumping path because their origi
 One new hard-limit authorization becomes available per month. This is not a strict rolling monthly cap: several matured but unused authorizations can accumulate until rollover.
 
 The hard limit is consensus-enforced in **satoshis**, not dollars.
+
+## MVP implementation scope
+
+The initial implementation is a Rust CLI built with BDK and run against a Bitcoin Core regtest node. The CLI and node are orchestrated with Docker. Mainnet, signet, a graphical mobile application, and integration with a physical hardware wallet are out of scope.
+
+For the MVP:
+
+- `M` and `H` are software keys managed by separate simulated phone and HWW components;
+- hot-wallet receiving and change use normal external and internal address derivation;
+- the phone seed backup is encrypted to a backup/decryption key controlled by the simulated HWW and stored locally as a stand-in for cloud storage;
+- every finalized authorization and revocation transaction is separately encrypted to a phone-derived encryption key and stored as an independent local ciphertext;
+- all ordinary transactions use a fixed fee rate of 1 sat/vB;
+- policy setup, rollover, signing, revocation, allowance use, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
+
+The simulated HWW protocol should present the complete high-level vault policy once, obtain one approval, validate every transaction in the batch against that approved policy, and then sign all monthly authorization and revocation transactions without requiring a prompt for each transaction. The interchange format should be based on PSBTs plus a policy/batch manifest that gives the signer enough information to independently validate the whole ceremony.
+
+In addition to focused automated tests, the repository should provide a serial end-to-end terminal demonstration funded with 2 BTC and configured with a 0.1 BTC monthly hard limit. It should print human-readable seeds and public keys (regtest only), policies, timelocks, Miniscript, addresses, transaction IDs, balances, presigned transaction details, simulated calendar and block advancement, successful and revoked allowances, recovery actions, and the loss/theft scenarios described below.
+
+The demonstration should derive its schedule from the actual UTC date when the test starts, with the first authorization on the next first day of a calendar month. It should still use a real Bitcoin Core regtest node. The test harness may use regtest mock time and on-demand block generation to advance the chain monotonically, mining until median-time-past is strictly later than the authorization locktime before testing a successful broadcast. Block-based recovery paths must be exercised by mining their required block counts rather than by changing mock time.
 
 ## Loss and theft scenarios
 
