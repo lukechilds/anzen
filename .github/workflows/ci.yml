@@ -32,6 +32,15 @@ jobs:
           rustup toolchain install 1.85.0 --profile minimal --component clippy,rustfmt
           rustup override set 1.85.0
 
+      - name: Restore Cargo build cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-rust-1.85-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -56,8 +65,25 @@ jobs:
           docker version
           docker compose version
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build cached integration-test image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: test
+          load: true
+          tags: vault-tests:local
+          cache-from: |
+            type=gha,scope=vault-tests
+            type=gha,scope=vault-runtime
+          cache-to: type=gha,mode=max,scope=vault-tests,timeout=20m,ignore-error=true
+
       - name: Run Dockerized integration suite
         run: ./scripts/run-tests.sh
+        env:
+          VAULT_SKIP_DOCKER_BUILD: "1"
 
   user-flows:
     name: End-to-end user flows
@@ -74,5 +100,22 @@ jobs:
           docker version
           docker compose version
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build cached E2E image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          load: true
+          tags: vault-demo:local
+          cache-from: |
+            type=gha,scope=vault-runtime
+            type=gha,scope=vault-tests
+          cache-to: type=gha,mode=max,scope=vault-runtime,timeout=20m,ignore-error=true
+
       - name: Run every isolated flow serially
         run: ./scripts/run-e2e.sh all
+        env:
+          VAULT_SKIP_DOCKER_BUILD: "1"

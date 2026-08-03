@@ -25,6 +25,8 @@ Recovery flows mine the real 61,200/65,535-block CSV delays. Running one is inte
 
 GitHub Actions runs formatting, Clippy, unit/CLI tests, the real Bitcoin Core integration suite, and every isolated user flow on pushes to `main` and on every pull request. The workflow can also be started manually. End-to-end flows run serially through `./scripts/run-e2e.sh all`; superseded runs on the same branch are cancelled because the exact recovery-delay flows take a while.
 
+The quality job restores Cargo registry and `target/` data with the GitHub Actions cache. Docker jobs build through Buildx with separate GHA-backed `test` and `runtime` cache scopes, load the resulting images into the runner, and tell the Compose scripts to use those images without rebuilding. The Dockerfile compiles dependencies before copying application source, so dependency layers remain reusable when Rust code changes.
+
 ## Run all tests
 
 ```bash

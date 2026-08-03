@@ -24,6 +24,7 @@ services:
       retries: 30
 
   demo:
+    image: vault-demo:local
     build:
       context: .
       target: runtime
@@ -40,6 +41,7 @@ services:
     entrypoint: ["/opt/vault/scripts/e2e-demo.sh"]
 
   tests:
+    image: vault-tests:local
     build:
       context: .
       target: test

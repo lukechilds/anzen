@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.85-bookworm AS base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libsqlite3-dev pkg-config \
@@ -6,11 +6,31 @@ RUN apt-get update \
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY tests ./tests
+
+# Give Cargo source-independent placeholder targets. The release and test dependency
+# stages below can then be restored when application code changes.
+RUN mkdir -p src \
+    && printf 'fn main() {}\n' > src/main.rs \
+    && printf '' > src/lib.rs
+
+FROM base AS release-dependencies
+
 RUN cargo build --release --locked
 
-FROM builder AS test
+FROM release-dependencies AS builder
+
+COPY src ./src
+RUN touch src/*.rs && cargo build --release --locked
+
+FROM base AS test-dependencies
+
+RUN cargo test --lib --locked --no-run
+
+FROM test-dependencies AS test
+
+COPY src ./src
+COPY tests ./tests
+RUN touch src/*.rs tests/*.rs
 RUN cargo test --all-targets --locked --no-run
 COPY scripts ./scripts
 ENTRYPOINT ["/build/scripts/docker-test.sh"]

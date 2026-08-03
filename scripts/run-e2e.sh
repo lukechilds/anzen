@@ -68,8 +68,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cleanup
-printf 'Building the demo image once...\n'
-COMPOSE_PROGRESS=quiet docker compose build demo
+if [[ ${VAULT_SKIP_DOCKER_BUILD:-0} != 1 ]]; then
+    printf 'Building the demo image once...\n'
+    COMPOSE_PROGRESS=quiet docker compose build demo
+fi
 
 total=${#SELECTED_FLOWS[@]}
 index=0
