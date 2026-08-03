@@ -9,10 +9,10 @@ use crate::{
     hot::HotWallet,
     keys::DeviceKeys,
     policy::{SpendPath, VaultPolicy},
-    rpc::{RegtestRpc, VaultUtxo},
+    rpc::{Blockchain, VaultUtxo},
     state::{
         CONFIG_FILE, DeviceFile, HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE,
-        VaultConfig, load_config, load_device, read_json, recover_phone_mnemonic, write_json,
+        VaultConfig, load_config, load_device_keys, read_json, recover_phone_mnemonic, write_json,
     },
     transactions::{
         create_vault_psbt, estimate_vault_vsize, finalize_vault_psbt, sign_vault_psbt,
@@ -24,7 +24,6 @@ use bitcoin::{
     Address, Amount, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness, absolute,
     key::Secp256k1, secp256k1::XOnlyPublicKey, transaction::Version,
 };
-use bitcoincore_rpc::RpcApi;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -126,14 +125,14 @@ pub fn decrypt_phone_backup_package(
     data_dir: &Path,
     backup_path: &Path,
 ) -> Result<PhoneRecoveryPackage> {
-    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-    let hww = DeviceKeys::parse(&Secp256k1::new(), &hww_file.mnemonic)?;
+    let config = load_config(data_dir)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
     let backup: crate::crypto::EncryptedBlob = read_json(backup_path)?;
     let words = crypto::decrypt(&hww.seed, "phone-seed-backup", &backup)?;
     let words =
         String::from_utf8(words.to_vec()).context("decrypted phone backup was not UTF-8")?;
-    let phone = DeviceKeys::parse(&Secp256k1::new(), &words)?;
-    let config = load_config(data_dir)?;
+    let phone =
+        DeviceKeys::parse_for_network(&Secp256k1::new(), &words, config.bitcoin_network()?)?;
     if phone.vault_pubkey.to_string() != config.phone_vault_pubkey {
         bail!("decrypted phone backup does not match the configured vault policy");
     }
@@ -156,8 +155,12 @@ pub fn restore_phone_package(data_dir: &Path, package: &PhoneRecoveryPackage) ->
             phone_path.display()
         );
     }
-    let phone = DeviceKeys::parse(&Secp256k1::new(), &package.phone_mnemonic)?;
     let config = load_config(data_dir)?;
+    let phone = DeviceKeys::parse_for_network(
+        &Secp256k1::new(),
+        &package.phone_mnemonic,
+        config.bitcoin_network()?,
+    )?;
     if phone.vault_pubkey.to_string() != package.phone_vault_pubkey
         || package.phone_vault_pubkey != config.phone_vault_pubkey
     {
@@ -167,6 +170,7 @@ pub fn restore_phone_package(data_dir: &Path, package: &PhoneRecoveryPackage) ->
         &phone_path,
         &DeviceFile {
             kind: "phone".to_owned(),
+            network: config.network,
             mnemonic: package.phone_mnemonic.clone(),
         },
     )?;
@@ -183,9 +187,9 @@ pub fn restore_phone_from_hww_backup(data_dir: &Path) -> Result<String> {
     }
 
     let words = recover_phone_mnemonic(data_dir)?;
-    let secp = Secp256k1::new();
-    let recovered = DeviceKeys::parse(&secp, &words)?;
     let config = load_config(data_dir)?;
+    let recovered =
+        DeviceKeys::parse_for_network(&Secp256k1::new(), &words, config.bitcoin_network()?)?;
     if recovered.vault_pubkey.to_string() != config.phone_vault_pubkey {
         bail!("recovered phone backup does not match the configured vault policy");
     }
@@ -193,6 +197,7 @@ pub fn restore_phone_from_hww_backup(data_dir: &Path) -> Result<String> {
         &phone_path,
         &DeviceFile {
             kind: "phone".to_owned(),
+            network: config.network,
             mnemonic: words.clone(),
         },
     )?;
@@ -201,14 +206,18 @@ pub fn restore_phone_from_hww_backup(data_dir: &Path) -> Result<String> {
 
 pub fn sweep(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     path: SweepPath,
     destination: &Address,
 ) -> Result<SweepResult> {
     let config = load_config(data_dir)?;
-    let policy = VaultPolicy::from_descriptor(&config.vault_descriptor)?;
-    let tip_height = rpc.chain_info()?.blocks;
-    let all_utxos = rpc.scan_vault(&config)?;
+    ensure_backend_network(backend, &config)?;
+    let policy = VaultPolicy::from_descriptor_for_network(
+        &config.vault_descriptor,
+        config.bitcoin_network()?,
+    )?;
+    let tip_height = backend.chain_tip()?.height;
+    let all_utxos = backend.scan_vault(&config)?;
     let utxos = mature_utxos(&all_utxos, path, tip_height);
     if utxos.is_empty() {
         if let (Some(delay), Some(oldest)) = (path.delay(), all_utxos.first()) {
@@ -222,13 +231,10 @@ pub fn sweep(
     }
 
     let (mut psbt, fee_sats, sent_sats) = build_sweep_psbt(&policy, &utxos, path, destination)?;
-    let secp = Secp256k1::new();
     match path {
         SweepPath::Cooperative => {
-            let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-            let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-            let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
-            let hww = DeviceKeys::parse(&secp, &hww_file.mnemonic)?;
+            let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+            let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
             sign_vault_psbt(
                 &mut psbt,
                 &policy,
@@ -243,8 +249,7 @@ pub fn sweep(
             )?;
         }
         SweepPath::PhoneRecovery => {
-            let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-            let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
+            let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
             sign_vault_psbt(
                 &mut psbt,
                 &policy,
@@ -253,8 +258,7 @@ pub fn sweep(
             )?;
         }
         SweepPath::HwwRecovery => {
-            let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-            let hww = DeviceKeys::parse(&secp, &hww_file.mnemonic)?;
+            let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
             sign_vault_psbt(
                 &mut psbt,
                 &policy,
@@ -265,9 +269,8 @@ pub fn sweep(
     }
 
     let transaction = finalize_vault_psbt(psbt)?;
-    let txid = rpc
-        .client
-        .send_raw_transaction(&transaction)
+    let txid = backend
+        .broadcast(&transaction)
         .context("failed to broadcast vault recovery sweep")?;
     Ok(SweepResult {
         txid,
@@ -279,19 +282,22 @@ pub fn sweep(
 
 pub fn create_cooperative_sweep(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     destination: &Address,
 ) -> Result<CooperativeSweepPackage> {
     let config = load_config(data_dir)?;
-    let policy = VaultPolicy::from_descriptor(&config.vault_descriptor)?;
-    let utxos = rpc.scan_vault(&config)?;
+    ensure_backend_network(backend, &config)?;
+    let policy = VaultPolicy::from_descriptor_for_network(
+        &config.vault_descriptor,
+        config.bitcoin_network()?,
+    )?;
+    let utxos = backend.scan_vault(&config)?;
     if utxos.is_empty() {
         bail!("vault has no confirmed UTXOs to sweep");
     }
     let (mut psbt, fee_sats, sent_sats) =
         build_sweep_psbt(&policy, &utxos, SweepPath::Cooperative, destination)?;
-    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-    let phone = DeviceKeys::parse(&Secp256k1::new(), &phone_file.mnemonic)?;
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     sign_vault_psbt(
         &mut psbt,
         &policy,
@@ -320,8 +326,7 @@ pub fn confirm_cooperative_sweep(
     let config = load_config(data_dir)?;
     let phone_pubkey = XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
     verify_vault_psbt_signature(&psbt, &policy, SpendPath::Cooperative, phone_pubkey)?;
-    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-    let hww = DeviceKeys::parse(&Secp256k1::new(), &hww_file.mnemonic)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
     sign_vault_psbt(
         &mut psbt,
         &policy,
@@ -336,14 +341,15 @@ pub fn confirm_cooperative_sweep(
 
 pub fn broadcast_cooperative_sweep(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     package: &CooperativeSweepPackage,
 ) -> Result<SweepResult> {
     if !package.phone_approved || !package.hww_approved {
         bail!("both phone and HWW approval are required for a cooperative sweep");
     }
-    let (policy, psbt) = validate_cooperative_sweep(data_dir, package)?;
     let config = load_config(data_dir)?;
+    ensure_backend_network(backend, &config)?;
+    let (policy, psbt) = validate_cooperative_sweep(data_dir, package)?;
     verify_vault_psbt_signature(
         &psbt,
         &policy,
@@ -357,9 +363,8 @@ pub fn broadcast_cooperative_sweep(
         XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?,
     )?;
     let transaction = finalize_vault_psbt(psbt)?;
-    let txid = rpc
-        .client
-        .send_raw_transaction(&transaction)
+    let txid = backend
+        .broadcast(&transaction)
         .context("failed to broadcast cooperative vault sweep")?;
     Ok(SweepResult {
         txid,
@@ -380,9 +385,12 @@ fn validate_cooperative_sweep(
     if package.vault_descriptor != config.vault_descriptor {
         bail!("cooperative sweep package does not match the configured vault policy");
     }
-    let policy = VaultPolicy::from_descriptor(&config.vault_descriptor)?;
+    let policy = VaultPolicy::from_descriptor_for_network(
+        &config.vault_descriptor,
+        config.bitcoin_network()?,
+    )?;
     let destination =
-        Address::from_str(&package.destination)?.require_network(bitcoin::Network::Regtest)?;
+        Address::from_str(&package.destination)?.require_network(config.bitcoin_network()?)?;
     let psbt = Psbt::from_str(&package.psbt).context("invalid cooperative sweep PSBT")?;
     let transaction = &psbt.unsigned_tx;
     if transaction.input.len() != package.input_count
@@ -422,27 +430,33 @@ fn validate_cooperative_sweep(
     Ok((policy, psbt))
 }
 
-pub fn rotate_phone(data_dir: &Path, rpc: &RegtestRpc) -> Result<RotationResult> {
-    let proposal = create_phone_rotation(data_dir, rpc)?;
+pub fn rotate_phone(data_dir: &Path, backend: &dyn Blockchain) -> Result<RotationResult> {
+    let proposal = create_phone_rotation(data_dir, backend)?;
     let approved = confirm_phone_rotation(data_dir, &proposal)?;
-    activate_phone_rotation(data_dir, rpc, &approved)
+    activate_phone_rotation(data_dir, backend, &approved)
 }
 
-pub fn create_phone_rotation(data_dir: &Path, rpc: &RegtestRpc) -> Result<PhoneRotationPackage> {
+pub fn create_phone_rotation(
+    data_dir: &Path,
+    backend: &dyn Blockchain,
+) -> Result<PhoneRotationPackage> {
     let old_config = load_config(data_dir)?;
+    ensure_backend_network(backend, &old_config)?;
     let secp = Secp256k1::new();
-    let new_phone = DeviceKeys::generate(&secp)?;
+    let network = old_config.bitcoin_network()?;
+    let new_phone = DeviceKeys::generate_for_network(&secp, network)?;
     let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
-    let new_policy = VaultPolicy::new(new_phone.vault_pubkey, hww_pubkey)?;
+    let new_policy = VaultPolicy::new_for_network(new_phone.vault_pubkey, hww_pubkey, network)?;
     let new_config = rotated_config(&old_config, &new_phone, &new_policy)?;
     write_json(
         &data_dir.join(PENDING_PHONE_ROTATION_FILE),
         &DeviceFile {
             kind: "pending-phone-rotation".to_owned(),
+            network: old_config.network.clone(),
             mnemonic: new_phone.mnemonic.to_string(),
         },
     )?;
-    let sweep = create_cooperative_sweep(data_dir, rpc, &new_policy.address)?;
+    let sweep = create_cooperative_sweep(data_dir, backend, &new_policy.address)?;
     let renewed_policy = if old_config.monthly_limit_sats == 0 {
         None
     } else {
@@ -492,8 +506,7 @@ pub fn confirm_phone_rotation(
     package: &PhoneRotationPackage,
 ) -> Result<PhoneRotationPackage> {
     let (old_config, new_config, pending_phone) = validate_phone_rotation(data_dir, package)?;
-    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-    let hww = DeviceKeys::parse(&Secp256k1::new(), &hww_file.mnemonic)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
     let mut approved = package.clone();
     approved.sweep = confirm_cooperative_sweep(data_dir, &package.sweep)?;
     if let Some(policy) = &package.renewed_policy {
@@ -515,10 +528,11 @@ pub fn confirm_phone_rotation(
 
 pub fn activate_phone_rotation(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     package: &PhoneRotationPackage,
 ) -> Result<RotationResult> {
     let (old_config, new_config, new_phone) = validate_phone_rotation(data_dir, package)?;
+    ensure_backend_network(backend, &old_config)?;
     let backup = package
         .encrypted_phone_backup
         .as_ref()
@@ -539,13 +553,14 @@ pub fn activate_phone_rotation(
         validate_rotation_hot_addresses(&new_phone, policy)?;
     }
 
-    let sweep = broadcast_cooperative_sweep(data_dir, rpc, &package.sweep)?;
+    let sweep = broadcast_cooperative_sweep(data_dir, backend, &package.sweep)?;
     archive_old_epoch(data_dir, &old_config, sweep.txid)?;
     write_json(&data_dir.join(CONFIG_FILE), &new_config)?;
     write_json(
         &data_dir.join(PHONE_DEVICE_FILE),
         &DeviceFile {
             kind: "phone".to_owned(),
+            network: new_config.network.clone(),
             mnemonic: pending.mnemonic.clone(),
         },
     )?;
@@ -561,7 +576,11 @@ pub fn activate_phone_rotation(
         }
     }
     let renewed_schedule = if package.renewed_policy.is_some() {
-        Some(finalize_and_broadcast(data_dir, rpc, &policy_workspace)?)
+        Some(finalize_and_broadcast(
+            data_dir,
+            backend,
+            &policy_workspace,
+        )?)
     } else {
         None
     };
@@ -595,13 +614,21 @@ fn validate_phone_rotation(
         bail!("phone rotation package does not match the current vault");
     }
     let pending: DeviceFile = read_json(&data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
-    let new_phone = DeviceKeys::parse(&Secp256k1::new(), &pending.mnemonic)?;
+    if pending.bitcoin_network()? != old_config.bitcoin_network()? {
+        bail!("pending phone key network does not match the current vault");
+    }
+    let new_phone = DeviceKeys::parse_for_network(
+        &Secp256k1::new(),
+        &pending.mnemonic,
+        old_config.bitcoin_network()?,
+    )?;
     if new_phone.vault_pubkey.to_string() != package.new_phone_vault_pubkey {
         bail!("pending phone key does not match the rotation proposal");
     }
     let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
     let phone_pubkey = XOnlyPublicKey::from_str(&package.new_phone_vault_pubkey)?;
-    let policy = VaultPolicy::new(phone_pubkey, hww_pubkey)?;
+    let policy =
+        VaultPolicy::new_for_network(phone_pubkey, hww_pubkey, old_config.bitcoin_network()?)?;
     if policy.descriptor_string() != package.new_vault_descriptor
         || policy.address.to_string() != package.new_vault_address
     {
@@ -696,6 +723,18 @@ fn reset_workspace(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn ensure_backend_network(backend: &dyn Blockchain, config: &VaultConfig) -> Result<()> {
+    let expected = config.bitcoin_network()?;
+    if backend.network() != expected {
+        bail!(
+            "chain backend network {} does not match vault network {}",
+            backend.network(),
+            config.network
+        );
+    }
+    Ok(())
+}
+
 fn mature_utxos(utxos: &[VaultUtxo], path: SweepPath, tip_height: u64) -> Vec<VaultUtxo> {
     let Some(delay) = path.delay() else {
         return utxos.to_vec();
@@ -735,7 +774,8 @@ fn build_sweep_psbt(
             script_pubkey: destination.script_pubkey(),
         }],
     };
-    // The MVP's fixed regtest feerate is exactly one satoshi per estimated vbyte.
+    // The MVP uses exactly one satoshi per estimated vbyte. This is deterministic on regtest and
+    // explicitly unsafe under dangerously enabled mainnet mode.
     let fee_sats = estimate_vault_vsize(&transaction, policy, path.policy_path())?;
     let sent_sats = input_sats
         .checked_sub(fee_sats)

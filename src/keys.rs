@@ -9,11 +9,9 @@ use bitcoin::{
 use rand::{RngCore, rngs::OsRng};
 use std::str::FromStr;
 
-pub const VAULT_DERIVATION_PATH: &str = "m/86'/1'/100'/0/0";
-pub const HOT_ACCOUNT_DERIVATION_PATH: &str = "m/86'/1'/0'";
-
 #[derive(Debug, Clone)]
 pub struct DeviceKeys {
+    pub network: Network,
     pub mnemonic: Mnemonic,
     pub seed: [u8; 64],
     pub master_xpriv: Xpriv,
@@ -24,48 +22,60 @@ pub struct DeviceKeys {
 
 impl DeviceKeys {
     pub fn generate(secp: &Secp256k1<All>) -> Result<Self> {
+        Self::generate_for_network(secp, Network::Regtest)
+    }
+
+    pub fn generate_for_network(secp: &Secp256k1<All>, network: Network) -> Result<Self> {
         let mut entropy = [0_u8; 32];
         OsRng.fill_bytes(&mut entropy);
         let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
             .context("failed to generate mnemonic")?;
-        Self::from_mnemonic(secp, mnemonic)
+        Self::from_mnemonic(secp, mnemonic, network)
     }
 
     pub fn parse(secp: &Secp256k1<All>, words: &str) -> Result<Self> {
+        Self::parse_for_network(secp, words, Network::Regtest)
+    }
+
+    pub fn parse_for_network(secp: &Secp256k1<All>, words: &str, network: Network) -> Result<Self> {
         let mnemonic =
             Mnemonic::parse_in_normalized(Language::English, words).context("invalid mnemonic")?;
-        Self::from_mnemonic(secp, mnemonic)
+        Self::from_mnemonic(secp, mnemonic, network)
     }
 
     pub fn hot_descriptors(&self, secp: &Secp256k1<All>) -> Result<(String, String)> {
-        let account_path = DerivationPath::from_str(HOT_ACCOUNT_DERIVATION_PATH)?;
+        let coin_type = coin_type(self.network)?;
+        let account_path = DerivationPath::from_str(&format!("m/86'/{coin_type}'/0'"))?;
         let account_xpriv = self.master_xpriv.derive_priv(secp, &account_path)?;
         let account_xpub = Xpub::from_priv(secp, &account_xpriv);
         let fingerprint = self.master_xpriv.fingerprint(secp);
         Ok((
-            format!("tr([{fingerprint}/86'/1'/0']{account_xpub}/0/*)"),
-            format!("tr([{fingerprint}/86'/1'/0']{account_xpub}/1/*)"),
+            format!("tr([{fingerprint}/86'/{coin_type}'/0']{account_xpub}/0/*)"),
+            format!("tr([{fingerprint}/86'/{coin_type}'/0']{account_xpub}/1/*)"),
         ))
     }
 
     pub fn hot_private_descriptors(&self, secp: &Secp256k1<All>) -> Result<(String, String)> {
-        let account_path = DerivationPath::from_str(HOT_ACCOUNT_DERIVATION_PATH)?;
+        let coin_type = coin_type(self.network)?;
+        let account_path = DerivationPath::from_str(&format!("m/86'/{coin_type}'/0'"))?;
         let account_xpriv = self.master_xpriv.derive_priv(secp, &account_path)?;
         let fingerprint = self.master_xpriv.fingerprint(secp);
         Ok((
-            format!("tr([{fingerprint}/86'/1'/0']{account_xpriv}/0/*)"),
-            format!("tr([{fingerprint}/86'/1'/0']{account_xpriv}/1/*)"),
+            format!("tr([{fingerprint}/86'/{coin_type}'/0']{account_xpriv}/0/*)"),
+            format!("tr([{fingerprint}/86'/{coin_type}'/0']{account_xpriv}/1/*)"),
         ))
     }
 
-    fn from_mnemonic(secp: &Secp256k1<All>, mnemonic: Mnemonic) -> Result<Self> {
+    fn from_mnemonic(secp: &Secp256k1<All>, mnemonic: Mnemonic, network: Network) -> Result<Self> {
+        let coin_type = coin_type(network)?;
         let seed = mnemonic.to_seed_normalized("");
-        let master_xpriv = Xpriv::new_master(Network::Regtest, &seed)?;
-        let path = DerivationPath::from_str(VAULT_DERIVATION_PATH)?;
+        let master_xpriv = Xpriv::new_master(network, &seed)?;
+        let path = DerivationPath::from_str(&format!("m/86'/{coin_type}'/100'/0/0"))?;
         let vault_xpriv = master_xpriv.derive_priv(secp, &path)?;
         let vault_keypair = Keypair::from_secret_key(secp, &vault_xpriv.private_key);
         let (vault_pubkey, _) = vault_keypair.x_only_public_key();
         Ok(Self {
+            network,
             mnemonic,
             seed,
             master_xpriv,
@@ -73,6 +83,14 @@ impl DeviceKeys {
             vault_keypair,
             vault_pubkey,
         })
+    }
+}
+
+fn coin_type(network: Network) -> Result<u32> {
+    match network {
+        Network::Bitcoin => Ok(0),
+        Network::Regtest => Ok(1),
+        other => anyhow::bail!("unsupported device-key network: {other}"),
     }
 }
 
@@ -103,5 +121,14 @@ mod tests {
         let (external, internal) = keys.hot_descriptors(&secp).unwrap();
         assert_ne!(external, internal);
         assert!(!external.contains(&keys.vault_pubkey.to_string()));
+    }
+
+    #[test]
+    fn mainnet_uses_bip86_coin_type_zero_and_mainnet_extended_keys() {
+        let secp = Secp256k1::new();
+        let keys = DeviceKeys::generate_for_network(&secp, Network::Bitcoin).unwrap();
+        let (external, _) = keys.hot_descriptors(&secp).unwrap();
+        assert!(external.contains("/86'/0'/0']xpub"));
+        assert!(!external.contains("tpub"));
     }
 }

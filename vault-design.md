@@ -146,7 +146,7 @@ If a month is unused, neither transaction needs to be broadcast and the chunk re
 
 Loss of the presigned transactions does **not** lose bitcoin. It only removes the phone-only convenience path; the underlying chunks remain recoverable through the vault script.
 
-Presigned transactions need a reliable CPFP fee-bumping path because their original fee is chosen in advance. The MVP uses a fixed fee rate of 1 sat/vB on regtest. A production design must also ensure that a phone-broadcast revocation has a phone-available fee-bumping path; returning every spendable output directly to the 2-of-2 vault would otherwise prevent immediate phone-only CPFP. The MVP implementation should carry an explicit code `TODO` at the revocation construction/broadcast boundary so this is not mistaken for a production-safe fee strategy.
+Presigned transactions need a reliable CPFP fee-bumping path because their original fee is chosen in advance. The MVP uses a fixed fee rate of 1 sat/vB; that is deterministic on regtest and explicitly unsafe in the danger-gated mainnet mode. A production design must also ensure that a phone-broadcast revocation has a phone-available fee-bumping path; returning every spendable output directly to the 2-of-2 vault would otherwise prevent immediate phone-only CPFP. The MVP implementation should carry an explicit code `TODO` at the revocation construction/broadcast boundary so this is not mistaken for a production-safe fee strategy.
 
 ### Monthly and soft spending limits
 
@@ -176,7 +176,7 @@ The monthly limit is transaction-enforced in **satoshis**, not dollars.
 
 ## MVP implementation scope
 
-The initial implementation is a Rust CLI built with BDK and run against a Bitcoin Core regtest node. The CLI and node are orchestrated with Docker. Mainnet, signet, a graphical mobile application, and integration with a physical hardware wallet are out of scope.
+The initial implementation is a Rust CLI built with BDK and run by default against a Bitcoin Core regtest node. The CLI and node are orchestrated with Docker. An experimental mainnet mode is available only when `--dangerously-enable-mainnet` is used during initialization and repeated on every later invocation. It persists mainnet in the wallet configuration, uses BIP86 coin type 0, and connects through a failover list of public TLS Electrum servers whose genesis header must match Bitcoin mainnet. This mode does not make the MVP production-safe: software HWW keys, printed mnemonics, fixed fees, public-server privacy/trust, and crash consistency remain unresolved. Signet, a graphical mobile application, and integration with a physical hardware wallet are out of scope.
 
 For the MVP:
 

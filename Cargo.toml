@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-description = "Regtest MVP for a renewable Bitcoin vault with bounded mobile spending"
+description = "Renewable Bitcoin vault CLI with a regtest MVP and danger-gated mainnet mode"
 autobins = false
 
 [[bin]]
@@ -15,6 +15,7 @@ path = "src/main.rs"
 anyhow = "1.0"
 base64 = "0.22"
 bdk_bitcoind_rpc = "0.22.0"
+bdk_electrum = "0.23.2"
 bdk_wallet = { version = "3.1.0", features = ["keys-bip39", "rusqlite"] }
 bitcoin = { version = "0.32.9", features = ["base64", "rand-std", "serde"] }
 bitcoincore-rpc = "0.19.0"

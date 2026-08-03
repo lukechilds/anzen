@@ -40,6 +40,14 @@ pub struct VaultLeaf {
 
 impl VaultPolicy {
     pub fn new(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> Result<Self> {
+        Self::new_for_network(phone, hww, Network::Regtest)
+    }
+
+    pub fn new_for_network(
+        phone: XOnlyPublicKey,
+        hww: XOnlyPublicKey,
+        network: Network,
+    ) -> Result<Self> {
         let descriptor_text = format!(
             "tr({BIP341_NUMS_KEY},{{multi_a(2,{phone},{hww}),{{and_v(v:older({PHONE_RECOVERY_BLOCKS}),pk({phone})),and_v(v:older({HWW_RECOVERY_BLOCKS}),pk({hww}))}}}})"
         );
@@ -47,7 +55,7 @@ impl VaultPolicy {
             .with_context(|| format!("invalid vault descriptor: {descriptor_text}"))?;
         let address = descriptor
             .derived_descriptor(&Secp256k1::verification_only(), 0)?
-            .address(Network::Regtest)?;
+            .address(network)?;
         Ok(Self {
             descriptor,
             address,
@@ -55,11 +63,15 @@ impl VaultPolicy {
     }
 
     pub fn from_descriptor(descriptor_text: &str) -> Result<Self> {
+        Self::from_descriptor_for_network(descriptor_text, Network::Regtest)
+    }
+
+    pub fn from_descriptor_for_network(descriptor_text: &str, network: Network) -> Result<Self> {
         let descriptor = Descriptor::<DescriptorPublicKey>::from_str(descriptor_text)
             .with_context(|| format!("invalid vault descriptor: {descriptor_text}"))?;
         let address = descriptor
             .derived_descriptor(&Secp256k1::verification_only(), 0)?
-            .address(Network::Regtest)?;
+            .address(network)?;
         Ok(Self {
             descriptor,
             address,
@@ -155,5 +167,16 @@ mod tests {
             first.leaf(SpendPath::PhoneRecovery).unwrap().leaf_hash,
             first.leaf(SpendPath::HwwRecovery).unwrap().leaf_hash
         );
+    }
+
+    #[test]
+    fn the_same_script_policy_encodes_for_mainnet() {
+        let secp = Secp256k1::new();
+        let phone = DeviceKeys::generate_for_network(&secp, Network::Bitcoin).unwrap();
+        let hww = DeviceKeys::generate_for_network(&secp, Network::Bitcoin).unwrap();
+        let policy =
+            VaultPolicy::new_for_network(phone.vault_pubkey, hww.vault_pubkey, Network::Bitcoin)
+                .unwrap();
+        assert!(policy.address.to_string().starts_with("bc1p"));
     }
 }

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lukechilds/vault/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/vault/actions/workflows/ci.yml)
 
-This repository contains a regtest-only Rust/BDK implementation of the renewable Bitcoin vault described in [vault-design.md](vault-design.md). It uses a real Bitcoin Core node for policy validation, transaction relay, calendar locktimes, and block-based recovery.
+This repository contains a Rust/BDK implementation of the renewable Bitcoin vault described in [vault-design.md](vault-design.md). The default and fully tested mode uses a real Bitcoin Core regtest node. An explicitly danger-gated mainnet mode uses public TLS Electrum servers.
 
 ## Use the CLI manually
 
@@ -20,7 +20,7 @@ Container vault-bitcoind-1 Started
 $ vault() { COMPOSE_PROGRESS=quiet docker compose run --rm cli "$@"; }
 ```
 
-Everything is hard-wired to regtest and 1 sat/vB. Mnemonics are intentionally printed by the simulated devices for demonstration; this is not production key handling. Every value below was captured from the real commands against disposable Bitcoin Core regtest chains; some sections come from independent runs, and a new run generates different mnemonics, keys, addresses, and transaction IDs. The examples assume the vault has confirmed regtest funds; `./scripts/run-e2e.sh monthly-spend` demonstrates funding 2 BTC from a freshly mined hot wallet.
+The examples in this section use regtest and 1 sat/vB. Mnemonics are intentionally printed by the simulated devices for demonstration; this is not production key handling. Every value below was captured from real commands against disposable chains; some sections come from independent runs, and a new run generates different mnemonics, keys, addresses, and transaction IDs. The examples assume the vault has confirmed regtest funds; `./scripts/run-e2e.sh monthly-spend` demonstrates funding 2 BTC from a freshly mined hot wallet.
 
 ### Create a vault
 
@@ -55,6 +55,48 @@ Monthly spending: disabled
 ```
 
 The new vault starts with monthly spending disabled. `vault init` prints the static cold-storage descriptor, vault address, and recovery delays, but does not create or sign a monthly spending policy.
+
+### Dangerously enable mainnet
+
+Mainnet mode is deliberately awkward to enable. Pass `--dangerously-enable-mainnet` when creating the phone, HWW, and vault. The resulting `vault.json` persists `"network": "mainnet"`; every later command refuses to run unless the same flag is present again. The flag never converts an existing regtest vault.
+
+This remains MVP software: it prints mnemonics, simulates the HWW in software, and hardcodes 1 sat/vB fees. Public Electrum servers also learn the scripts queried by the wallet and can provide an incomplete chain view. Do not use meaningful funds.
+
+```console
+$ vault --data-dir .vault-mainnet --dangerously-enable-mainnet phone init
+Simulated phone initialized (MAINNET — REAL FUNDS)
+Phone mnemonic: vessel box trade security marble lock bunker feed easy party salute mobile right replace six section rabbit just now advance equal feature market lava
+Phone vault key: 0d4c4acb945c18e7109ba07a3cc4363b580f6322ee60a37cc91417a56d9baff8
+
+$ vault --data-dir .vault-mainnet --dangerously-enable-mainnet hww init
+Simulated HWW initialized (MAINNET — REAL FUNDS)
+HWW mnemonic: solid access reward place inherit fat behind float fresh example purity base final drama save west priority resource office burden swear unhappy reject legal
+HWW vault key: 172183bfeba068f21365cf71c6d1589b1f71748ff2ac147c3043777d77a9cffe
+Phone backup encrypted for the HWW
+
+$ vault --data-dir .vault-mainnet --dangerously-enable-mainnet init
+Vault initialized (MAINNET — REAL FUNDS)
+DANGER: mainnet mode uses real bitcoin and fixed 1 sat/vB MVP fees
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,0d4c4acb945c18e7109ba07a3cc4363b580f6322ee60a37cc91417a56d9baff8,172183bfeba068f21365cf71c6d1589b1f71748ff2ac147c3043777d77a9cffe),{and_v(v:older(61200),pk(0d4c4acb945c18e7109ba07a3cc4363b580f6322ee60a37cc91417a56d9baff8)),and_v(v:older(65535),pk(172183bfeba068f21365cf71c6d1589b1f71748ff2ac147c3043777d77a9cffe))}})#j96agle0
+Vault address: bc1pzuk60uttut79u8v9p9zc8cc0lkd9qy7jmeteaq85pz5tx0uzdlsq5hh7cq
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly spending: disabled
+
+$ vault --data-dir .vault-mainnet --dangerously-enable-mainnet status
+Network: mainnet
+Chain backend: Electrum (ssl://electrum.blockstream.info:50002)
+Height: 960893
+Median time past: 1785775986
+Vault UTXOs: 0
+Vault balance: 0 sats
+Monthly spending: disabled
+
+$ vault --data-dir .vault-mainnet policy
+Error: mainnet vault is locked; pass --dangerously-enable-mainnet on every command
+```
+
+Mainnet connections try these built-in TLS endpoints in order: `electrum.blockstream.info:50002`, `electrum.bullbitcoin.com:50002`, and `electrum.cakewallet.com:50002`. A server must return Bitcoin’s mainnet genesis header before it is accepted; if connection or validation fails, the next server is tried. Production should make the backend configurable and prefer the user’s own Electrum server.
 
 ### Set or replace the monthly policy
 

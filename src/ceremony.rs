@@ -4,9 +4,9 @@ use crate::{
     hot::HotWallet,
     keys::DeviceKeys,
     policy::{SpendPath, VaultPolicy},
-    rpc::{RegtestRpc, VaultUtxo},
+    rpc::{Blockchain, VaultUtxo},
     state::{
-        HWW_DEVICE_FILE, PHONE_DEVICE_FILE, VaultConfig, load_config, load_device, read_json,
+        HWW_DEVICE_FILE, PHONE_DEVICE_FILE, VaultConfig, load_config, load_device_keys, read_json,
         write_json, write_private,
     },
     transactions::{
@@ -16,10 +16,9 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use bitcoin::{
-    Address, Amount, Network, OutPoint, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
-    Witness, absolute, consensus, key::Secp256k1, transaction::Version,
+    Address, Amount, OutPoint, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
+    absolute, consensus, transaction::Version,
 };
-use bitcoincore_rpc::RpcApi;
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -177,13 +176,14 @@ pub fn materialize_policy_package(package: &PolicyPackage, batch_dir: &Path) -> 
 
 pub fn prepare(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     now: DateTime<Utc>,
     monthly_limit_sats: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
     let config = load_config(data_dir)?;
-    let utxos = rpc.scan_vault(&config)?;
+    ensure_backend_network(backend, &config)?;
+    let utxos = backend.scan_vault(&config)?;
     prepare_from_utxos(
         data_dir,
         &config,
@@ -202,9 +202,7 @@ pub fn prepare_from_utxos(
     monthly_limit_sats: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
-    let secp = Secp256k1::new();
-    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-    let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     let mut hot = HotWallet::open_or_create(data_dir)?;
     prepare_from_utxos_for_phone(
         config,
@@ -237,7 +235,10 @@ pub(crate) fn prepare_from_utxos_for_phone(
     if phone.vault_pubkey.to_string() != config.phone_vault_pubkey {
         bail!("phone key does not match the configured vault policy");
     }
-    let policy = VaultPolicy::from_descriptor(&config.vault_descriptor)?;
+    let policy = VaultPolicy::from_descriptor_for_network(
+        &config.vault_descriptor,
+        config.bitcoin_network()?,
+    )?;
     let vault_script = policy.address.script_pubkey();
     let total_input_sats = checked_input_sum(utxos)?;
     let input_template = utxos
@@ -425,7 +426,7 @@ pub(crate) fn prepare_from_utxos_for_phone(
     let manifest = BatchManifest {
         version: 1,
         created_at: now.timestamp(),
-        network: "regtest".to_owned(),
+        network: config.network.clone(),
         vault_descriptor: config.vault_descriptor.clone(),
         vault_address: config.vault_address.clone(),
         monthly_limit_sats,
@@ -461,10 +462,8 @@ pub(crate) fn approve_hww_for_config(
 ) -> Result<BatchManifest> {
     let mut manifest = load_manifest(batch_dir)?;
     let policy = validate_batch(config, &manifest, batch_dir)?;
-    let secp = Secp256k1::new();
     let phone_pubkey = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
-    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-    let hww = DeviceKeys::parse(&secp, &hww_file.mnemonic)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
     if hww.vault_pubkey.to_string() != config.hww_vault_pubkey {
         bail!("HWW key does not match the configured vault policy");
     }
@@ -488,17 +487,17 @@ pub(crate) fn approve_hww_for_config(
 
 pub fn finalize_and_broadcast(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     batch_dir: &Path,
 ) -> Result<Schedule> {
     let config = load_config(data_dir)?;
+    ensure_backend_network(backend, &config)?;
     let manifest = load_manifest(batch_dir)?;
     if !manifest.phone_approved || !manifest.hww_approved {
         bail!("both phone and HWW approval are required before finalization");
     }
     let _policy = validate_batch(&config, &manifest, batch_dir)?;
-    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-    let phone = DeviceKeys::parse(&Secp256k1::new(), &phone_file.mnemonic)?;
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
 
     let rollover_psbt = read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?;
     let rollover_tx = finalize_vault_psbt(rollover_psbt)?;
@@ -545,8 +544,8 @@ pub fn finalize_and_broadcast(
         entries,
     };
     write_json(&data_dir.join(SCHEDULE_FILE), &schedule)?;
-    rpc.client
-        .send_raw_transaction(&rollover_tx)
+    backend
+        .broadcast(&rollover_tx)
         .context("failed to broadcast rollover transaction")?;
     Ok(schedule)
 }
@@ -557,7 +556,7 @@ pub fn load_schedule(data_dir: &Path) -> Result<Schedule> {
 
 pub fn broadcast_monthly(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     month: &str,
     kind: TransactionKind,
 ) -> Result<Txid> {
@@ -571,8 +570,9 @@ pub fn broadcast_monthly(
         TransactionKind::Authorization => &entry.authorization_file,
         TransactionKind::Revocation => &entry.revocation_file,
     };
-    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-    let phone = DeviceKeys::parse(&Secp256k1::new(), &phone_file.mnemonic)?;
+    let config = load_config(data_dir)?;
+    ensure_backend_network(backend, &config)?;
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     let artifact: EncryptedTransaction = read_json(&data_dir.join(file))?;
     if artifact.month != month || artifact.kind != kind {
         bail!("encrypted monthly transaction metadata does not match the requested action");
@@ -584,21 +584,22 @@ pub fn broadcast_monthly(
     if transaction.compute_txid().to_string() != artifact.txid {
         bail!("decrypted monthly transaction ID does not match its metadata");
     }
-    // TODO(production): revocations need a phone-available CPFP path; the MVP relies on 1 sat/vB
-    // and deterministic regtest mining as agreed in the design.
-    rpc.client
-        .send_raw_transaction(&transaction)
+    // TODO(production): revocations need a phone-available CPFP path. The fixed 1 sat/vB MVP fee
+    // is deterministic on regtest and explicitly unsafe under dangerously enabled mainnet mode.
+    backend
+        .broadcast(&transaction)
         .with_context(|| format!("failed to broadcast {kind:?} for {month}"))
 }
 
 pub fn apply_soft_limit(
     data_dir: &Path,
-    rpc: &RegtestRpc,
+    backend: &dyn Blockchain,
     month: &str,
     soft_limit_sats: u64,
 ) -> Result<Option<Txid>> {
     let schedule = load_schedule(data_dir)?;
     let config = load_config(data_dir)?;
+    ensure_backend_network(backend, &config)?;
     let entry = schedule
         .entries
         .iter()
@@ -606,21 +607,21 @@ pub fn apply_soft_limit(
         .with_context(|| format!("no monthly authorization exists for {month}"))?;
     let authorization_txid = Txid::from_str(&entry.authorization_txid)?;
     let mut hot = HotWallet::open_or_create(data_dir)?;
-    hot.sync(&rpc.client)?;
+    backend.sync_hot_wallet(&mut hot)?;
     let transaction = hot.build_soft_limit_return(
         OutPoint::new(authorization_txid, 0),
         schedule.monthly_limit_sats,
         soft_limit_sats,
         Address::from_str(&config.vault_address)?
-            .require_network(Network::Regtest)?
+            .require_network(config.bitcoin_network()?)?
             .script_pubkey(),
     )?;
     match transaction {
-        Some(transaction) => Ok(Some(
-            rpc.client
-                .send_raw_transaction(&transaction)
-                .context("failed to broadcast soft-limit cold-return transaction")?,
-        )),
+        Some(transaction) => {
+            Ok(Some(backend.broadcast(&transaction).context(
+                "failed to broadcast soft-limit cold-return transaction",
+            )?))
+        }
         None => Ok(None),
     }
 }
@@ -630,8 +631,8 @@ pub fn validate_batch(
     manifest: &BatchManifest,
     batch_dir: &Path,
 ) -> Result<VaultPolicy> {
-    if manifest.version != 1 || manifest.network != "regtest" {
-        bail!("unsupported or non-regtest ceremony manifest");
+    if manifest.version != 1 || manifest.network != config.network {
+        bail!("unsupported ceremony manifest or network mismatch");
     }
     if manifest.vault_descriptor != config.vault_descriptor
         || manifest.vault_address != config.vault_address
@@ -650,7 +651,10 @@ pub fn validate_batch(
     if manifest.fee_rate_sat_vb != DEFAULT_FEE_RATE_SAT_VB {
         bail!("MVP ceremony must use the fixed 1 sat/vB fee rate");
     }
-    let policy = VaultPolicy::from_descriptor(&config.vault_descriptor)?;
+    let policy = VaultPolicy::from_descriptor_for_network(
+        &config.vault_descriptor,
+        config.bitcoin_network()?,
+    )?;
     let vault_script = policy.address.script_pubkey();
     let rollover = read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?;
     let rollover_tx = &rollover.unsigned_tx;
@@ -698,7 +702,7 @@ pub fn validate_batch(
         }
         let expected_outpoint = OutPoint::new(rollover_tx.compute_txid(), index as u32);
         let hot_script = Address::from_str(&month.hot_address)?
-            .require_network(Network::Regtest)?
+            .require_network(config.bitcoin_network()?)?
             .script_pubkey();
         let authorization = read_psbt(&batch_dir.join(&month.authorization.psbt_file))?;
         validate_child_common(
@@ -740,6 +744,18 @@ pub fn validate_batch(
         }
     }
     Ok(policy)
+}
+
+fn ensure_backend_network(backend: &dyn Blockchain, config: &VaultConfig) -> Result<()> {
+    let expected = config.bitcoin_network()?;
+    if backend.network() != expected {
+        bail!(
+            "chain backend network {} does not match vault network {}",
+            backend.network(),
+            config.network
+        );
+    }
+    Ok(())
 }
 
 fn validate_child_common(
@@ -974,8 +990,8 @@ fn relative_to(base: &Path, path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::initialize;
-    use bitcoin::hashes::Hash;
+    use crate::state::{initialize, initialize_for_network};
+    use bitcoin::{Network, hashes::Hash};
 
     fn fake_utxo(config: &VaultConfig, sats: u64) -> VaultUtxo {
         VaultUtxo {
@@ -984,7 +1000,7 @@ mod tests {
                 value: Amount::from_sat(sats),
                 script_pubkey: Address::from_str(&config.vault_address)
                     .unwrap()
-                    .require_network(Network::Regtest)
+                    .require_network(config.bitcoin_network().unwrap())
                     .unwrap()
                     .script_pubkey(),
             },
@@ -1112,6 +1128,32 @@ mod tests {
         assert_eq!(manifest.chunk_count, 0);
         assert!(manifest.months.is_empty());
         validate_batch(&initialized.config, &manifest, &batch).unwrap();
+    }
+
+    #[test]
+    fn mainnet_policy_batch_uses_mainnet_manifest_and_hot_addresses() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize_for_network(dir.path(), Network::Bitcoin).unwrap();
+        let batch = dir.path().join("mainnet-batch");
+        let utxo = fake_utxo(&initialized.config, 200_000_000);
+        let manifest = prepare_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[utxo],
+            Utc.with_ymd_and_hms(2026, 8, 4, 0, 0, 0).unwrap(),
+            10_000_000,
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(manifest.network, "mainnet");
+        assert!(
+            manifest
+                .months
+                .iter()
+                .all(|month| month.hot_address.starts_with("bc1p"))
+        );
+        let approved = approve_hww(dir.path(), &batch).unwrap();
+        assert!(approved.hww_approved);
     }
 
     #[test]

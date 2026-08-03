@@ -5,7 +5,7 @@ use crate::{
     policy::VaultPolicy,
 };
 use anyhow::{Context, Result, bail};
-use bitcoin::key::Secp256k1;
+use bitcoin::{Network, key::Secp256k1};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
@@ -33,10 +33,24 @@ pub struct VaultConfig {
     pub monthly_limit_sats: u64,
 }
 
+impl VaultConfig {
+    pub fn bitcoin_network(&self) -> Result<Network> {
+        parse_network_name(&self.network)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceFile {
     pub kind: String,
+    #[serde(default = "default_network_name")]
+    pub network: String,
     pub mnemonic: String,
+}
+
+impl DeviceFile {
+    pub fn bitcoin_network(&self) -> Result<Network> {
+        parse_network_name(&self.network)
+    }
 }
 
 #[derive(Debug)]
@@ -53,17 +67,26 @@ pub struct InitializedDevice {
 }
 
 pub fn initialize_phone(data_dir: &Path) -> Result<InitializedDevice> {
+    initialize_phone_for_network(data_dir, Network::Regtest)
+}
+
+pub fn initialize_phone_for_network(
+    data_dir: &Path,
+    network: Network,
+) -> Result<InitializedDevice> {
+    validate_supported_network(network)?;
     let phone_path = data_dir.join(PHONE_DEVICE_FILE);
     if phone_path.exists() {
         bail!("phone already initialized at {}", phone_path.display());
     }
     let secp = Secp256k1::new();
-    let phone = DeviceKeys::generate(&secp)?;
+    let phone = DeviceKeys::generate_for_network(&secp, network)?;
     let phone_mnemonic = phone.mnemonic.to_string();
     write_json(
         &phone_path,
         &DeviceFile {
             kind: "phone".to_owned(),
+            network: network_name(network).to_owned(),
             mnemonic: phone_mnemonic.clone(),
         },
     )?;
@@ -74,6 +97,11 @@ pub fn initialize_phone(data_dir: &Path) -> Result<InitializedDevice> {
 }
 
 pub fn initialize_hww(data_dir: &Path) -> Result<InitializedDevice> {
+    initialize_hww_for_network(data_dir, Network::Regtest)
+}
+
+pub fn initialize_hww_for_network(data_dir: &Path, network: Network) -> Result<InitializedDevice> {
+    validate_supported_network(network)?;
     let hww_path = data_dir.join(HWW_DEVICE_FILE);
     if hww_path.exists() {
         bail!("HWW already initialized at {}", hww_path.display());
@@ -81,13 +109,20 @@ pub fn initialize_hww(data_dir: &Path) -> Result<InitializedDevice> {
     let secp = Secp256k1::new();
     let phone_file =
         load_device(data_dir, PHONE_DEVICE_FILE).context("initialize the phone before the HWW")?;
-    let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
-    let hww = DeviceKeys::generate(&secp)?;
+    if phone_file.bitcoin_network()? != network {
+        bail!(
+            "phone is configured for {}; initialize the HWW for the same network",
+            phone_file.network
+        );
+    }
+    let phone = DeviceKeys::parse_for_network(&secp, &phone_file.mnemonic, network)?;
+    let hww = DeviceKeys::generate_for_network(&secp, network)?;
     let hww_mnemonic = hww.mnemonic.to_string();
     write_json(
         &hww_path,
         &DeviceFile {
             kind: "hww".to_owned(),
+            network: network_name(network).to_owned(),
             mnemonic: hww_mnemonic.clone(),
         },
     )?;
@@ -105,6 +140,11 @@ pub fn initialize_hww(data_dir: &Path) -> Result<InitializedDevice> {
 }
 
 pub fn initialize_vault(data_dir: &Path) -> Result<VaultConfig> {
+    initialize_vault_for_network(data_dir, Network::Regtest)
+}
+
+pub fn initialize_vault_for_network(data_dir: &Path, network: Network) -> Result<VaultConfig> {
+    validate_supported_network(network)?;
     if data_dir.join(CONFIG_FILE).exists() {
         bail!("vault already initialized at {}", data_dir.display());
     }
@@ -113,13 +153,16 @@ pub fn initialize_vault(data_dir: &Path) -> Result<VaultConfig> {
         .context("initialize the phone before the vault")?;
     let hww_file =
         load_device(data_dir, HWW_DEVICE_FILE).context("initialize the HWW before the vault")?;
-    let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
-    let hww = DeviceKeys::parse(&secp, &hww_file.mnemonic)?;
-    let policy = VaultPolicy::new(phone.vault_pubkey, hww.vault_pubkey)?;
+    if phone_file.bitcoin_network()? != network || hww_file.bitcoin_network()? != network {
+        bail!("phone, HWW, and vault must be initialized for the same network");
+    }
+    let phone = DeviceKeys::parse_for_network(&secp, &phone_file.mnemonic, network)?;
+    let hww = DeviceKeys::parse_for_network(&secp, &hww_file.mnemonic, network)?;
+    let policy = VaultPolicy::new_for_network(phone.vault_pubkey, hww.vault_pubkey, network)?;
     let (hot_external, hot_internal) = phone.hot_descriptors(&secp)?;
     let config = VaultConfig {
         version: 1,
-        network: "regtest".to_owned(),
+        network: network_name(network).to_owned(),
         phone_vault_pubkey: phone.vault_pubkey.to_string(),
         hww_vault_pubkey: hww.vault_pubkey.to_string(),
         phone_hot_external_descriptor: hot_external,
@@ -139,9 +182,13 @@ pub fn initialize_vault(data_dir: &Path) -> Result<VaultConfig> {
 }
 
 pub fn initialize(data_dir: &Path) -> Result<InitializedVault> {
-    let phone = initialize_phone(data_dir)?;
-    let hww = initialize_hww(data_dir)?;
-    let config = initialize_vault(data_dir)?;
+    initialize_for_network(data_dir, Network::Regtest)
+}
+
+pub fn initialize_for_network(data_dir: &Path, network: Network) -> Result<InitializedVault> {
+    let phone = initialize_phone_for_network(data_dir, network)?;
+    let hww = initialize_hww_for_network(data_dir, network)?;
+    let config = initialize_vault_for_network(data_dir, network)?;
 
     Ok(InitializedVault {
         config,
@@ -165,13 +212,43 @@ pub fn load_device(data_dir: &Path, relative_path: &str) -> Result<DeviceFile> {
     read_json(&data_dir.join(relative_path))
 }
 
+pub fn load_device_keys(data_dir: &Path, relative_path: &str) -> Result<DeviceKeys> {
+    let file = load_device(data_dir, relative_path)?;
+    DeviceKeys::parse_for_network(&Secp256k1::new(), &file.mnemonic, file.bitcoin_network()?)
+}
+
 pub fn recover_phone_mnemonic(data_dir: &Path) -> Result<String> {
-    let secp = Secp256k1::new();
-    let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
-    let hww = DeviceKeys::parse(&secp, &hww_file.mnemonic)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
     let backup: EncryptedBlob = read_json(&data_dir.join(PHONE_BACKUP_FILE))?;
     let words = crypto::decrypt(&hww.seed, "phone-seed-backup", &backup)?;
     String::from_utf8(words.to_vec()).context("decrypted phone backup was not UTF-8")
+}
+
+pub fn network_name(network: Network) -> &'static str {
+    match network {
+        Network::Bitcoin => "mainnet",
+        Network::Regtest => "regtest",
+        _ => "unsupported",
+    }
+}
+
+pub fn parse_network_name(name: &str) -> Result<Network> {
+    match name {
+        "mainnet" | "bitcoin" => Ok(Network::Bitcoin),
+        "regtest" => Ok(Network::Regtest),
+        _ => bail!("unsupported vault network: {name}"),
+    }
+}
+
+fn validate_supported_network(network: Network) -> Result<()> {
+    match network {
+        Network::Bitcoin | Network::Regtest => Ok(()),
+        other => bail!("unsupported vault network: {other}"),
+    }
+}
+
+fn default_network_name() -> String {
+    "regtest".to_owned()
 }
 
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -254,5 +331,30 @@ mod tests {
         assert!(!hww.mnemonic.is_empty());
         let config = initialize_vault(dir.path()).unwrap();
         assert_eq!(config.monthly_limit_sats, 0);
+    }
+
+    #[test]
+    fn mainnet_initialization_persists_mainnet_keys_addresses_and_wallet() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize_for_network(dir.path(), Network::Bitcoin).unwrap();
+        assert_eq!(initialized.config.network, "mainnet");
+        assert!(initialized.config.vault_address.starts_with("bc1p"));
+        assert!(
+            initialized
+                .config
+                .phone_hot_external_descriptor
+                .contains("/86'/0'/0']xpub")
+        );
+        assert_eq!(
+            load_device(dir.path(), PHONE_DEVICE_FILE).unwrap().network,
+            "mainnet"
+        );
+        let mut hot = crate::hot::HotWallet::open_or_create(dir.path()).unwrap();
+        assert!(
+            hot.next_receive_address()
+                .unwrap()
+                .to_string()
+                .starts_with("bc1p")
+        );
     }
 }

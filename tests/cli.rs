@@ -71,3 +71,92 @@ fn legacy_bundled_device_commands_are_not_exposed() {
             .stderr(predicate::str::contains("unrecognized subcommand"));
     }
 }
+
+#[test]
+fn mainnet_mode_is_persisted_and_requires_the_dangerous_flag_every_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let danger = "--dangerously-enable-mainnet";
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, danger, "phone", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MAINNET — REAL FUNDS"));
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, "hww", "init"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "pass --dangerously-enable-mainnet on every command",
+        ));
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, danger, "hww", "init"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, "init"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "pass --dangerously-enable-mainnet on every command",
+        ));
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, danger, "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Vault address: bc1p"))
+        .stdout(predicate::str::contains("fixed 1 sat/vB MVP fees"));
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("vault.json")).unwrap()).unwrap();
+    assert_eq!(config["network"], "mainnet");
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, "policy"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("mainnet vault is locked"));
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, danger, "policy"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Vault address: bc1p"));
+}
+
+#[test]
+fn dangerous_mainnet_flag_cannot_convert_an_existing_regtest_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, "phone", "init"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args([
+            "--data-dir",
+            data_dir,
+            "--dangerously-enable-mainnet",
+            "hww",
+            "init",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot change an existing vault"));
+}

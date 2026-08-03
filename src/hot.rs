@@ -1,13 +1,12 @@
 use crate::{
     keys::DeviceKeys,
-    state::{PHONE_DEVICE_FILE, hot_db_path, load_device},
+    state::{PHONE_DEVICE_FILE, hot_db_path, load_device_keys},
 };
 use anyhow::{Context, Result};
 use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
+use bdk_electrum::{BdkElectrumClient, electrum_client::ElectrumApi};
 use bdk_wallet::{KeychainKind, PersistedWallet, SignOptions, Wallet, rusqlite::Connection};
-use bitcoin::{
-    Address, Amount, FeeRate, Network, OutPoint, ScriptBuf, Transaction, key::Secp256k1,
-};
+use bitcoin::{Address, Amount, FeeRate, OutPoint, ScriptBuf, Transaction, key::Secp256k1};
 use bitcoincore_rpc::Client;
 use std::{fs, path::Path};
 
@@ -18,9 +17,7 @@ pub struct HotWallet {
 
 impl HotWallet {
     pub fn open_or_create(data_dir: &Path) -> Result<Self> {
-        let device = load_device(data_dir, PHONE_DEVICE_FILE)?;
-        let secp = Secp256k1::new();
-        let keys = DeviceKeys::parse(&secp, &device.mnemonic)?;
+        let keys = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
         let path = hot_db_path(data_dir);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -41,12 +38,12 @@ impl HotWallet {
             .descriptor(KeychainKind::External, Some(external.clone()))
             .descriptor(KeychainKind::Internal, Some(internal.clone()))
             .extract_keys()
-            .check_network(Network::Regtest)
+            .check_network(keys.network)
             .load_wallet(&mut db)?
         {
             Some(wallet) => wallet,
             None => Wallet::create(external, internal)
-                .network(Network::Regtest)
+                .network(keys.network)
                 .create_wallet(&mut db)?,
         };
         Ok(Self { wallet, db })
@@ -87,6 +84,15 @@ impl HotWallet {
         let mempool = emitter.mempool()?;
         self.wallet.apply_unconfirmed_txs(mempool.update);
         self.wallet.apply_evicted_txs(mempool.evicted);
+        self.wallet.persist(&mut self.db)?;
+        Ok(())
+    }
+
+    pub fn sync_electrum<E: ElectrumApi>(&mut self, client: &BdkElectrumClient<E>) -> Result<()> {
+        client.populate_tx_cache(self.wallet.tx_graph().full_txs().map(|node| node.tx));
+        let request = self.wallet.start_sync_with_revealed_spks();
+        let update = client.sync(request, 20, false)?;
+        self.wallet.apply_update(update)?;
         self.wallet.persist(&mut self.db)?;
         Ok(())
     }
