@@ -6,24 +6,48 @@ This repository contains a regtest-only Rust/BDK implementation of the renewable
 
 ## Use the CLI manually
 
-Start Core and define a small shell helper. The Compose volume preserves vault state and JSON handoff files between CLI invocations:
+Start Core, then define the `vault` shell helper. The helper itself has no output. The Compose volume preserves vault state and JSON handoff files between invocations:
 
-```bash
-docker compose --profile manual up -d bitcoind
-vault() { docker compose run --rm cli "$@"; }
+```console
+$ docker compose --profile manual up -d bitcoind
+[+] Running 1/1
+ ✔ Container vault-bitcoind-1  Healthy
+
+$ vault() { docker compose run --rm cli "$@"; }
 ```
 
-Everything is hard-wired to regtest and 1 sat/vB. Mnemonics are intentionally printed by the simulated devices for demonstration; this is not production key handling. The examples below assume the vault has confirmed regtest funds; `./scripts/run-e2e.sh monthly-spend` demonstrates funding 2 BTC from a freshly mined hot wallet.
+Everything is hard-wired to regtest and 1 sat/vB. Mnemonics are intentionally printed by the simulated devices for demonstration; this is not production key handling. Output below is representative: generated mnemonics, keys, addresses, and transaction IDs change on every run. The examples assume the vault has confirmed regtest funds; `./scripts/run-e2e.sh monthly-spend` demonstrates funding 2 BTC from a freshly mined hot wallet.
 
 ### Create a vault
 
 Initialize each simulated device separately, then combine their public keys into the static cold-storage policy:
 
-```bash
-vault phone init
-vault hww init
-vault init
-vault policy
+```console
+$ vault phone init
+Simulated phone initialized (REGTEST ONLY)
+Phone mnemonic: <generated phone mnemonic>
+Phone vault key: <phone public key>
+
+$ vault hww init
+Simulated HWW initialized (REGTEST ONLY)
+HWW mnemonic: <generated HWW mnemonic>
+HWW vault key: <HWW public key>
+Phone backup encrypted for the HWW
+
+$ vault init
+Vault initialized (REGTEST ONLY)
+Cold storage descriptor: tr(<NUMS key>,{multi_a(2,<phone key>,<HWW key>),{...}})
+Vault address: bcrt1p<generated vault address>
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly spending: disabled
+
+$ vault policy
+Cold storage descriptor: tr(<NUMS key>,{multi_a(2,<phone key>,<HWW key>),{...}})
+Vault address: bcrt1p<generated vault address>
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly spending: disabled
 ```
 
 The new vault starts with monthly spending disabled. `vault init` prints the static cold-storage descriptor, vault address, and recovery delays, but does not create or sign a monthly spending policy.
@@ -32,11 +56,48 @@ The new vault starts with monthly spending disabled. `vault init` prints the sta
 
 The phone proposes the policy and signs its side of every PSBT. The HWW independently validates the high-level policy, asks for one approval, and signs the complete batch. The phone verifies the approved JSON, broadcasts the rollover, and stores each authorization and revocation as an individually encrypted artifact:
 
-```bash
-vault phone set-policy --monthly-limit 10000000 --output policy.json
-vault hww confirm-policy policy.json --output approved-policy.json
-vault phone activate-policy approved-policy.json
-vault policy
+```console
+$ vault phone set-policy --monthly-limit 10000000 --output policy.json
+PHONE POLICY PROPOSAL
+Cold storage descriptor: tr(<vault descriptor>)
+Vault address: bcrt1p<vault address>
+Monthly limit: 10000000 sats
+Fee rate: 1 sat/vB
+Total input: 200000000 sats
+Monthly pairs: 12
+Rollover txid: <rollover txid>
+Rollover fee: 635 sats
+Phone signed PSBTs: 25
+Phone-signed policy proposal: policy.json
+
+$ vault hww confirm-policy policy.json --output approved-policy.json
+SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL
+PHONE POLICY PROPOSAL
+Cold storage descriptor: tr(<vault descriptor>)
+Vault address: bcrt1p<vault address>
+Monthly limit: 10000000 sats
+Fee rate: 1 sat/vB
+Total input: 200000000 sats
+Monthly pairs: 12
+Rollover txid: <rollover txid>
+Rollover fee: 635 sats
+Phone signed PSBTs: 25
+Type `approve` to confirm the complete monthly policy: approve
+HWW validated and signed all 25 PSBTs after one approval
+HWW-approved policy: approved-policy.json
+
+$ vault phone activate-policy approved-policy.json
+Rollover broadcast: <rollover txid>
+Active monthly limit: 10000000 sats
+Encrypted monthly transaction pairs: 12
+
+$ vault policy
+Cold storage descriptor: tr(<vault descriptor>)
+Vault address: bcrt1p<vault address>
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly limit: 10000000 sats
+Presigned monthly transaction pairs: 12
 ```
 
 `10000000` sats is 0.1 BTC. Set `--monthly-limit 0` through the same three-step protocol to disable monthly authorizations while still rolling all funds into cold storage. Policy JSON may also be piped with `--output -`; file handoff is clearer for the interactive HWW approval.
@@ -45,14 +106,16 @@ vault policy
 
 The month is the calendar month recorded in the active schedule. An authorization becomes valid once Bitcoin median-time-past is beyond 00:00 UTC on its first day:
 
-```bash
-vault phone authorize 2026-09
+```console
+$ vault phone authorize 2026-09
+Broadcast Authorization for 2026-09: <authorization txid>
 ```
 
 To keep only a 0.01 BTC soft limit from a 0.1 BTC authorization, immediately return the difference to cold storage:
 
-```bash
-vault phone apply-soft-limit 2026-09 --limit 1000000
+```console
+$ vault phone apply-soft-limit 2026-09 --limit 1000000
+Soft limit applied for 2026-09: retained at most 1000000 sats hot; cold-return txid=<cold-return txid>
 ```
 
 The signed monthly limit is the security boundary. The adjustable soft limit is a phone-side action and may be any value from zero through the signed monthly limit.
@@ -61,8 +124,9 @@ The signed monthly limit is the security boundary. The adjustable soft limit is 
 
 Before an authorization matures, the phone can broadcast its conflicting presigned revocation without the HWW:
 
-```bash
-vault phone revoke 2026-10
+```console
+$ vault phone revoke 2026-10
+Broadcast Revocation for 2026-10: <revocation txid>
 ```
 
 Once the revocation confirms, the corresponding authorization can no longer spend that monthly chunk.
@@ -71,30 +135,84 @@ Once the revocation confirms, the corresponding authorization can no longer spen
 
 If the encrypted cloud backup survives, the HWW decrypts it into a portable recovery object. After installing that object on the replacement phone, rotate immediately to a fresh phone key and vault address:
 
-```bash
-vault hww decrypt-phone-backup \
+```console
+$ vault hww decrypt-phone-backup \
   .vault-data/cloud/phone-seed-backup.json \
   --output phone-recovery.json
-vault phone restore phone-recovery.json
+Decrypted phone recovery package: phone-recovery.json
 
-vault phone rotate-key --output phone-rotation.json
-vault hww confirm-rotation phone-rotation.json \
+$ vault phone restore phone-recovery.json
+Phone key restored from HWW recovery package
+Recovered phone mnemonic: <recovered phone mnemonic>
+
+$ vault phone rotate-key --output phone-rotation.json
+PHONE-KEY ROTATION
+New phone vault key: <new phone public key>
+New cold storage descriptor: tr(<new vault descriptor>)
+New vault address: bcrt1p<new vault address>
+Inputs: 12
+Sent: <sats moved to the new vault>
+Fee: <fee> sats (1 sat/vB)
+Phone-key rotation proposal: phone-rotation.json
+
+$ vault hww confirm-rotation phone-rotation.json \
   --output approved-phone-rotation.json
-vault phone activate-rotation approved-phone-rotation.json
+PHONE-KEY ROTATION
+New phone vault key: <new phone public key>
+New cold storage descriptor: tr(<new vault descriptor>)
+New vault address: bcrt1p<new vault address>
+Inputs: 12
+Sent: <sats moved to the new vault>
+Fee: <fee> sats (1 sat/vB)
+Type `approve` to confirm the phone-key rotation: approve
+HWW validated and signed the phone-key rotation
+HWW-approved phone-key rotation: approved-phone-rotation.json
+
+$ vault phone activate-rotation approved-phone-rotation.json
+Emergency phone-key rotation broadcast: <rotation txid>
+Old vault address: bcrt1p<old vault address>
+New vault address: bcrt1p<new vault address>
+New phone mnemonic: <new phone mnemonic>
+Monthly spending: disabled until a new policy is approved
 ```
 
 The rotation preserves the HWW key, creates a new phone seed and HWW-encrypted backup, sweeps the old vault cooperatively, and disables monthly spending until a fresh policy is approved.
 
 If the phone and its backup are permanently unavailable, initialize a replacement vault, wait the real 65,535-block HWW delay, and recover directly to its address:
 
-```bash
-vault --data-dir .replacement-vault phone init
-vault --data-dir .replacement-vault hww init
-vault --data-dir .replacement-vault init
-vault --data-dir .replacement-vault policy
+```console
+$ vault --data-dir .replacement-vault phone init
+Simulated phone initialized (REGTEST ONLY)
+Phone mnemonic: <replacement phone mnemonic>
+Phone vault key: <replacement phone public key>
+
+$ vault --data-dir .replacement-vault hww init
+Simulated HWW initialized (REGTEST ONLY)
+HWW mnemonic: <replacement HWW mnemonic>
+HWW vault key: <replacement HWW public key>
+Phone backup encrypted for the HWW
+
+$ vault --data-dir .replacement-vault init
+Vault initialized (REGTEST ONLY)
+Cold storage descriptor: tr(<replacement vault descriptor>)
+Vault address: bcrt1p<replacement vault address>
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly spending: disabled
+
+$ vault --data-dir .replacement-vault policy
+Cold storage descriptor: tr(<replacement vault descriptor>)
+Vault address: bcrt1p<replacement vault address>
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly spending: disabled
 
 # Copy the replacement vault address printed above.
-vault hww recover "$REPLACEMENT_VAULT_ADDRESS"
+$ vault hww recover "$REPLACEMENT_VAULT_ADDRESS"
+HWW recovery sweep broadcast: <recovery txid>
+Inputs: <mature vault UTXO count>
+Sent: <recovered sats>
+Fee: <fee> sats (1 sat/vB)
 ```
 
 This delayed recovery moves the funds to a new phone key, a new HWW key, and a new static vault address.
@@ -103,14 +221,39 @@ This delayed recovery moves the funds to a new phone key, a new HWW key, and a n
 
 The phone can continue using existing monthly artifacts while the recovery delay runs. Initialize a replacement vault, wait the real 61,200-block phone delay, then sweep the old vault into its address:
 
-```bash
-vault --data-dir .replacement-vault phone init
-vault --data-dir .replacement-vault hww init
-vault --data-dir .replacement-vault init
-vault --data-dir .replacement-vault policy
+```console
+$ vault --data-dir .replacement-vault phone init
+Simulated phone initialized (REGTEST ONLY)
+Phone mnemonic: <replacement phone mnemonic>
+Phone vault key: <replacement phone public key>
+
+$ vault --data-dir .replacement-vault hww init
+Simulated HWW initialized (REGTEST ONLY)
+HWW mnemonic: <replacement HWW mnemonic>
+HWW vault key: <replacement HWW public key>
+Phone backup encrypted for the HWW
+
+$ vault --data-dir .replacement-vault init
+Vault initialized (REGTEST ONLY)
+Cold storage descriptor: tr(<replacement vault descriptor>)
+Vault address: bcrt1p<replacement vault address>
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly spending: disabled
+
+$ vault --data-dir .replacement-vault policy
+Cold storage descriptor: tr(<replacement vault descriptor>)
+Vault address: bcrt1p<replacement vault address>
+Phone recovery: 61,200 blocks (~14 months)
+HWW recovery:   65,535 blocks (~15 months)
+Monthly spending: disabled
 
 # Copy the replacement vault address printed above.
-vault phone recover "$REPLACEMENT_VAULT_ADDRESS"
+$ vault phone recover "$REPLACEMENT_VAULT_ADDRESS"
+Phone recovery sweep broadcast: <recovery txid>
+Inputs: <mature vault UTXO count>
+Sent: <recovered sats>
+Fee: <fee> sats (1 sat/vB)
 ```
 
 The replacement vault has a fresh HWW key (and a fresh phone epoch), so the missing HWW can no longer participate. Approve a new monthly policy after the recovery confirms.
@@ -119,10 +262,32 @@ The replacement vault has a fresh HWW key (and a fresh phone epoch), so the miss
 
 Arbitrary immediate vault sweeps retain the same explicit device boundary:
 
-```bash
-vault phone create-sweep "$DESTINATION" --output sweep.json
-vault hww confirm-sweep sweep.json --output approved-sweep.json
-vault phone broadcast-sweep approved-sweep.json
+```console
+$ vault phone create-sweep "$DESTINATION" --output sweep.json
+COOPERATIVE VAULT SWEEP
+Destination: bcrt1p<destination address>
+Inputs: <vault UTXO count>
+Sent: <sats sent>
+Fee: <fee> sats (1 sat/vB)
+Phone signed: true
+Phone-signed cooperative sweep: sweep.json
+
+$ vault hww confirm-sweep sweep.json --output approved-sweep.json
+COOPERATIVE VAULT SWEEP
+Destination: bcrt1p<destination address>
+Inputs: <vault UTXO count>
+Sent: <sats sent>
+Fee: <fee> sats (1 sat/vB)
+Phone signed: true
+Type `approve` to confirm the cooperative sweep: approve
+HWW validated and signed the cooperative sweep
+HWW-approved cooperative sweep: approved-sweep.json
+
+$ vault phone broadcast-sweep approved-sweep.json
+Cooperative vault sweep broadcast: <sweep txid>
+Inputs: <vault UTXO count>
+Sent: <sats sent>
+Fee: <fee> sats (1 sat/vB)
 ```
 
 ## Run the end-to-end tests
