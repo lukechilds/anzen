@@ -484,8 +484,14 @@ test_partial_funding() {
 }
 
 test_lost_phone() {
-    local old_address new_address current_mtp
+    local old_address new_address first_month first_unlock
     setup_vault
+
+    step "Approve the annual monthly-spending policy before the phone is lost"
+    ceremony "$NOW"
+    confirm_transaction "Confirming the annual rollover"
+    success "Twelve monthly transaction pairs presigned."
+
     old_address=$(jq -r .vault_address "$MAIN/vault.json")
 
     step "Simulate losing the phone"
@@ -505,14 +511,23 @@ test_lost_phone() {
     fi
     confirm_transaction "Confirming emergency key rotation"
     vault "$MAIN" status
-    success "Phone restored and vault key rotated."
+    if [[ $(jq -r '.monthly_limit_sats' "$MAIN/vault.json") != "$DEFAULT_MONTHLY_LIMIT_SATS" ]]; then
+        printf 'ERROR: phone-key rotation did not preserve the monthly limit\n' >&2
+        exit 1
+    fi
+    if [[ $(jq '.entries | length' "$MAIN/phone/schedule.json") -ne 12 ]]; then
+        printf 'ERROR: phone-key rotation did not create a replacement annual schedule\n' >&2
+        exit 1
+    fi
+    success "Phone restored, key rotated, and monthly policy preserved."
 
-    step "Create a fresh annual schedule for the new phone-key epoch"
-    current_mtp=$(node_mtp)
-    ceremony "$current_mtp"
-    confirm_transaction "Confirming the renewed annual rollover"
-    vault "$MAIN" status
-    success "Annual schedule renewed for the new phone."
+    first_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
+    first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
+    advance_calendar_to "$first_unlock" "Fast-forward to the replacement phone's first allowance"
+    step "Use the monthly allowance preserved through rotation"
+    vault "$MAIN" phone authorize "$first_month"
+    confirm_transaction "Confirming the replacement phone's monthly authorization"
+    success "Replacement phone used the preserved monthly policy."
 }
 
 test_stolen_phone() {

@@ -1,6 +1,10 @@
 use crate::{
     DEFAULT_FEE_RATE_SAT_VB, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
-    ceremony::{DEFAULT_BATCH_DIR, SCHEDULE_FILE},
+    ceremony::{
+        DEFAULT_BATCH_DIR, PolicyPackage, SCHEDULE_FILE, Schedule, approve_hww_for_config,
+        finalize_and_broadcast, materialize_policy_package, package_from_batch,
+        prepare_from_utxos_for_phone, validate_batch,
+    },
     crypto,
     hot::HotWallet,
     keys::DeviceKeys,
@@ -21,6 +25,7 @@ use bitcoin::{
     key::Secp256k1, secp256k1::XOnlyPublicKey, transaction::Version,
 };
 use bitcoincore_rpc::RpcApi;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -78,6 +83,7 @@ pub struct RotationResult {
     pub old_address: String,
     pub new_address: String,
     pub new_phone_mnemonic: String,
+    pub renewed_schedule: Option<Schedule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,7 +116,9 @@ pub struct PhoneRotationPackage {
     pub new_phone_vault_pubkey: String,
     pub new_vault_descriptor: String,
     pub new_vault_address: String,
+    pub monthly_limit_sats: u64,
     pub sweep: CooperativeSweepPackage,
+    pub renewed_policy: Option<PolicyPackage>,
     pub encrypted_phone_backup: Option<crate::crypto::EncryptedBlob>,
 }
 
@@ -426,6 +434,7 @@ pub fn create_phone_rotation(data_dir: &Path, rpc: &RegtestRpc) -> Result<PhoneR
     let new_phone = DeviceKeys::generate(&secp)?;
     let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
     let new_policy = VaultPolicy::new(new_phone.vault_pubkey, hww_pubkey)?;
+    let new_config = rotated_config(&old_config, &new_phone, &new_policy)?;
     write_json(
         &data_dir.join(PENDING_PHONE_ROTATION_FILE),
         &DeviceFile {
@@ -434,6 +443,36 @@ pub fn create_phone_rotation(data_dir: &Path, rpc: &RegtestRpc) -> Result<PhoneR
         },
     )?;
     let sweep = create_cooperative_sweep(data_dir, rpc, &new_policy.address)?;
+    let renewed_policy = if old_config.monthly_limit_sats == 0 {
+        None
+    } else {
+        let sweep_psbt = Psbt::from_str(&sweep.psbt).context("invalid rotation sweep PSBT")?;
+        let sweep_tx = &sweep_psbt.unsigned_tx;
+        let sweep_output = sweep_tx
+            .output
+            .first()
+            .context("rotation sweep has no output")?;
+        let virtual_utxo = VaultUtxo {
+            outpoint: bitcoin::OutPoint::new(sweep_tx.compute_txid(), 0),
+            txout: sweep_output.clone(),
+            confirmation_height: 0,
+        };
+        let workspace = data_dir.join("phone/rotation-policy-proposal");
+        reset_workspace(&workspace)?;
+        let mut hot = HotWallet::ephemeral(&new_phone)?;
+        prepare_from_utxos_for_phone(
+            &new_config,
+            &[virtual_utxo],
+            Utc::now(),
+            old_config.monthly_limit_sats,
+            &workspace,
+            &new_phone,
+            &mut hot,
+        )?;
+        let package = package_from_batch(&workspace)?;
+        reset_workspace(&workspace)?;
+        Some(package)
+    };
     Ok(PhoneRotationPackage {
         version: 1,
         kind: "phone-key-rotation".to_owned(),
@@ -441,7 +480,9 @@ pub fn create_phone_rotation(data_dir: &Path, rpc: &RegtestRpc) -> Result<PhoneR
         new_phone_vault_pubkey: new_phone.vault_pubkey.to_string(),
         new_vault_descriptor: new_policy.descriptor_string(),
         new_vault_address: new_policy.address.to_string(),
+        monthly_limit_sats: old_config.monthly_limit_sats,
         sweep,
+        renewed_policy,
         encrypted_phone_backup: None,
     })
 }
@@ -450,20 +491,24 @@ pub fn confirm_phone_rotation(
     data_dir: &Path,
     package: &PhoneRotationPackage,
 ) -> Result<PhoneRotationPackage> {
-    validate_phone_rotation(data_dir, package)?;
+    let (old_config, new_config, pending_phone) = validate_phone_rotation(data_dir, package)?;
     let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;
     let hww = DeviceKeys::parse(&Secp256k1::new(), &hww_file.mnemonic)?;
-    let pending: DeviceFile = read_json(&data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
-    let pending_phone = DeviceKeys::parse(&Secp256k1::new(), &pending.mnemonic)?;
-    if pending_phone.vault_pubkey.to_string() != package.new_phone_vault_pubkey {
-        bail!("pending phone key does not match the rotation proposal");
-    }
     let mut approved = package.clone();
     approved.sweep = confirm_cooperative_sweep(data_dir, &package.sweep)?;
+    if let Some(policy) = &package.renewed_policy {
+        let workspace = data_dir.join("hww/rotation-policy-review");
+        reset_workspace(&workspace)?;
+        materialize_policy_package(policy, &workspace)?;
+        validate_rotation_policy_binding(&old_config, &new_config, &approved.sweep, policy)?;
+        approve_hww_for_config(data_dir, &new_config, &workspace)?;
+        approved.renewed_policy = Some(package_from_batch(&workspace)?);
+        reset_workspace(&workspace)?;
+    }
     approved.encrypted_phone_backup = Some(crypto::encrypt(
         &hww.seed,
         "phone-seed-backup",
-        pending.mnemonic.as_bytes(),
+        pending_phone.mnemonic.to_string().as_bytes(),
     )?);
     Ok(approved)
 }
@@ -473,7 +518,7 @@ pub fn activate_phone_rotation(
     rpc: &RegtestRpc,
     package: &PhoneRotationPackage,
 ) -> Result<RotationResult> {
-    validate_phone_rotation(data_dir, package)?;
+    let (old_config, new_config, new_phone) = validate_phone_rotation(data_dir, package)?;
     let backup = package
         .encrypted_phone_backup
         .as_ref()
@@ -481,28 +526,21 @@ pub fn activate_phone_rotation(
     if !package.sweep.hww_approved {
         bail!("HWW approval is missing from the rotation package");
     }
-    let old_config = load_config(data_dir)?;
     let pending: DeviceFile = read_json(&data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
-    let new_phone = DeviceKeys::parse(&Secp256k1::new(), &pending.mnemonic)?;
-    if new_phone.vault_pubkey.to_string() != package.new_phone_vault_pubkey {
-        bail!("pending phone key does not match the approved rotation");
+    let policy_workspace = data_dir.join("phone/rotation-policy-activation");
+    if let Some(policy) = &package.renewed_policy {
+        if !policy.manifest.hww_approved {
+            bail!("HWW approval is missing from the renewed monthly policy");
+        }
+        reset_workspace(&policy_workspace)?;
+        materialize_policy_package(policy, &policy_workspace)?;
+        validate_batch(&new_config, &policy.manifest, &policy_workspace)?;
+        validate_rotation_policy_binding(&old_config, &new_config, &package.sweep, policy)?;
+        validate_rotation_hot_addresses(&new_phone, policy)?;
     }
+
     let sweep = broadcast_cooperative_sweep(data_dir, rpc, &package.sweep)?;
     archive_old_epoch(data_dir, &old_config, sweep.txid)?;
-    let (hot_external, hot_internal) = new_phone.hot_descriptors(&Secp256k1::new())?;
-    let new_config = VaultConfig {
-        version: old_config.version,
-        network: old_config.network.clone(),
-        phone_vault_pubkey: new_phone.vault_pubkey.to_string(),
-        hww_vault_pubkey: old_config.hww_vault_pubkey.clone(),
-        phone_hot_external_descriptor: hot_external,
-        phone_hot_internal_descriptor: hot_internal,
-        vault_descriptor: package.new_vault_descriptor.clone(),
-        vault_address: package.new_vault_address.clone(),
-        phone_recovery_blocks: old_config.phone_recovery_blocks,
-        hww_recovery_blocks: old_config.hww_recovery_blocks,
-        monthly_limit_sats: 0,
-    };
     write_json(&data_dir.join(CONFIG_FILE), &new_config)?;
     write_json(
         &data_dir.join(PHONE_DEVICE_FILE),
@@ -512,31 +550,56 @@ pub fn activate_phone_rotation(
         },
     )?;
     write_json(&data_dir.join(PHONE_BACKUP_FILE), &backup)?;
+
+    let mut hot = HotWallet::open_or_create(data_dir)?;
+    if let Some(policy) = &package.renewed_policy {
+        for month in &policy.manifest.months {
+            let derived = hot.next_receive_address()?;
+            if derived.to_string() != month.hot_address {
+                bail!("renewed monthly policy does not match the new phone address sequence");
+            }
+        }
+    }
+    let renewed_schedule = if package.renewed_policy.is_some() {
+        Some(finalize_and_broadcast(data_dir, rpc, &policy_workspace)?)
+    } else {
+        None
+    };
+    reset_workspace(&policy_workspace)?;
     if data_dir.join(PENDING_PHONE_ROTATION_FILE).exists() {
         fs::remove_file(data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
     }
-    HotWallet::open_or_create(data_dir)?;
 
     Ok(RotationResult {
         sweep,
         old_address: old_config.vault_address,
         new_address: new_config.vault_address,
         new_phone_mnemonic: pending.mnemonic,
+        renewed_schedule,
     })
 }
 
-fn validate_phone_rotation(data_dir: &Path, package: &PhoneRotationPackage) -> Result<()> {
+fn validate_phone_rotation(
+    data_dir: &Path,
+    package: &PhoneRotationPackage,
+) -> Result<(VaultConfig, VaultConfig, DeviceKeys)> {
     if package.version != 1 || package.kind != "phone-key-rotation" {
         bail!("unsupported phone rotation package");
     }
-    let config = load_config(data_dir)?;
-    if package.old_vault_descriptor != config.vault_descriptor
-        || package.sweep.vault_descriptor != config.vault_descriptor
+    let old_config = load_config(data_dir)?;
+    if package.old_vault_descriptor != old_config.vault_descriptor
+        || package.sweep.vault_descriptor != old_config.vault_descriptor
         || package.sweep.destination != package.new_vault_address
+        || package.monthly_limit_sats != old_config.monthly_limit_sats
     {
         bail!("phone rotation package does not match the current vault");
     }
-    let hww_pubkey = XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?;
+    let pending: DeviceFile = read_json(&data_dir.join(PENDING_PHONE_ROTATION_FILE))?;
+    let new_phone = DeviceKeys::parse(&Secp256k1::new(), &pending.mnemonic)?;
+    if new_phone.vault_pubkey.to_string() != package.new_phone_vault_pubkey {
+        bail!("pending phone key does not match the rotation proposal");
+    }
+    let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
     let phone_pubkey = XOnlyPublicKey::from_str(&package.new_phone_vault_pubkey)?;
     let policy = VaultPolicy::new(phone_pubkey, hww_pubkey)?;
     if policy.descriptor_string() != package.new_vault_descriptor
@@ -545,6 +608,91 @@ fn validate_phone_rotation(data_dir: &Path, package: &PhoneRotationPackage) -> R
         bail!("phone rotation destination does not match the proposed new keys");
     }
     validate_cooperative_sweep(data_dir, &package.sweep)?;
+    let new_config = rotated_config(&old_config, &new_phone, &policy)?;
+    match (old_config.monthly_limit_sats, &package.renewed_policy) {
+        (0, None) => {}
+        (0, Some(_)) => bail!("disabled monthly policy must not create renewed transactions"),
+        (_, None) => bail!("phone rotation is missing the renewed monthly policy"),
+        (_, Some(renewed)) => {
+            validate_rotation_policy_binding(&old_config, &new_config, &package.sweep, renewed)?
+        }
+    }
+    Ok((old_config, new_config, new_phone))
+}
+
+fn rotated_config(
+    old_config: &VaultConfig,
+    new_phone: &DeviceKeys,
+    new_policy: &VaultPolicy,
+) -> Result<VaultConfig> {
+    let (hot_external, hot_internal) = new_phone.hot_descriptors(&Secp256k1::new())?;
+    Ok(VaultConfig {
+        version: old_config.version,
+        network: old_config.network.clone(),
+        phone_vault_pubkey: new_phone.vault_pubkey.to_string(),
+        hww_vault_pubkey: old_config.hww_vault_pubkey.clone(),
+        phone_hot_external_descriptor: hot_external,
+        phone_hot_internal_descriptor: hot_internal,
+        vault_descriptor: new_policy.descriptor_string(),
+        vault_address: new_policy.address.to_string(),
+        phone_recovery_blocks: old_config.phone_recovery_blocks,
+        hww_recovery_blocks: old_config.hww_recovery_blocks,
+        monthly_limit_sats: old_config.monthly_limit_sats,
+    })
+}
+
+fn validate_rotation_policy_binding(
+    old_config: &VaultConfig,
+    new_config: &VaultConfig,
+    sweep: &CooperativeSweepPackage,
+    renewed: &PolicyPackage,
+) -> Result<()> {
+    if renewed.version != 1
+        || renewed.kind != "monthly-policy"
+        || !renewed.manifest.phone_approved
+        || renewed.manifest.vault_descriptor != new_config.vault_descriptor
+        || renewed.manifest.vault_address != new_config.vault_address
+        || renewed.manifest.monthly_limit_sats != old_config.monthly_limit_sats
+    {
+        bail!("renewed monthly policy does not preserve the active policy");
+    }
+    let sweep_psbt = Psbt::from_str(&sweep.psbt).context("invalid rotation sweep PSBT")?;
+    let sweep_tx = &sweep_psbt.unsigned_tx;
+    let sweep_output = sweep_tx
+        .output
+        .first()
+        .context("rotation sweep has no output")?;
+    let rollover_text = renewed
+        .psbts
+        .get(&renewed.manifest.rollover.psbt_file)
+        .context("renewed monthly policy is missing its rollover PSBT")?;
+    let rollover = Psbt::from_str(rollover_text).context("invalid renewed policy rollover PSBT")?;
+    if rollover.unsigned_tx.input.len() != 1
+        || rollover.inputs.len() != 1
+        || rollover.unsigned_tx.input[0].previous_output
+            != bitcoin::OutPoint::new(sweep_tx.compute_txid(), 0)
+        || rollover.inputs[0].witness_utxo.as_ref() != Some(sweep_output)
+    {
+        bail!("renewed monthly policy is not chained to the rotation sweep");
+    }
+    Ok(())
+}
+
+fn validate_rotation_hot_addresses(new_phone: &DeviceKeys, renewed: &PolicyPackage) -> Result<()> {
+    let mut hot = HotWallet::ephemeral(new_phone)?;
+    for month in &renewed.manifest.months {
+        if hot.next_receive_address()?.to_string() != month.hot_address {
+            bail!("renewed monthly policy does not use the new phone's address sequence");
+        }
+    }
+    Ok(())
+}
+
+fn reset_workspace(path: &Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_dir_all(path)
+            .with_context(|| format!("failed to reset workspace {}", path.display()))?;
+    }
     Ok(())
 }
 

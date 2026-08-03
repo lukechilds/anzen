@@ -21,13 +21,22 @@ impl HotWallet {
         let device = load_device(data_dir, PHONE_DEVICE_FILE)?;
         let secp = Secp256k1::new();
         let keys = DeviceKeys::parse(&secp, &device.mnemonic)?;
-        let (external, internal) = keys.hot_private_descriptors(&secp)?;
         let path = hot_db_path(data_dir);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut db = Connection::open(&path)
+        let db = Connection::open(&path)
             .with_context(|| format!("failed to open hot wallet database {}", path.display()))?;
+        Self::open_or_create_with_keys(&keys, db)
+    }
+
+    pub fn ephemeral(keys: &DeviceKeys) -> Result<Self> {
+        Self::open_or_create_with_keys(keys, Connection::open_in_memory()?)
+    }
+
+    fn open_or_create_with_keys(keys: &DeviceKeys, mut db: Connection) -> Result<Self> {
+        let secp = Secp256k1::new();
+        let (external, internal) = keys.hot_private_descriptors(&secp)?;
         let wallet = match Wallet::load()
             .descriptor(KeychainKind::External, Some(external.clone()))
             .descriptor(KeychainKind::Internal, Some(internal.clone()))

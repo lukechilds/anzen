@@ -205,12 +205,12 @@ The demonstration should derive its schedule from the actual UTC date when the t
 
 - **Lost phone**
   - Recover the encrypted mobile-key backup from cloud storage using HWW decryption.
-  - Rotate to a fresh mobile key and recreate the monthly authorization schedule.
+  - Rotate to a fresh mobile key while preserving the active monthly limit. The rotation proposal chains a replacement annual rollover and authorization/revocation schedule to the emergency sweep, and the HWW signs both under one high-level rotation approval.
 
 - **Stolen phone or extracted mobile key**
   - The attacker can steal the current hot balance and use any matured monthly authorizations.
   - The attacker cannot spend the main vault before the phone fallback matures.
-  - Recover the mobile key using the HWW and immediately sweep all vault chunks to fresh keys, invalidating future authorizations.
+  - Recover the mobile key using the HWW and immediately sweep all vault chunks to fresh keys, invalidating the old authorizations while replacing them with an equivalent schedule encrypted to the new phone key.
 
 - **Lost HWW**
   - The phone can continue using existing monthly authorizations.

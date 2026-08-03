@@ -20,7 +20,7 @@ Container vault-bitcoind-1 Started
 $ vault() { COMPOSE_PROGRESS=quiet docker compose run --rm cli "$@"; }
 ```
 
-Everything is hard-wired to regtest and 1 sat/vB. Mnemonics are intentionally printed by the simulated devices for demonstration; this is not production key handling. Every value below was captured from the real commands against disposable Bitcoin Core regtest chains; a new run generates different mnemonics, keys, addresses, and transaction IDs. The examples assume the vault has confirmed regtest funds; `./scripts/run-e2e.sh monthly-spend` demonstrates funding 2 BTC from a freshly mined hot wallet.
+Everything is hard-wired to regtest and 1 sat/vB. Mnemonics are intentionally printed by the simulated devices for demonstration; this is not production key handling. Every value below was captured from the real commands against disposable Bitcoin Core regtest chains; some sections come from independent runs, and a new run generates different mnemonics, keys, addresses, and transaction IDs. The examples assume the vault has confirmed regtest funds; `./scripts/run-e2e.sh monthly-spend` demonstrates funding 2 BTC from a freshly mined hot wallet.
 
 ### Create a vault
 
@@ -147,40 +147,48 @@ Decrypted phone recovery package: phone-recovery.json
 
 $ vault phone restore phone-recovery.json
 Phone key restored from HWW recovery package
-Recovered phone mnemonic: aware pear frame napkin satisfy success stove velvet increase style answer chat trash bamboo all omit shield enforce antique brick talent equip else roast
+Recovered phone mnemonic: salt undo ice ten tray circle trophy escape wrong token unusual check harbor feature floor wasp secret achieve keen spice model above nephew mutual
 
 $ vault phone rotate-key --output phone-rotation.json
 PHONE-KEY ROTATION
-New phone vault key: f54f1a0fa1a0567e44233fa84cc9af938c3cbdb808e643beea4a2cb556cdfba3
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,f54f1a0fa1a0567e44233fa84cc9af938c3cbdb808e643beea4a2cb556cdfba3,f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32),{and_v(v:older(61200),pk(f54f1a0fa1a0567e44233fa84cc9af938c3cbdb808e643beea4a2cb556cdfba3)),and_v(v:older(65535),pk(f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32))}})#uq9gelxq
-New vault address: bcrt1p3u4898gez45y7rxyguq8wklyse6es3sa5jsavtskta09uwnwehgq5t45ve
-Inputs: 13
-Sent: 198997540 sats
-Fee: 1458 sats (1 sat/vB)
+New phone vault key: 242a7a74e9cc57b1a35d32af276defe8390b970d8978f2595985ef30441ccaba
+New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,242a7a74e9cc57b1a35d32af276defe8390b970d8978f2595985ef30441ccaba,a513c47e38d07886f628d7e8e822f212ea64dcfe600c56e0abcc601113ff0a1b),{and_v(v:older(61200),pk(242a7a74e9cc57b1a35d32af276defe8390b970d8978f2595985ef30441ccaba)),and_v(v:older(65535),pk(a513c47e38d07886f628d7e8e822f212ea64dcfe600c56e0abcc601113ff0a1b))}})#gjtqear8
+New vault address: bcrt1p7p2jazc7cz3j5m622qp8lh8yquygu8hq848rlmn7rgep3m2cs2jssmjk0j
+Inputs: 12
+Sent: 199998015 sats
+Fee: 1350 sats (1 sat/vB)
+Monthly policy preserved: 10000000 sats
+Renewed monthly pairs: 12
+Renewed policy PSBTs: 25
 Phone-key rotation proposal: phone-rotation.json
 
 $ vault hww confirm-rotation phone-rotation.json \
   --output approved-phone-rotation.json
 PHONE-KEY ROTATION
-New phone vault key: f54f1a0fa1a0567e44233fa84cc9af938c3cbdb808e643beea4a2cb556cdfba3
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,f54f1a0fa1a0567e44233fa84cc9af938c3cbdb808e643beea4a2cb556cdfba3,f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32),{and_v(v:older(61200),pk(f54f1a0fa1a0567e44233fa84cc9af938c3cbdb808e643beea4a2cb556cdfba3)),and_v(v:older(65535),pk(f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32))}})#uq9gelxq
-New vault address: bcrt1p3u4898gez45y7rxyguq8wklyse6es3sa5jsavtskta09uwnwehgq5t45ve
-Inputs: 13
-Sent: 198997540 sats
-Fee: 1458 sats (1 sat/vB)
+New phone vault key: 242a7a74e9cc57b1a35d32af276defe8390b970d8978f2595985ef30441ccaba
+New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,242a7a74e9cc57b1a35d32af276defe8390b970d8978f2595985ef30441ccaba,a513c47e38d07886f628d7e8e822f212ea64dcfe600c56e0abcc601113ff0a1b),{and_v(v:older(61200),pk(242a7a74e9cc57b1a35d32af276defe8390b970d8978f2595985ef30441ccaba)),and_v(v:older(65535),pk(a513c47e38d07886f628d7e8e822f212ea64dcfe600c56e0abcc601113ff0a1b))}})#gjtqear8
+New vault address: bcrt1p7p2jazc7cz3j5m622qp8lh8yquygu8hq848rlmn7rgep3m2cs2jssmjk0j
+Inputs: 12
+Sent: 199998015 sats
+Fee: 1350 sats (1 sat/vB)
+Monthly policy preserved: 10000000 sats
+Renewed monthly pairs: 12
+Renewed policy PSBTs: 25
 Type `approve` to confirm the phone-key rotation: approve
-HWW validated and signed the phone-key rotation
+HWW validated and signed the phone-key rotation plus 25 renewed-policy PSBTs
 HWW-approved phone-key rotation: approved-phone-rotation.json
 
 $ vault phone activate-rotation approved-phone-rotation.json
-Emergency phone-key rotation broadcast: 6c9bd032081876b6c447c3bc1ff5c15c0ae4ad922f28ce9aa003bd4e4ad51f79
-Old vault address: bcrt1p0j6cwkqng7y7weum5sqln5573deqvu9ycxxf92k98mvzmd0k3zzq4skpuc
-New vault address: bcrt1p3u4898gez45y7rxyguq8wklyse6es3sa5jsavtskta09uwnwehgq5t45ve
-New phone mnemonic: region practice hint bring basket fluid ready fade ridge grain describe doctor final issue soup friend cluster rebel slogan lunch utility coyote exact pretty
-Monthly spending: disabled until a new policy is approved
+Emergency phone-key rotation broadcast: 91103a661f8979e67750262708ebbd364fded0fc3d03477800ac9f2efc62828b
+Old vault address: bcrt1p6gdq3v0ygy8d5590cwhqtaxxwt94qzqwum4tmh89c82mft0zprvqp0yt2r
+New vault address: bcrt1p7p2jazc7cz3j5m622qp8lh8yquygu8hq848rlmn7rgep3m2cs2jssmjk0j
+New phone mnemonic: artwork decline hope sheriff slush economy enjoy balance jacket enemy hidden snap grid rent curious axis find protect fluid wrong expand correct rhythm figure
+Monthly policy preserved: 10000000 sats
+Policy rollover broadcast: 9422c1ac20f7f2c9f1a75deafbf89298a3c4b39a33908c7df9d953f948ad0b57
+Encrypted monthly transaction pairs: 12
 ```
 
-The rotation preserves the HWW key, creates a new phone seed and HWW-encrypted backup, sweeps the old vault cooperatively, and disables monthly spending until a fresh policy is approved.
+The rotation preserves the HWW key and active monthly limit, creates a new phone seed and HWW-encrypted backup, and sweeps the old vault cooperatively. The same proposal chains a fresh 12-month rollover to that sweep; one HWW prompt approves both, and the replacement monthly artifacts are encrypted to the new phone key. A vault whose monthly policy was disabled remains disabled after rotation.
 
 If the phone and its backup are permanently unavailable, initialize a replacement vault, wait the real 65,535-block HWW delay, and recover directly to its address:
 

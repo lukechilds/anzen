@@ -88,12 +88,12 @@ enum PhoneCommand {
     },
     /// Verify and broadcast an HWW-approved cooperative sweep.
     BroadcastSweep { approved_sweep: PathBuf },
-    /// Generate a new phone key and propose a cooperative key rotation.
+    /// Propose a new phone key while preserving any active monthly policy.
     RotateKey {
         #[arg(long)]
         output: PathBuf,
     },
-    /// Verify and broadcast an HWW-approved phone-key rotation.
+    /// Activate an HWW-approved key rotation and replacement monthly schedule.
     ActivateRotation { approved_rotation: PathBuf },
 }
 
@@ -126,7 +126,7 @@ enum HwwCommand {
         #[arg(long)]
         yes: bool,
     },
-    /// Validate and sign a phone-key rotation after one high-level approval.
+    /// Approve a phone-key rotation and any replacement policy in one prompt.
     ConfirmRotation {
         proposal: PathBuf,
         #[arg(long)]
@@ -303,7 +303,20 @@ fn run_phone(command: PhoneCommand, data_dir: &Path, rpc_args: &RpcArgs) -> Resu
             println!("Old vault address: {}", result.old_address);
             println!("New vault address: {}", result.new_address);
             println!("New phone mnemonic: {}", result.new_phone_mnemonic);
-            println!("Monthly spending: disabled until a new policy is approved");
+            match result.renewed_schedule {
+                Some(schedule) => {
+                    println!(
+                        "Monthly policy preserved: {} sats",
+                        schedule.monthly_limit_sats
+                    );
+                    println!("Policy rollover broadcast: {}", schedule.rollover_txid);
+                    println!(
+                        "Encrypted monthly transaction pairs: {}",
+                        schedule.entries.len()
+                    );
+                }
+                None => println!("Monthly spending remains disabled"),
+            }
         }
     }
     Ok(())
@@ -357,7 +370,14 @@ fn run_hww(command: HwwCommand, data_dir: &Path, rpc_args: &RpcArgs) -> Result<(
             report_rotation(&package, true)?;
             require_hww_approval(yes, proposal.as_path(), "phone-key rotation")?;
             let approved = vault_cli::recovery::confirm_phone_rotation(data_dir, &package)?;
-            eprintln!("HWW validated and signed the phone-key rotation");
+            if let Some(policy) = &approved.renewed_policy {
+                eprintln!(
+                    "HWW validated and signed the phone-key rotation plus {} renewed-policy PSBTs",
+                    1 + policy.manifest.chunk_count * 2
+                );
+            } else {
+                eprintln!("HWW validated and signed the phone-key rotation");
+            }
             write_artifact(&output, &approved)?;
             report_artifact(&output, "HWW-approved phone-key rotation")?;
         }
@@ -678,6 +698,25 @@ fn report_rotation(
     writeln!(output, "Inputs: {}", package.sweep.input_count)?;
     writeln!(output, "Sent: {} sats", package.sweep.sent_sats)?;
     writeln!(output, "Fee: {} sats (1 sat/vB)", package.sweep.fee_sats)?;
+    if let Some(policy) = &package.renewed_policy {
+        writeln!(
+            output,
+            "Monthly policy preserved: {} sats",
+            policy.manifest.monthly_limit_sats
+        )?;
+        writeln!(
+            output,
+            "Renewed monthly pairs: {}",
+            policy.manifest.chunk_count
+        )?;
+        writeln!(
+            output,
+            "Renewed policy PSBTs: {}",
+            1 + policy.manifest.chunk_count * 2
+        )?;
+    } else {
+        writeln!(output, "Monthly spending remains disabled")?;
+    }
     Ok(())
 }
 

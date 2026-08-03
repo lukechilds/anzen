@@ -202,6 +202,30 @@ pub fn prepare_from_utxos(
     monthly_limit_sats: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
+    let secp = Secp256k1::new();
+    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
+    let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
+    let mut hot = HotWallet::open_or_create(data_dir)?;
+    prepare_from_utxos_for_phone(
+        config,
+        utxos,
+        now,
+        monthly_limit_sats,
+        batch_dir,
+        &phone,
+        &mut hot,
+    )
+}
+
+pub(crate) fn prepare_from_utxos_for_phone(
+    config: &VaultConfig,
+    utxos: &[VaultUtxo],
+    now: DateTime<Utc>,
+    monthly_limit_sats: u64,
+    batch_dir: &Path,
+    phone: &DeviceKeys,
+    hot: &mut HotWallet,
+) -> Result<BatchManifest> {
     if utxos.is_empty() {
         bail!("vault has no confirmed UTXOs to roll over");
     }
@@ -210,9 +234,6 @@ pub fn prepare_from_utxos(
     }
     fs::create_dir_all(batch_dir)?;
 
-    let secp = Secp256k1::new();
-    let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
-    let phone = DeviceKeys::parse(&secp, &phone_file.mnemonic)?;
     if phone.vault_pubkey.to_string() != config.phone_vault_pubkey {
         bail!("phone key does not match the configured vault policy");
     }
@@ -318,7 +339,6 @@ pub fn prepare_from_utxos(
     let rollover_file = "rollover.psbt".to_owned();
     write_psbt(&batch_dir.join(&rollover_file), &rollover_psbt)?;
 
-    let mut hot = HotWallet::open_or_create(data_dir)?;
     let month_starts = next_month_starts(now, chunk_count)?;
     let mut months = Vec::with_capacity(chunk_count);
     for (index, ((month, unlock_timestamp), chunk_value)) in month_starts
@@ -431,8 +451,16 @@ pub fn load_manifest(batch_dir: &Path) -> Result<BatchManifest> {
 
 pub fn approve_hww(data_dir: &Path, batch_dir: &Path) -> Result<BatchManifest> {
     let config = load_config(data_dir)?;
+    approve_hww_for_config(data_dir, &config, batch_dir)
+}
+
+pub(crate) fn approve_hww_for_config(
+    data_dir: &Path,
+    config: &VaultConfig,
+    batch_dir: &Path,
+) -> Result<BatchManifest> {
     let mut manifest = load_manifest(batch_dir)?;
-    let policy = validate_batch(&config, &manifest, batch_dir)?;
+    let policy = validate_batch(config, &manifest, batch_dir)?;
     let secp = Secp256k1::new();
     let phone_pubkey = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
     let hww_file = load_device(data_dir, HWW_DEVICE_FILE)?;

@@ -7,7 +7,7 @@ use vault_cli::{
     rpc::{RegtestRpc, RpcConfig},
     state::{
         HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, initialize, load_config,
-        recover_phone_mnemonic,
+        recover_phone_mnemonic, set_monthly_limit,
     },
 };
 
@@ -97,7 +97,8 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     fs::remove_file(rotation_dir.path().join(PHONE_DEVICE_FILE)).unwrap();
     let restored = restore_phone_from_hww_backup(rotation_dir.path()).unwrap();
     assert_eq!(restored, rotation_vault.phone_mnemonic);
-    let old_config = rotation_vault.config;
+    set_monthly_limit(rotation_dir.path(), 10_000_000).unwrap();
+    let old_config = load_config(rotation_dir.path()).unwrap();
     let rotation = rotate_phone(rotation_dir.path(), &rpc).unwrap();
     assert_ne!(rotation.old_address, rotation.new_address);
     assert_ne!(rotation.new_phone_mnemonic, restored);
@@ -106,6 +107,9 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
         rotation.new_phone_mnemonic
     );
     assert!(rotation_dir.path().join(HWW_DEVICE_FILE).exists());
+    let renewed_schedule = rotation.renewed_schedule.as_ref().unwrap();
+    assert_eq!(renewed_schedule.monthly_limit_sats, 10_000_000);
+    assert_eq!(renewed_schedule.entries.len(), 12);
     assert!(
         rotation_dir
             .path()
@@ -116,8 +120,9 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     );
     rpc.mine(1, &destination).unwrap();
     let new_config = load_config(rotation_dir.path()).unwrap();
+    assert_eq!(new_config.monthly_limit_sats, 10_000_000);
     assert_eq!(rpc.scan_vault(&old_config).unwrap().len(), 0);
-    assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 1);
+    assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 12);
 }
 
 fn mine_until_next_height(rpc: &RegtestRpc, target_next_height: u64, address: &Address) {
