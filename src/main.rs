@@ -48,6 +48,16 @@ enum Command {
     },
     /// Return the difference between a claimed hard allowance and a lower soft limit to the vault.
     SoftLimit { month: String, soft_limit_sats: u64 },
+    /// Restore a deleted phone key from its HWW-encrypted cloud backup.
+    RestorePhone,
+    /// Sweep all currently mature vault UTXOs through one policy path.
+    Sweep {
+        #[arg(value_enum)]
+        path: CliSweepPath,
+        destination: String,
+    },
+    /// Cooperatively move all funds to a newly generated phone-key epoch.
+    RotatePhone,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -127,6 +137,13 @@ enum MonthlyAction {
     Revoke,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSweepPath {
+    Cooperative,
+    PhoneRecovery,
+    HwwRecovery,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -176,6 +193,16 @@ fn main() -> Result<()> {
             println!("Vault balance: {} sats", balance);
             if let Some(oldest) = utxos.first() {
                 println!("Oldest confirmation height: {}", oldest.confirmation_height);
+                print_recovery_activation(
+                    "Phone",
+                    oldest.confirmation_height + u64::from(config.phone_recovery_blocks),
+                    info.blocks + 1,
+                );
+                print_recovery_activation(
+                    "HWW",
+                    oldest.confirmation_height + u64::from(config.hww_recovery_blocks),
+                    info.blocks + 1,
+                );
             }
         }
         Command::HotAddress => {
@@ -305,8 +332,57 @@ fn main() -> Result<()> {
                 ),
             }
         }
+        Command::RestorePhone => {
+            let mnemonic = vault_cli::recovery::restore_phone_from_hww_backup(&cli.data_dir)?;
+            println!("Phone key restored from HWW-encrypted backup");
+            println!("Recovered phone mnemonic: {mnemonic}");
+        }
+        Command::Sweep { path, destination } => {
+            use bitcoin::Address;
+            use std::str::FromStr;
+            let destination =
+                Address::from_str(&destination)?.require_network(bitcoin::Network::Regtest)?;
+            let path = match path {
+                CliSweepPath::Cooperative => vault_cli::recovery::SweepPath::Cooperative,
+                CliSweepPath::PhoneRecovery => vault_cli::recovery::SweepPath::PhoneRecovery,
+                CliSweepPath::HwwRecovery => vault_cli::recovery::SweepPath::HwwRecovery,
+            };
+            let rpc = cli.rpc.connect()?;
+            let result = vault_cli::recovery::sweep(&cli.data_dir, &rpc, path, &destination)?;
+            println!("Vault sweep broadcast via {path:?}: {}", result.txid);
+            println!("Inputs: {}", result.input_count);
+            println!("Sent: {} sats", result.sent_sats);
+            println!("Fee: {} sats (1 sat/vB)", result.fee_sats);
+        }
+        Command::RotatePhone => {
+            let rpc = cli.rpc.connect()?;
+            let result = vault_cli::recovery::rotate_phone(&cli.data_dir, &rpc)?;
+            println!(
+                "Emergency phone-key rotation broadcast: {}",
+                result.sweep.txid
+            );
+            println!("Old vault address: {}", result.old_address);
+            println!("New vault address: {}", result.new_address);
+            println!("New phone mnemonic: {}", result.new_phone_mnemonic);
+            println!(
+                "Moved {} sats from {} inputs; fee={} sats",
+                result.sweep.sent_sats, result.sweep.input_count, result.sweep.fee_sats
+            );
+            println!("Old monthly authorizations are invalidated by the sweep");
+        }
     }
     Ok(())
+}
+
+fn print_recovery_activation(label: &str, valid_height: u64, next_height: u64) {
+    if next_height >= valid_height {
+        println!("{label} recovery: ACTIVE (valid next-block height {valid_height})");
+    } else {
+        println!(
+            "{label} recovery: valid next-block height {valid_height} ({} blocks remaining)",
+            valid_height - next_height
+        );
+    }
 }
 
 fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, batch_dir: &std::path::Path) {

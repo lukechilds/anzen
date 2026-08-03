@@ -2,10 +2,11 @@ use crate::state::VaultConfig;
 use anyhow::{Context, Result, bail};
 use bitcoin::{Address, Amount, BlockHash, Network, OutPoint, TxOut};
 use bitcoincore_rpc::{
-    Auth, Client, RpcApi,
+    Client, RpcApi,
     json::{GetBlockchainInfoResult, ScanTxOutRequest},
 };
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct RpcConfig {
@@ -27,16 +28,17 @@ pub struct VaultUtxo {
 
 impl RegtestRpc {
     pub fn connect(config: &RpcConfig) -> Result<Self> {
-        let client = Client::new(
-            &config.url,
-            Auth::UserPass(config.user.clone(), config.password.clone()),
-        )
-        .with_context(|| {
-            format!(
-                "failed to construct Bitcoin Core RPC client for {}",
-                config.url
-            )
-        })?;
+        // Real CSV recovery tests intentionally mine tens of thousands of blocks. Core can
+        // legitimately spend more than the jsonrpc crate's 15-second default on that request.
+        let transport = bitcoincore_rpc::jsonrpc::simple_http::Builder::new()
+            .url(&config.url)
+            .with_context(|| format!("invalid Bitcoin Core RPC URL {}", config.url))?
+            .auth(config.user.clone(), Some(config.password.clone()))
+            .timeout(Duration::from_secs(300))
+            .build();
+        let client = Client::from_jsonrpc(
+            bitcoincore_rpc::jsonrpc::client::Client::with_transport(transport),
+        );
         let rpc = Self { client };
         rpc.chain_info()?;
         Ok(rpc)

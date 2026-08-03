@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod hot;
 pub mod keys;
 pub mod policy;
+pub mod recovery;
 pub mod rpc;
 pub mod state;
 pub mod transactions;
