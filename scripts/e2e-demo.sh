@@ -68,6 +68,10 @@ step() {
     printf '\n--- %s ---\n' "$1"
 }
 
+success() {
+    printf '✅ %s\n' "$1"
+}
+
 show_command() {
     printf '$ vault-cli --data-dir %q' "$1"
     shift
@@ -263,6 +267,7 @@ advance_calendar_to() {
         exit 1
     fi
     printf 'Regtest calendar is now beyond %s.\n' "$target_display"
+    success "$label complete."
 }
 
 init_vault() {
@@ -310,6 +315,7 @@ setup_vault() {
     vault_capture hot_output "$MAIN" hot-address
     MINING_ADDRESS=$(printf '%s\n' "$hot_output" | awk '/^Hot receive address:/ {print $4}')
     vault "$MAIN" node set-time "$NOW"
+    success "Phone, HWW, hot wallet, and vault configured."
 
     step "Mine spendable regtest coins and fund the vault"
     mine_blocks 101 "Creating spendable regtest coins"
@@ -318,6 +324,7 @@ setup_vault() {
     mine_blocks 1 "Confirming the vault funding transaction"
     FUNDING_HEIGHT=$(node_height)
     status_compact
+    success "Vault funding confirmed."
 }
 
 make_receiver() {
@@ -330,6 +337,7 @@ make_receiver() {
     vault-cli --data-dir "$receiver_dir" init --hard-limit-sats "$DEFAULT_HARD_LIMIT_SATS" >/dev/null
     vault_capture receiver_output "$receiver_dir" hot-address
     printf -v "$variable_name" '%s' "$(printf '%s\n' "$receiver_output" | awk '/^Hot receive address:/ {print $4}')"
+    success "$label receiving address ready."
 }
 
 confirm_transaction() {
@@ -343,6 +351,7 @@ flow_setup_policy() {
     show_backup_metadata
     vault "$MAIN" policy
     printf 'Policy timestamps are derived from the current UTC date when a ceremony begins.\n'
+    success "Vault policy configured and verified."
 }
 
 flow_monthly_spend() {
@@ -357,15 +366,22 @@ flow_monthly_spend() {
     printf 'First allowance: %s at %s.\n' \
         "$first_month" "$(date -u -d "@$first_unlock" '+%Y-%m-%d %H:%M:%S UTC')"
     printf 'Each authorization and revocation is stored as its own phone-key-encrypted artifact.\n'
+    success "Twelve monthly transaction pairs presigned."
 
+    step "Attempt the first allowance before it unlocks"
     expect_failure "the allowance is locked before 00:00 UTC on the first of its month" \
         "$MAIN" monthly "$first_month" authorize
+    success "Pre-unlock allowance correctly rejected."
+
     advance_calendar_to "$first_unlock" "Fast-forward to the first monthly allowance"
+
+    step "Execute the allowance with a lower soft limit"
     vault "$MAIN" monthly "$first_month" authorize
     vault "$MAIN" soft-limit "$first_month" 1000000
     confirm_transaction "Confirming the authorization and soft-limit return"
     printf 'The 0.1 BTC hard allowance retained 0.01 BTC hot and returned 0.09 BTC to cold storage (fees paid from hot funds).\n'
     status_compact
+    success "0.01 BTC retained; 0.09 BTC returned cold."
 }
 
 flow_monthly_revoke() {
@@ -379,16 +395,21 @@ flow_monthly_revoke() {
     second_month=$(jq -r '.entries[1].month' "$MAIN/phone/schedule.json")
     second_unlock=$(jq -r '.entries[1].unlock_timestamp' "$MAIN/phone/schedule.json")
     revoke_time=$((first_unlock + 14 * 24 * 60 * 60))
+    success "Twelve monthly transaction pairs presigned."
 
     advance_calendar_to "$revoke_time" "Fast-forward two weeks into the first allowance month"
     step "Revoke the next month's allowance from the phone before it unlocks"
     vault "$MAIN" monthly "$second_month" revoke
     confirm_transaction "Confirming the phone-only revocation"
     printf 'The %s chunk returned to the static vault before its allowance became spendable.\n' "$second_month"
+    success "Future allowance revoked back to the vault."
 
     advance_calendar_to "$second_unlock" "Fast-forward to the revoked allowance month"
+
+    step "Attempt the revoked monthly allowance"
     expect_failure "the authorization conflicts with the already-confirmed revocation" \
         "$MAIN" monthly "$second_month" authorize
+    success "Revoked allowance remained unspendable."
 }
 
 flow_partial_funding() {
@@ -397,6 +418,7 @@ flow_partial_funding() {
     ceremony "$NOW"
     confirm_transaction "Confirming the partial annual rollover"
     status_compact
+    success "Earliest three allowances funded; rollover continued."
 }
 
 flow_lost_phone() {
@@ -408,6 +430,7 @@ flow_lost_phone() {
     show_file_command rm -- "$MAIN/phone/device.json"
     rm -- "$MAIN/phone/device.json"
     expect_failure "the hot wallet cannot open without its phone key" "$MAIN" hot-address
+    success "Phone loss detected; wallet access blocked."
 
     step "Use the HWW to decrypt the cloud backup, then rotate the phone key"
     vault "$MAIN" restore-phone
@@ -419,12 +442,14 @@ flow_lost_phone() {
     fi
     confirm_transaction "Confirming emergency key rotation"
     vault "$MAIN" status
+    success "Phone restored and vault key rotated."
 
     step "Create a fresh annual schedule for the new phone-key epoch"
     current_mtp=$(node_mtp)
     ceremony "$current_mtp"
     confirm_transaction "Confirming the renewed annual rollover"
     vault "$MAIN" status
+    success "Annual schedule renewed for the new phone."
 }
 
 flow_stolen_phone() {
@@ -443,6 +468,7 @@ flow_stolen_phone() {
         "$attacker_dir" sweep cooperative "$attacker_address"
     expect_failure "the stolen phone recovery path is not mature" \
         "$attacker_dir" sweep phone-recovery "$attacker_address"
+    success "Hot funds exposed; cold vault remained protected."
 
     step "The owner restores the phone backup with the HWW and rotates immediately"
     show_file_command rm -- "$MAIN/phone/device.json"
@@ -451,6 +477,7 @@ flow_stolen_phone() {
     vault "$MAIN" rotate-phone
     confirm_transaction "Confirming emergency key rotation"
     vault "$MAIN" status
+    success "Owner restored and rotated away from stolen key."
 }
 
 flow_lost_hww() {
@@ -464,8 +491,11 @@ flow_lost_hww() {
     unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
     show_file_command rm -- "$MAIN/hww/device.json"
     rm -- "$MAIN/hww/device.json"
+    success "Annual schedule presigned before HWW loss."
 
     advance_calendar_to "$unlock" "Fast-forward to a presigned monthly allowance"
+
+    step "Use the phone-held allowance without the HWW"
     vault "$MAIN" monthly "$month" authorize
     confirm_transaction "Confirming the phone-held monthly authorization"
     vault_capture recovery_address "$MAIN" hot-address
@@ -474,12 +504,14 @@ flow_lost_hww() {
     target=$((latest_height + PHONE_RECOVERY_BLOCKS))
     expect_failure "phone-only recovery is not mature yet" \
         "$MAIN" sweep phone-recovery "$recovery_address"
+    success "Monthly spend worked; early recovery stayed locked."
 
     step "Wait for phone-only recovery"
     mine_to_next_height "$target" "Mining the real 61,200-block phone recovery delay"
     vault "$MAIN" sweep phone-recovery "$recovery_address"
     confirm_transaction "Confirming the phone-only recovery sweep"
     status_compact
+    success "Phone recovered the full remaining vault balance."
 }
 
 flow_stolen_hww() {
@@ -499,18 +531,21 @@ flow_stolen_hww() {
     rm -- "$MAIN/hww/device.json"
     expect_failure "HWW recovery is still inside the phone-priority window" \
         "$attacker_dir" sweep hww-recovery "$attacker_address"
+    success "Stolen HWW blocked during phone-priority window."
 
     phone_target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
     step "The legitimate phone reaches its earlier recovery window"
     mine_to_next_height "$phone_target" "Mining the real 61,200-block phone recovery delay"
     vault "$MAIN" sweep phone-recovery "$owner_address"
     confirm_transaction "Confirming the legitimate phone recovery sweep"
+    success "Legitimate phone recovered funds first."
 
     hww_target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
     step "The stolen HWW eventually reaches its later recovery window"
     mine_to_next_height "$hww_target" "Mining the remaining blocks to HWW recovery"
     expect_failure "the legitimate phone already spent the old vault output" \
         "$attacker_dir" sweep hww-recovery "$attacker_address"
+    success "Stolen HWW reached maturity too late."
 }
 
 flow_lost_phone_no_cloud() {
@@ -524,6 +559,7 @@ flow_lost_phone_no_cloud() {
     expect_failure "there is no encrypted phone backup to restore" "$MAIN" restore-phone
     expect_failure "the HWW fallback is not mature yet" \
         "$MAIN" sweep hww-recovery "$recovery_address"
+    success "Missing backup confirmed; early HWW recovery blocked."
 
     target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
     step "Wait for HWW-only recovery"
@@ -531,6 +567,7 @@ flow_lost_phone_no_cloud() {
     vault "$MAIN" sweep hww-recovery "$recovery_address"
     confirm_transaction "Confirming the HWW-only recovery sweep"
     status_compact
+    success "Surviving HWW recovered the vault after maturity."
 }
 
 flow_both_lost() {
@@ -542,6 +579,7 @@ flow_both_lost() {
     show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
     rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
     expect_failure "the backup cannot be decrypted without the HWW" "$MAIN" restore-phone
+    success "Both device keys lost; backup cannot be decrypted."
 
     target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
     step "Wait until every consensus recovery path is mature"
@@ -549,6 +587,7 @@ flow_both_lost() {
     expect_failure "no surviving key can sign either mature recovery path" \
         "$MAIN" sweep hww-recovery "$recovery_address"
     printf 'Without the optional social-recovery mechanism (outside MVP scope), the funds are unrecoverable.\n'
+    success "Mature funds remain unrecoverable without a key."
 }
 
 flow_cloud_compromise() {
@@ -567,6 +606,7 @@ flow_cloud_compromise() {
     expect_failure "cloud ciphertext alone cannot restore the phone" "$attacker_dir" restore-phone
     expect_failure "cloud ciphertext alone cannot sign a cooperative sweep" \
         "$attacker_dir" sweep cooperative "$attacker_address"
+    success "Cloud ciphertext revealed no spending capability."
 }
 
 flow_both_compromised() {
@@ -581,6 +621,7 @@ flow_both_compromised() {
     vault "$attacker_dir" sweep cooperative "$attacker_address"
     confirm_transaction "Confirming the attacker's immediate cooperative sweep"
     status_compact
+    success "Both compromised keys drained the vault immediately."
 }
 
 flow_rollover_forgotten() {
@@ -597,12 +638,14 @@ flow_rollover_forgotten() {
     hww_target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
     mine_to_next_height "$hww_target" "Mining until HWW-only recovery also activates"
     vault "$MAIN" status
+    success "Forgotten rollover exposed both recovery paths."
 
     step "Perform a late cooperative rollover to renew both timers"
     current_mtp=$(node_mtp)
     ceremony "$current_mtp"
     confirm_transaction "Confirming the late annual rollover"
     vault "$MAIN" status
+    success "Late rollover renewed both recovery timers."
 }
 
 if (( $(node_height) != 0 )); then
