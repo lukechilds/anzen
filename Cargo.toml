@@ -1,0 +1,35 @@
+[package]
+name = "vault-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Regtest MVP for a renewable Bitcoin vault with bounded mobile spending"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+bdk_bitcoind_rpc = "0.22.0"
+bdk_wallet = { version = "3.1.0", features = ["keys-bip39", "rusqlite"] }
+bitcoin = { version = "0.32.9", features = ["base64", "rand-std", "serde"] }
+bitcoincore-rpc = "0.19.0"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+hkdf = "0.12"
+miniscript = { version = "12.3.5", features = ["serde"] }
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+zeroize = { version = "1.8", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.23"
+
+[profile.release]
+lto = "thin"
+strip = true
+
