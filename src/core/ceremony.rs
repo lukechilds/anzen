@@ -1,23 +1,16 @@
-use crate::{
+use super::{
     DEFAULT_FEE_RATE_SAT_VB, MONTHS_PER_ROLLOVER,
-    crypto::{self, EncryptedBlob},
-    hot::HotWallet,
+    crypto::EncryptedBlob,
     keys::DeviceKeys,
     policy::{SpendPath, VaultPolicy},
-    rpc::{Blockchain, VaultUtxo},
-    state::{
-        HWW_DEVICE_FILE, PHONE_DEVICE_FILE, VaultConfig, load_config, load_device_keys, read_json,
-        write_json, write_private,
-    },
-    transactions::{
-        create_vault_psbt, estimate_vault_vsize, finalize_vault_psbt, sign_vault_psbt,
-        verify_vault_psbt_signature,
-    },
+    storage::{VaultConfig, read_json, write_json, write_private},
+    transactions::{create_vault_psbt, estimate_vault_vsize, sign_vault_psbt},
+    types::VaultUtxo,
 };
 use anyhow::{Context, Result, bail};
 use bitcoin::{
-    Address, Amount, OutPoint, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
-    absolute, consensus, transaction::Version,
+    Address, Amount, OutPoint, Psbt, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness,
+    absolute, transaction::Version,
 };
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -84,15 +77,6 @@ pub enum TransactionKind {
     Revocation,
 }
 
-impl TransactionKind {
-    fn file_stem(self) -> &'static str {
-        match self {
-            Self::Authorization => "authorization",
-            Self::Revocation => "revocation",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleEntry {
     pub month: String,
@@ -118,6 +102,11 @@ pub struct PolicyPackage {
     pub kind: String,
     pub manifest: BatchManifest,
     pub psbts: BTreeMap<String, String>,
+}
+
+/// Supplies fresh phone receive addresses without coupling the protocol rules to a wallet SDK.
+pub trait HotAddressProvider {
+    fn next_receive_address(&mut self) -> Result<Address>;
 }
 
 pub fn default_batch_path(data_dir: &Path) -> PathBuf {
@@ -174,55 +163,14 @@ pub fn materialize_policy_package(package: &PolicyPackage, batch_dir: &Path) -> 
     Ok(())
 }
 
-pub fn prepare(
-    data_dir: &Path,
-    backend: &dyn Blockchain,
-    now: DateTime<Utc>,
-    monthly_limit_sats: u64,
-    batch_dir: &Path,
-) -> Result<BatchManifest> {
-    let config = load_config(data_dir)?;
-    ensure_backend_network(backend, &config)?;
-    let utxos = backend.scan_vault(&config)?;
-    prepare_from_utxos(
-        data_dir,
-        &config,
-        &utxos,
-        now,
-        monthly_limit_sats,
-        batch_dir,
-    )
-}
-
-pub fn prepare_from_utxos(
-    data_dir: &Path,
-    config: &VaultConfig,
-    utxos: &[VaultUtxo],
-    now: DateTime<Utc>,
-    monthly_limit_sats: u64,
-    batch_dir: &Path,
-) -> Result<BatchManifest> {
-    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-    let mut hot = HotWallet::open_or_create(data_dir)?;
-    prepare_from_utxos_for_phone(
-        config,
-        utxos,
-        now,
-        monthly_limit_sats,
-        batch_dir,
-        &phone,
-        &mut hot,
-    )
-}
-
-pub(crate) fn prepare_from_utxos_for_phone(
+pub fn build_policy_proposal(
     config: &VaultConfig,
     utxos: &[VaultUtxo],
     now: DateTime<Utc>,
     monthly_limit_sats: u64,
     batch_dir: &Path,
     phone: &DeviceKeys,
-    hot: &mut HotWallet,
+    hot: &mut impl HotAddressProvider,
 ) -> Result<BatchManifest> {
     if utxos.is_empty() {
         bail!("vault has no confirmed UTXOs to roll over");
@@ -450,182 +398,6 @@ pub fn load_manifest(batch_dir: &Path) -> Result<BatchManifest> {
     read_json(&batch_dir.join("manifest.json"))
 }
 
-pub fn approve_hww(data_dir: &Path, batch_dir: &Path) -> Result<BatchManifest> {
-    let config = load_config(data_dir)?;
-    approve_hww_for_config(data_dir, &config, batch_dir)
-}
-
-pub(crate) fn approve_hww_for_config(
-    data_dir: &Path,
-    config: &VaultConfig,
-    batch_dir: &Path,
-) -> Result<BatchManifest> {
-    let mut manifest = load_manifest(batch_dir)?;
-    let policy = validate_batch(config, &manifest, batch_dir)?;
-    let phone_pubkey = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
-    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
-    if hww.vault_pubkey.to_string() != config.hww_vault_pubkey {
-        bail!("HWW key does not match the configured vault policy");
-    }
-
-    for transaction in manifest_transactions(&manifest) {
-        let path = batch_dir.join(&transaction.psbt_file);
-        let mut psbt = read_psbt(&path)?;
-        verify_vault_psbt_signature(&psbt, &policy, SpendPath::Cooperative, phone_pubkey)?;
-        sign_vault_psbt(
-            &mut psbt,
-            &policy,
-            SpendPath::Cooperative,
-            &hww.vault_keypair,
-        )?;
-        write_psbt(&path, &psbt)?;
-    }
-    manifest.hww_approved = true;
-    write_json(&batch_dir.join("manifest.json"), &manifest)?;
-    Ok(manifest)
-}
-
-pub fn finalize_and_broadcast(
-    data_dir: &Path,
-    backend: &dyn Blockchain,
-    batch_dir: &Path,
-) -> Result<Schedule> {
-    let config = load_config(data_dir)?;
-    ensure_backend_network(backend, &config)?;
-    let manifest = load_manifest(batch_dir)?;
-    if !manifest.phone_approved || !manifest.hww_approved {
-        bail!("both phone and HWW approval are required before finalization");
-    }
-    let _policy = validate_batch(&config, &manifest, batch_dir)?;
-    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-
-    let rollover_psbt = read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?;
-    let rollover_tx = finalize_vault_psbt(rollover_psbt)?;
-    let mut entries = Vec::with_capacity(manifest.months.len());
-    for month in &manifest.months {
-        let authorization =
-            finalize_vault_psbt(read_psbt(&batch_dir.join(&month.authorization.psbt_file))?)?;
-        let revocation =
-            finalize_vault_psbt(read_psbt(&batch_dir.join(&month.revocation.psbt_file))?)?;
-        let authorization_path =
-            encrypted_transaction_path(data_dir, &month.month, TransactionKind::Authorization);
-        let revocation_path =
-            encrypted_transaction_path(data_dir, &month.month, TransactionKind::Revocation);
-        write_encrypted_transaction(
-            &authorization_path,
-            &phone.seed,
-            &month.month,
-            TransactionKind::Authorization,
-            Some(month.unlock_timestamp),
-            &authorization,
-        )?;
-        write_encrypted_transaction(
-            &revocation_path,
-            &phone.seed,
-            &month.month,
-            TransactionKind::Revocation,
-            None,
-            &revocation,
-        )?;
-        entries.push(ScheduleEntry {
-            month: month.month.clone(),
-            unlock_timestamp: month.unlock_timestamp,
-            hot_address: month.hot_address.clone(),
-            authorization_file: relative_to(data_dir, &authorization_path)?,
-            authorization_txid: authorization.compute_txid().to_string(),
-            revocation_file: relative_to(data_dir, &revocation_path)?,
-            revocation_txid: revocation.compute_txid().to_string(),
-        });
-    }
-    let schedule = Schedule {
-        version: 1,
-        rollover_txid: rollover_tx.compute_txid().to_string(),
-        monthly_limit_sats: manifest.monthly_limit_sats,
-        entries,
-    };
-    write_json(&data_dir.join(SCHEDULE_FILE), &schedule)?;
-    backend
-        .broadcast(&rollover_tx)
-        .context("failed to broadcast rollover transaction")?;
-    Ok(schedule)
-}
-
-pub fn load_schedule(data_dir: &Path) -> Result<Schedule> {
-    read_json(&data_dir.join(SCHEDULE_FILE))
-}
-
-pub fn broadcast_monthly(
-    data_dir: &Path,
-    backend: &dyn Blockchain,
-    month: &str,
-    kind: TransactionKind,
-) -> Result<Txid> {
-    let schedule = load_schedule(data_dir)?;
-    let entry = schedule
-        .entries
-        .iter()
-        .find(|entry| entry.month == month)
-        .with_context(|| format!("no monthly authorization exists for {month}"))?;
-    let file = match kind {
-        TransactionKind::Authorization => &entry.authorization_file,
-        TransactionKind::Revocation => &entry.revocation_file,
-    };
-    let config = load_config(data_dir)?;
-    ensure_backend_network(backend, &config)?;
-    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-    let artifact: EncryptedTransaction = read_json(&data_dir.join(file))?;
-    if artifact.month != month || artifact.kind != kind {
-        bail!("encrypted monthly transaction metadata does not match the requested action");
-    }
-    let purpose = transaction_purpose(month, kind, &artifact.txid);
-    let plaintext = crypto::decrypt(&phone.seed, &purpose, &artifact.encrypted_transaction)?;
-    let transaction: Transaction =
-        consensus::deserialize(&plaintext).context("decrypted monthly transaction was invalid")?;
-    if transaction.compute_txid().to_string() != artifact.txid {
-        bail!("decrypted monthly transaction ID does not match its metadata");
-    }
-    // TODO(production): revocations need a phone-available CPFP path. The fixed 1 sat/vB MVP fee
-    // is deterministic on regtest and explicitly unsafe under dangerously enabled mainnet mode.
-    backend
-        .broadcast(&transaction)
-        .with_context(|| format!("failed to broadcast {kind:?} for {month}"))
-}
-
-pub fn apply_soft_limit(
-    data_dir: &Path,
-    backend: &dyn Blockchain,
-    month: &str,
-    soft_limit_sats: u64,
-) -> Result<Option<Txid>> {
-    let schedule = load_schedule(data_dir)?;
-    let config = load_config(data_dir)?;
-    ensure_backend_network(backend, &config)?;
-    let entry = schedule
-        .entries
-        .iter()
-        .find(|entry| entry.month == month)
-        .with_context(|| format!("no monthly authorization exists for {month}"))?;
-    let authorization_txid = Txid::from_str(&entry.authorization_txid)?;
-    let mut hot = HotWallet::open_or_create(data_dir)?;
-    backend.sync_hot_wallet(&mut hot)?;
-    let transaction = hot.build_soft_limit_return(
-        OutPoint::new(authorization_txid, 0),
-        schedule.monthly_limit_sats,
-        soft_limit_sats,
-        Address::from_str(&config.vault_address)?
-            .require_network(config.bitcoin_network()?)?
-            .script_pubkey(),
-    )?;
-    match transaction {
-        Some(transaction) => {
-            Ok(Some(backend.broadcast(&transaction).context(
-                "failed to broadcast soft-limit cold-return transaction",
-            )?))
-        }
-        None => Ok(None),
-    }
-}
-
 pub fn validate_batch(
     config: &VaultConfig,
     manifest: &BatchManifest,
@@ -744,18 +516,6 @@ pub fn validate_batch(
         }
     }
     Ok(policy)
-}
-
-fn ensure_backend_network(backend: &dyn Blockchain, config: &VaultConfig) -> Result<()> {
-    let expected = config.bitcoin_network()?;
-    if backend.network() != expected {
-        bail!(
-            "chain backend network {} does not match vault network {}",
-            backend.network(),
-            config.network
-        );
-    }
-    Ok(())
 }
 
 fn validate_child_common(
@@ -924,17 +684,17 @@ fn next_month_starts(now: DateTime<Utc>, count: usize) -> Result<Vec<(String, u3
     Ok(result)
 }
 
-fn write_psbt(path: &Path, psbt: &Psbt) -> Result<()> {
+pub fn write_psbt(path: &Path, psbt: &Psbt) -> Result<()> {
     write_private(path, format!("{psbt}\n").as_bytes())
 }
 
-fn read_psbt(path: &Path) -> Result<Psbt> {
+pub fn read_psbt(path: &Path) -> Result<Psbt> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("failed to read PSBT {}", path.display()))?;
     Psbt::from_str(text.trim()).with_context(|| format!("invalid PSBT in {}", path.display()))
 }
 
-fn manifest_transactions(manifest: &BatchManifest) -> Vec<&BatchTransaction> {
+pub fn manifest_transactions(manifest: &BatchManifest) -> Vec<&BatchTransaction> {
     let mut transactions = Vec::with_capacity(1 + manifest.months.len() * 2);
     transactions.push(&manifest.rollover);
     for month in &manifest.months {
@@ -944,54 +704,40 @@ fn manifest_transactions(manifest: &BatchManifest) -> Vec<&BatchTransaction> {
     transactions
 }
 
-fn encrypted_transaction_path(data_dir: &Path, month: &str, kind: TransactionKind) -> PathBuf {
-    data_dir.join(format!(
-        "phone/transactions/{month}-{}.json",
-        kind.file_stem()
-    ))
-}
-
-fn write_encrypted_transaction(
-    path: &Path,
-    phone_seed: &[u8],
-    month: &str,
-    kind: TransactionKind,
-    unlock_timestamp: Option<u32>,
-    transaction: &Transaction,
-) -> Result<()> {
-    let txid = transaction.compute_txid().to_string();
-    let purpose = transaction_purpose(month, kind, &txid);
-    let blob = crypto::encrypt(phone_seed, &purpose, &consensus::serialize(transaction))?;
-    write_json(
-        path,
-        &EncryptedTransaction {
-            version: 1,
-            month: month.to_owned(),
-            kind,
-            txid,
-            unlock_timestamp,
-            encrypted_transaction: blob,
-        },
-    )
-}
-
-fn transaction_purpose(month: &str, kind: TransactionKind, txid: &str) -> String {
-    format!("monthly/{month}/{}/{txid}", kind.file_stem())
-}
-
-fn relative_to(base: &Path, path: &Path) -> Result<String> {
-    Ok(path
-        .strip_prefix(base)
-        .with_context(|| format!("{} is outside {}", path.display(), base.display()))?
-        .to_string_lossy()
-        .into_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{initialize, initialize_for_network};
-    use bitcoin::{Network, hashes::Hash};
+    use crate::{
+        cold_wallet,
+        core::{
+            storage::{PHONE_DEVICE_FILE, load_device_keys},
+            transactions::finalize_vault_psbt,
+        },
+        hot_wallet::HotWallet,
+        test_support::{initialize, initialize_for_network},
+    };
+    use bitcoin::{Network, Txid, hashes::Hash};
+
+    fn prepare_from_utxos(
+        data_dir: &Path,
+        config: &VaultConfig,
+        utxos: &[VaultUtxo],
+        now: DateTime<Utc>,
+        monthly_limit_sats: u64,
+        batch_dir: &Path,
+    ) -> Result<BatchManifest> {
+        let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+        let mut hot = HotWallet::open_or_create(data_dir)?;
+        build_policy_proposal(
+            config,
+            utxos,
+            now,
+            monthly_limit_sats,
+            batch_dir,
+            &phone,
+            &mut hot,
+        )
+    }
 
     fn fake_utxo(config: &VaultConfig, sats: u64) -> VaultUtxo {
         VaultUtxo {
@@ -1078,7 +824,7 @@ mod tests {
             &batch,
         )
         .unwrap();
-        let approved = approve_hww(dir.path(), &batch).unwrap();
+        let approved = cold_wallet::approve_policy(dir.path(), &batch).unwrap();
         assert!(approved.phone_approved);
         assert!(approved.hww_approved);
         for transaction in manifest_transactions(&approved) {
@@ -1107,7 +853,7 @@ mod tests {
         let mut psbt = read_psbt(&path).unwrap();
         psbt.unsigned_tx.output[0].value = Amount::from_sat(10_000_001);
         write_psbt(&path, &psbt).unwrap();
-        assert!(approve_hww(dir.path(), &batch).is_err());
+        assert!(cold_wallet::approve_policy(dir.path(), &batch).is_err());
     }
 
     #[test]
@@ -1152,7 +898,7 @@ mod tests {
                 .iter()
                 .all(|month| month.hot_address.starts_with("bc1p"))
         );
-        let approved = approve_hww(dir.path(), &batch).unwrap();
+        let approved = cold_wallet::approve_policy(dir.path(), &batch).unwrap();
         assert!(approved.hww_approved);
     }
 

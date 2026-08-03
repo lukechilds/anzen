@@ -2,13 +2,13 @@ use bitcoin::{Address, Network};
 use chrono::{DateTime, Utc};
 use std::{env, str::FromStr};
 use vault_cli::{
-    ceremony::{
-        TransactionKind, apply_soft_limit, approve_hww, broadcast_monthly, finalize_and_broadcast,
-        prepare,
+    cold_wallet,
+    core::{
+        ceremony::TransactionKind,
+        chain::{RegtestRpc, RpcConfig},
+        storage::initialize_vault,
     },
-    hot::HotWallet,
-    rpc::{RegtestRpc, RpcConfig},
-    state::initialize,
+    hot_wallet::{self, HotWallet},
 };
 
 fn rpc_from_env() -> RegtestRpc {
@@ -24,9 +24,11 @@ fn rpc_from_env() -> RegtestRpc {
 #[ignore = "requires a disposable Bitcoin Core regtest node"]
 fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let initialized = initialize(dir.path()).unwrap();
+    hot_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    cold_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    let config = initialize_vault(dir.path()).unwrap();
     let rpc = rpc_from_env();
-    let vault_address = Address::from_str(&initialized.config.vault_address)
+    let vault_address = Address::from_str(&config.vault_address)
         .unwrap()
         .require_network(Network::Regtest)
         .unwrap();
@@ -35,23 +37,24 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
 
     rpc.mine(1, &vault_address).unwrap();
     rpc.mine(100, &mining_address).unwrap();
-    assert_eq!(rpc.scan_vault(&initialized.config).unwrap().len(), 1);
+    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 1);
 
     let chain_time = rpc.chain_info().unwrap().median_time as i64;
     let captured_now = Utc::now().timestamp().max(chain_time);
     let now = DateTime::from_timestamp(captured_now, 0).unwrap();
     let batch_dir = dir.path().join("batch");
-    let prepared = prepare(dir.path(), &rpc, now, 10_000_000, &batch_dir).unwrap();
+    let prepared =
+        hot_wallet::propose_policy(dir.path(), &rpc, now, 10_000_000, &batch_dir).unwrap();
     assert_eq!(prepared.chunk_count, 12);
-    let approved = approve_hww(dir.path(), &batch_dir).unwrap();
+    let approved = cold_wallet::approve_policy(dir.path(), &batch_dir).unwrap();
     assert!(approved.hww_approved);
-    let schedule = finalize_and_broadcast(dir.path(), &rpc, &batch_dir).unwrap();
+    let schedule = hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
     rpc.mine(1, &mining_address).unwrap();
-    assert_eq!(rpc.scan_vault(&initialized.config).unwrap().len(), 12);
+    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 12);
 
     let first = schedule.entries[0].clone();
     let second = schedule.entries[1].clone();
-    let premature = broadcast_monthly(
+    let premature = hot_wallet::broadcast_monthly(
         dir.path(),
         &rpc,
         &first.month,
@@ -60,11 +63,12 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     .unwrap_err();
     assert!(format!("{premature:#}").contains("non-final"));
 
-    broadcast_monthly(dir.path(), &rpc, &second.month, TransactionKind::Revocation).unwrap();
+    hot_wallet::broadcast_monthly(dir.path(), &rpc, &second.month, TransactionKind::Revocation)
+        .unwrap();
     rpc.mine(1, &mining_address).unwrap();
 
     advance_mtp(&rpc, first.unlock_timestamp, &mining_address);
-    broadcast_monthly(
+    hot_wallet::broadcast_monthly(
         dir.path(),
         &rpc,
         &first.month,
@@ -72,14 +76,14 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     )
     .unwrap();
     rpc.mine(1, &mining_address).unwrap();
-    let soft_return = apply_soft_limit(dir.path(), &rpc, &first.month, 1_000_000)
+    let soft_return = hot_wallet::apply_soft_limit(dir.path(), &rpc, &first.month, 1_000_000)
         .unwrap()
         .unwrap();
     assert_ne!(soft_return.to_string(), first.authorization_txid);
     rpc.mine(1, &mining_address).unwrap();
 
     advance_mtp(&rpc, second.unlock_timestamp, &mining_address);
-    let revoked = broadcast_monthly(
+    let revoked = hot_wallet::broadcast_monthly(
         dir.path(),
         &rpc,
         &second.month,

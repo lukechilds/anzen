@@ -1,15 +1,33 @@
 use bitcoin::{Address, Network};
 use std::{env, fs, str::FromStr};
 use vault_cli::{
-    HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
-    hot::HotWallet,
-    recovery::{SweepPath, restore_phone_from_hww_backup, rotate_phone, sweep},
-    rpc::{RegtestRpc, RpcConfig},
-    state::{
-        HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, initialize, load_config,
-        recover_phone_mnemonic, set_monthly_limit,
+    cold_wallet,
+    core::{
+        HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
+        chain::{Blockchain, RegtestRpc, RpcConfig},
+        recovery::SweepResult,
+        storage::{
+            HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, VaultConfig, initialize_vault,
+            load_config, set_monthly_limit,
+        },
     },
+    hot_wallet::{self, HotWallet},
 };
+
+struct InitializedVault {
+    config: VaultConfig,
+    phone_mnemonic: String,
+}
+
+fn initialize(data_dir: &std::path::Path) -> InitializedVault {
+    let phone = hot_wallet::initialize(data_dir, Network::Regtest).unwrap();
+    cold_wallet::initialize(data_dir, Network::Regtest).unwrap();
+    let config = initialize_vault(data_dir).unwrap();
+    InitializedVault {
+        config,
+        phone_mnemonic: phone.mnemonic,
+    }
+}
 
 fn rpc_from_env() -> RegtestRpc {
     RegtestRpc::connect(&RpcConfig {
@@ -27,6 +45,34 @@ fn address(text: &str) -> Address {
         .unwrap()
 }
 
+fn phone_recover(
+    data_dir: &std::path::Path,
+    rpc: &RegtestRpc,
+    destination: &Address,
+) -> anyhow::Result<SweepResult> {
+    let config = load_config(data_dir)?;
+    let tip = rpc.chain_tip()?;
+    let utxos = rpc.scan_vault(&config)?;
+    let (transaction, result) =
+        hot_wallet::recover(data_dir, &config, &utxos, tip.height, destination)?;
+    rpc.broadcast(&transaction)?;
+    Ok(result)
+}
+
+fn hww_recover(
+    data_dir: &std::path::Path,
+    rpc: &RegtestRpc,
+    destination: &Address,
+) -> anyhow::Result<SweepResult> {
+    let config = load_config(data_dir)?;
+    let tip = rpc.chain_tip()?;
+    let utxos = rpc.scan_vault(&config)?;
+    let (transaction, result) =
+        cold_wallet::recover(data_dir, &config, &utxos, tip.height, destination)?;
+    rpc.broadcast(&transaction)?;
+    Ok(result)
+}
+
 #[test]
 #[ignore = "requires a disposable Bitcoin Core regtest node and mines 65,535 blocks"]
 fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
@@ -34,9 +80,9 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     let phone_dir = tempfile::tempdir().unwrap();
     let hww_dir = tempfile::tempdir().unwrap();
     let rotation_dir = tempfile::tempdir().unwrap();
-    let phone_vault = initialize(phone_dir.path()).unwrap();
-    let hww_vault = initialize(hww_dir.path()).unwrap();
-    let rotation_vault = initialize(rotation_dir.path()).unwrap();
+    let phone_vault = initialize(phone_dir.path());
+    let hww_vault = initialize(hww_dir.path());
+    let rotation_vault = initialize(rotation_dir.path());
     let mut phone_hot = HotWallet::open_or_create(phone_dir.path()).unwrap();
     let destination = phone_hot.next_receive_address().unwrap();
 
@@ -50,13 +96,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
         .unwrap();
     rpc.mine(100, &destination).unwrap();
 
-    let early_phone = sweep(
-        phone_dir.path(),
-        &rpc,
-        SweepPath::PhoneRecovery,
-        &destination,
-    )
-    .unwrap_err();
+    let early_phone = phone_recover(phone_dir.path(), &rpc, &destination).unwrap_err();
     assert!(
         format!("{early_phone:#}").contains("blocks remaining"),
         "{early_phone:#}"
@@ -67,19 +107,13 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
         phone_confirmation + u64::from(PHONE_RECOVERY_BLOCKS),
         &destination,
     );
-    let phone_sweep = sweep(
-        phone_dir.path(),
-        &rpc,
-        SweepPath::PhoneRecovery,
-        &destination,
-    )
-    .unwrap();
+    let phone_sweep = phone_recover(phone_dir.path(), &rpc, &destination).unwrap();
     assert_eq!(phone_sweep.input_count, 1);
     rpc.mine(1, &destination).unwrap();
 
     fs::remove_file(hww_dir.path().join(PHONE_DEVICE_FILE)).unwrap();
     fs::remove_file(hww_dir.path().join(PHONE_BACKUP_FILE)).unwrap();
-    let early_hww = sweep(hww_dir.path(), &rpc, SweepPath::HwwRecovery, &destination).unwrap_err();
+    let early_hww = hww_recover(hww_dir.path(), &rpc, &destination).unwrap_err();
     assert!(
         format!("{early_hww:#}").contains("blocks remaining"),
         "{early_hww:#}"
@@ -90,20 +124,28 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
         hww_confirmation + u64::from(HWW_RECOVERY_BLOCKS),
         &destination,
     );
-    let hww_sweep = sweep(hww_dir.path(), &rpc, SweepPath::HwwRecovery, &destination).unwrap();
+    let hww_sweep = hww_recover(hww_dir.path(), &rpc, &destination).unwrap();
     assert_eq!(hww_sweep.input_count, 1);
     rpc.mine(1, &destination).unwrap();
 
     fs::remove_file(rotation_dir.path().join(PHONE_DEVICE_FILE)).unwrap();
-    let restored = restore_phone_from_hww_backup(rotation_dir.path()).unwrap();
+    let recovery = cold_wallet::decrypt_phone_backup_package(
+        rotation_dir.path(),
+        &rotation_dir.path().join(PHONE_BACKUP_FILE),
+    )
+    .unwrap();
+    let restored = hot_wallet::restore_phone(rotation_dir.path(), &recovery).unwrap();
     assert_eq!(restored, rotation_vault.phone_mnemonic);
     set_monthly_limit(rotation_dir.path(), 10_000_000).unwrap();
     let old_config = load_config(rotation_dir.path()).unwrap();
-    let rotation = rotate_phone(rotation_dir.path(), &rpc).unwrap();
+    let proposal = hot_wallet::create_phone_rotation(rotation_dir.path(), &rpc).unwrap();
+    let approved = cold_wallet::approve_phone_rotation(rotation_dir.path(), &proposal).unwrap();
+    let rotation =
+        hot_wallet::activate_phone_rotation(rotation_dir.path(), &rpc, &approved).unwrap();
     assert_ne!(rotation.old_address, rotation.new_address);
     assert_ne!(rotation.new_phone_mnemonic, restored);
     assert_eq!(
-        recover_phone_mnemonic(rotation_dir.path()).unwrap(),
+        cold_wallet::decrypt_phone_backup(rotation_dir.path()).unwrap(),
         rotation.new_phone_mnemonic
     );
     assert!(rotation_dir.path().join(HWW_DEVICE_FILE).exists());

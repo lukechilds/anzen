@@ -5,12 +5,15 @@ use bitcoin::{
 use bitcoincore_rpc::RpcApi;
 use std::{env, str::FromStr};
 use vault_cli::{
-    hot::HotWallet,
-    keys::DeviceKeys,
-    policy::{SpendPath, VaultPolicy},
-    rpc::{RegtestRpc, RpcConfig},
-    state::{HWW_DEVICE_FILE, PHONE_DEVICE_FILE, initialize, load_config, load_device},
-    transactions::{create_vault_psbt, finalize_vault_psbt, sign_vault_psbt},
+    cold_wallet,
+    core::{
+        chain::{RegtestRpc, RpcConfig},
+        keys::DeviceKeys,
+        policy::{SpendPath, VaultPolicy},
+        storage::{HWW_DEVICE_FILE, PHONE_DEVICE_FILE, initialize_vault, load_config, load_device},
+        transactions::{create_vault_psbt, finalize_vault_psbt, sign_vault_psbt},
+    },
+    hot_wallet::{self, HotWallet, HotWalletBackend},
 };
 
 fn rpc_from_env() -> RegtestRpc {
@@ -26,14 +29,16 @@ fn rpc_from_env() -> RegtestRpc {
 #[ignore = "requires a disposable Bitcoin Core regtest node"]
 fn real_regtest_scans_vault_and_syncs_bdk_hot_wallet() {
     let dir = tempfile::tempdir().unwrap();
-    initialize(dir.path()).unwrap();
+    hot_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    cold_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    initialize_vault(dir.path()).unwrap();
     let config = load_config(dir.path()).unwrap();
     let rpc = rpc_from_env();
 
     let mut hot = HotWallet::open_or_create(dir.path()).unwrap();
     let hot_address = hot.next_receive_address().unwrap();
     rpc.mine(1, &hot_address).unwrap();
-    hot.sync(&rpc.client).unwrap();
+    rpc.sync_hot_wallet(&mut hot).unwrap();
     assert!(hot.wallet.balance().total().to_sat() > 0);
 
     let vault_address = Address::from_str(&config.vault_address)

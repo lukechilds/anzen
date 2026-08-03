@@ -189,6 +189,8 @@ For the MVP:
 
 Device operations are separated in the CLI. Phone actions live under `vault phone *`; HWW actions live under `vault hww *`. Vault initialization is likewise explicit: `vault phone init`, `vault hww init`, then `vault init`. The final command prints only the cold-storage descriptor and public policy details; hot-wallet descriptors remain internal.
 
+The implementation library is split into three public modules. `core` contains shared policy, PSBT, cryptographic, protocol, storage-format, and chain primitives and does not depend on a device implementation. `hot_wallet` contains phone/BDK behavior and depends only on `core`. `cold_wallet` contains the minimal HWW validation, backup, and signing surface and likewise depends only on `core`; it has no hot-wallet or network-client dependency. The CLI performs chain scanning/broadcast and composes these APIs into commands. This boundary is intended to let mobile apps reuse `hot_wallet`, hardware signing apps or firmware reuse the smaller `cold_wallet` surface, and reviewers audit the cold path without BDK/mobile implementation details.
+
 The monthly-policy protocol has three stages:
 
 1. `vault phone set-policy --monthly-limit SATS --output PROPOSAL.json` constructs the rollover and monthly PSBTs, signs the phone side, and emits a portable JSON policy object.

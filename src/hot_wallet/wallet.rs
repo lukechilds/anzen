@@ -1,6 +1,6 @@
-use crate::{
+use crate::core::{
     keys::DeviceKeys,
-    state::{PHONE_DEVICE_FILE, hot_db_path, load_device_keys},
+    storage::{PHONE_DEVICE_FILE, hot_db_path, load_device_keys},
 };
 use anyhow::{Context, Result};
 use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
@@ -67,7 +67,7 @@ impl HotWallet {
         Ok(address)
     }
 
-    pub fn sync(&mut self, client: &Client) -> Result<()> {
+    pub(crate) fn sync_core(&mut self, client: &Client) -> Result<()> {
         let mut emitter = Emitter::new(
             client,
             self.wallet.latest_checkpoint(),
@@ -88,7 +88,10 @@ impl HotWallet {
         Ok(())
     }
 
-    pub fn sync_electrum<E: ElectrumApi>(&mut self, client: &BdkElectrumClient<E>) -> Result<()> {
+    pub(crate) fn sync_electrum<E: ElectrumApi>(
+        &mut self,
+        client: &BdkElectrumClient<E>,
+    ) -> Result<()> {
         client.populate_tx_cache(self.wallet.tx_graph().full_txs().map(|node| node.tx));
         let request = self.wallet.start_sync_with_revealed_spks();
         let update = client.sync(request, 20, false)?;
@@ -168,7 +171,7 @@ impl HotWallet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::initialize;
+    use crate::test_support::initialize;
 
     #[test]
     fn bdk_hot_wallet_persists_external_and_change_derivation() {

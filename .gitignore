@@ -1,8 +1,10 @@
 /target/
 /.vault-data/
+/.vault-mainnet/
 /.demo-data/
+/policy-proposal.json
+/policy-approved.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
 .DS_Store
-

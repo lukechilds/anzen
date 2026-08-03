@@ -1,4 +1,4 @@
-use crate::policy::{SpendPath, VaultPolicy};
+use super::policy::{SpendPath, VaultPolicy};
 use anyhow::{Context, Result, bail};
 use bitcoin::{
     Psbt, Transaction, TxOut, Witness,
@@ -160,7 +160,7 @@ pub fn keypair_pubkey(keypair: &Keypair, _secp: &Secp256k1<All>) -> XOnlyPublicK
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS, keys::DeviceKeys};
+    use crate::core::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS, keys::DeviceKeys};
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, TxIn, absolute, transaction::Version};
 
     fn fixture(sequence: Sequence) -> (VaultPolicy, DeviceKeys, DeviceKeys, Psbt) {

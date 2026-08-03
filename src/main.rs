@@ -7,6 +7,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
+use vault_cli::{cold_wallet, core, hot_wallet};
 
 #[derive(Debug, Parser)]
 #[command(name = "vault", version, about)]
@@ -162,19 +163,28 @@ struct RpcArgs {
 }
 
 impl RpcArgs {
-    fn connect_regtest(&self) -> Result<vault_cli::rpc::RegtestRpc> {
-        vault_cli::rpc::RegtestRpc::connect(&vault_cli::rpc::RpcConfig {
+    fn connect_regtest(&self) -> Result<core::chain::RegtestRpc> {
+        core::chain::RegtestRpc::connect(&core::chain::RpcConfig {
             url: self.rpc_url.clone(),
             user: self.rpc_user.clone(),
             password: self.rpc_password.clone(),
         })
     }
 
-    fn connect(&self, data_dir: &Path) -> Result<Box<dyn vault_cli::rpc::Blockchain>> {
-        let config = vault_cli::state::load_config(data_dir)?;
+    fn connect_chain(&self, data_dir: &Path) -> Result<Box<dyn core::chain::Blockchain>> {
+        let config = core::storage::load_config(data_dir)?;
         match config.bitcoin_network()? {
             Network::Regtest => Ok(Box::new(self.connect_regtest()?)),
-            Network::Bitcoin => Ok(Box::new(vault_cli::rpc::ElectrumBackend::connect_default()?)),
+            Network::Bitcoin => Ok(Box::new(core::chain::ElectrumBackend::connect_default()?)),
+            other => bail!("unsupported vault network: {other}"),
+        }
+    }
+
+    fn connect_hot(&self, data_dir: &Path) -> Result<Box<dyn hot_wallet::HotWalletBackend>> {
+        let config = core::storage::load_config(data_dir)?;
+        match config.bitcoin_network()? {
+            Network::Regtest => Ok(Box::new(self.connect_regtest()?)),
+            Network::Bitcoin => Ok(Box::new(core::chain::ElectrumBackend::connect_default()?)),
             other => bail!("unsupported vault network: {other}"),
         }
     }
@@ -204,7 +214,7 @@ fn main() -> Result<()> {
 }
 
 fn initialize_vault(data_dir: &Path, network: Network) -> Result<()> {
-    let config = vault_cli::state::initialize_vault_for_network(data_dir, network)?;
+    let config = core::storage::initialize_vault_for_network(data_dir, network)?;
     println!("Vault initialized ({})", network_label(network));
     if network == Network::Bitcoin {
         println!("DANGER: mainnet mode uses real bitcoin and fixed 1 sat/vB MVP fees");
@@ -231,14 +241,14 @@ fn run_phone(
 ) -> Result<()> {
     match command {
         PhoneCommand::Init => {
-            let phone = vault_cli::state::initialize_phone_for_network(data_dir, network)?;
+            let phone = hot_wallet::initialize(data_dir, network)?;
             println!("Simulated phone initialized ({})", network_label(network));
             println!("Phone mnemonic: {}", phone.mnemonic);
             println!("Phone vault key: {}", phone.vault_pubkey);
         }
         PhoneCommand::ReceiveAddress => {
-            let mut hot = vault_cli::hot::HotWallet::open_or_create(data_dir)?;
-            let backend = rpc_args.connect(data_dir)?;
+            let mut hot = hot_wallet::HotWallet::open_or_create(data_dir)?;
+            let backend = rpc_args.connect_hot(data_dir)?;
             backend.sync_hot_wallet(&mut hot)?;
             println!("Hot receive address: {}", hot.next_receive_address()?);
         }
@@ -259,13 +269,12 @@ fn run_phone(
                 data_dir,
                 rpc_args,
                 &month,
-                vault_cli::ceremony::TransactionKind::Authorization,
+                core::ceremony::TransactionKind::Authorization,
             )?;
         }
         PhoneCommand::ApplySoftLimit { month, limit } => {
-            let backend = rpc_args.connect(data_dir)?;
-            match vault_cli::ceremony::apply_soft_limit(data_dir, backend.as_ref(), &month, limit)?
-            {
+            let backend = rpc_args.connect_hot(data_dir)?;
+            match hot_wallet::apply_soft_limit(data_dir, backend.as_ref(), &month, limit)? {
                 Some(txid) => println!(
                     "Soft limit applied for {month}: retained at most {limit} sats hot; cold-return txid={txid}"
                 ),
@@ -279,51 +288,51 @@ fn run_phone(
                 data_dir,
                 rpc_args,
                 &month,
-                vault_cli::ceremony::TransactionKind::Revocation,
+                core::ceremony::TransactionKind::Revocation,
             )?;
         }
         PhoneCommand::Restore { recovery } => {
-            let package: vault_cli::recovery::PhoneRecoveryPackage = read_artifact(&recovery)?;
-            let mnemonic = vault_cli::recovery::restore_phone_package(data_dir, &package)?;
+            let package: core::recovery::PhoneRecoveryPackage = read_artifact(&recovery)?;
+            let mnemonic = hot_wallet::restore_phone(data_dir, &package)?;
             println!("Phone key restored from HWW recovery package");
             println!("Recovered phone mnemonic: {mnemonic}");
         }
         PhoneCommand::Recover { destination } => {
-            device_recover(
-                data_dir,
-                rpc_args,
-                &destination,
-                vault_cli::recovery::SweepPath::PhoneRecovery,
-            )?;
+            let destination = configured_address(data_dir, &destination)?;
+            let config = core::storage::load_config(data_dir)?;
+            let backend = rpc_args.connect_chain(data_dir)?;
+            let tip = backend.chain_tip()?;
+            let utxos = backend.scan_vault(&config)?;
+            let (transaction, result) =
+                hot_wallet::recover(data_dir, &config, &utxos, tip.height, &destination)?;
+            let txid = backend.broadcast(&transaction)?;
+            if txid != result.txid {
+                bail!("chain backend returned an unexpected phone recovery transaction ID");
+            }
+            print_sweep_result("Phone recovery sweep broadcast", &result);
         }
         PhoneCommand::CreateSweep {
             destination,
             output,
         } => phone_create_sweep(data_dir, rpc_args, &destination, &output)?,
         PhoneCommand::BroadcastSweep { approved_sweep } => {
-            let package: vault_cli::recovery::CooperativeSweepPackage =
-                read_artifact(&approved_sweep)?;
-            let backend = rpc_args.connect(data_dir)?;
-            let result = vault_cli::recovery::broadcast_cooperative_sweep(
-                data_dir,
-                backend.as_ref(),
-                &package,
-            )?;
+            let package: core::recovery::CooperativeSweepPackage = read_artifact(&approved_sweep)?;
+            let backend = rpc_args.connect_hot(data_dir)?;
+            let result =
+                hot_wallet::broadcast_cooperative_sweep(data_dir, backend.as_ref(), &package)?;
             print_sweep_result("Cooperative vault sweep broadcast", &result);
         }
         PhoneCommand::RotateKey { output } => {
-            let backend = rpc_args.connect(data_dir)?;
-            let package = vault_cli::recovery::create_phone_rotation(data_dir, backend.as_ref())?;
+            let backend = rpc_args.connect_hot(data_dir)?;
+            let package = hot_wallet::create_phone_rotation(data_dir, backend.as_ref())?;
             report_rotation(&package, artifact_reports_to_stderr(&output))?;
             write_artifact(&output, &package)?;
             report_artifact(&output, "Phone-key rotation proposal")?;
         }
         PhoneCommand::ActivateRotation { approved_rotation } => {
-            let package: vault_cli::recovery::PhoneRotationPackage =
-                read_artifact(&approved_rotation)?;
-            let backend = rpc_args.connect(data_dir)?;
-            let result =
-                vault_cli::recovery::activate_phone_rotation(data_dir, backend.as_ref(), &package)?;
+            let package: core::recovery::PhoneRotationPackage = read_artifact(&approved_rotation)?;
+            let backend = rpc_args.connect_hot(data_dir)?;
+            let result = hot_wallet::activate_phone_rotation(data_dir, backend.as_ref(), &package)?;
             println!(
                 "Emergency phone-key rotation broadcast: {}",
                 result.sweep.txid
@@ -358,7 +367,7 @@ fn run_hww(
 ) -> Result<()> {
     match command {
         HwwCommand::Init => {
-            let hww = vault_cli::state::initialize_hww_for_network(data_dir, network)?;
+            let hww = cold_wallet::initialize(data_dir, network)?;
             println!("Simulated HWW initialized ({})", network_label(network));
             println!("HWW mnemonic: {}", hww.mnemonic);
             println!("HWW vault key: {}", hww.vault_pubkey);
@@ -370,26 +379,32 @@ fn run_hww(
             yes,
         } => hww_confirm_policy(data_dir, &proposal, &output, yes)?,
         HwwCommand::DecryptPhoneBackup { backup, output } => {
-            let package = vault_cli::recovery::decrypt_phone_backup_package(data_dir, &backup)?;
+            let package = cold_wallet::decrypt_phone_backup_package(data_dir, &backup)?;
             write_artifact(&output, &package)?;
             report_artifact(&output, "Decrypted phone recovery package")?;
         }
         HwwCommand::Recover { destination } => {
-            device_recover(
-                data_dir,
-                rpc_args,
-                &destination,
-                vault_cli::recovery::SweepPath::HwwRecovery,
-            )?;
+            let destination = configured_address(data_dir, &destination)?;
+            let config = core::storage::load_config(data_dir)?;
+            let backend = rpc_args.connect_chain(data_dir)?;
+            let tip = backend.chain_tip()?;
+            let utxos = backend.scan_vault(&config)?;
+            let (transaction, result) =
+                cold_wallet::recover(data_dir, &config, &utxos, tip.height, &destination)?;
+            let txid = backend.broadcast(&transaction)?;
+            if txid != result.txid {
+                bail!("chain backend returned an unexpected HWW recovery transaction ID");
+            }
+            print_sweep_result("HWW recovery sweep broadcast", &result);
         }
         HwwCommand::ConfirmSweep {
             proposal,
             output,
             yes,
         } => {
-            let package: vault_cli::recovery::CooperativeSweepPackage = read_artifact(&proposal)?;
+            let package: core::recovery::CooperativeSweepPackage = read_artifact(&proposal)?;
             print_hww_sweep_prompt(&package, yes, proposal.as_path())?;
-            let approved = vault_cli::recovery::confirm_cooperative_sweep(data_dir, &package)?;
+            let approved = cold_wallet::approve_cooperative_sweep(data_dir, &package)?;
             eprintln!("HWW validated and signed the cooperative sweep");
             write_artifact(&output, &approved)?;
             report_artifact(&output, "HWW-approved cooperative sweep")?;
@@ -399,10 +414,10 @@ fn run_hww(
             output,
             yes,
         } => {
-            let package: vault_cli::recovery::PhoneRotationPackage = read_artifact(&proposal)?;
+            let package: core::recovery::PhoneRotationPackage = read_artifact(&proposal)?;
             report_rotation(&package, true)?;
             require_hww_approval(yes, proposal.as_path(), "phone-key rotation")?;
-            let approved = vault_cli::recovery::confirm_phone_rotation(data_dir, &package)?;
+            let approved = cold_wallet::approve_phone_rotation(data_dir, &package)?;
             if let Some(policy) = &approved.renewed_policy {
                 eprintln!(
                     "HWW validated and signed the phone-key rotation plus {} renewed-policy PSBTs",
@@ -425,7 +440,7 @@ fn phone_set_policy(
     now: Option<i64>,
     output: &Path,
 ) -> Result<()> {
-    let backend = rpc_args.connect(data_dir)?;
+    let backend = rpc_args.connect_hot(data_dir)?;
     if now.is_some() && backend.network() != Network::Regtest {
         bail!("--now is available only for deterministic regtest tests");
     }
@@ -435,8 +450,8 @@ fn phone_set_policy(
     let workspace = data_dir.join("phone/policy-proposal");
     reset_workspace(&workspace)?;
     let manifest =
-        vault_cli::ceremony::prepare(data_dir, backend.as_ref(), now, monthly_limit, &workspace)?;
-    let package = vault_cli::ceremony::package_from_batch(&workspace)?;
+        hot_wallet::propose_policy(data_dir, backend.as_ref(), now, monthly_limit, &workspace)?;
+    let package = core::ceremony::package_from_batch(&workspace)?;
     print_manifest(&manifest, artifact_reports_to_stderr(output))?;
     write_artifact(output, &package)?;
     report_artifact(output, "Phone-signed policy proposal")?;
@@ -444,36 +459,35 @@ fn phone_set_policy(
 }
 
 fn hww_confirm_policy(data_dir: &Path, proposal: &Path, output: &Path, yes: bool) -> Result<()> {
-    let package: vault_cli::ceremony::PolicyPackage = read_artifact(proposal)?;
+    let package: core::ceremony::PolicyPackage = read_artifact(proposal)?;
     eprintln!("SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL");
     print_manifest(&package.manifest, true)?;
     require_hww_approval(yes, proposal, "complete monthly policy")?;
     let workspace = data_dir.join("hww/policy-review");
     reset_workspace(&workspace)?;
-    vault_cli::ceremony::materialize_policy_package(&package, &workspace)?;
-    let approved_manifest = vault_cli::ceremony::approve_hww(data_dir, &workspace)?;
+    core::ceremony::materialize_policy_package(&package, &workspace)?;
+    let approved_manifest = cold_wallet::approve_policy(data_dir, &workspace)?;
     eprintln!(
         "HWW validated and signed all {} PSBTs after one approval",
         1 + approved_manifest.chunk_count * 2
     );
-    let approved = vault_cli::ceremony::package_from_batch(&workspace)?;
+    let approved = core::ceremony::package_from_batch(&workspace)?;
     write_artifact(output, &approved)?;
     report_artifact(output, "HWW-approved policy")?;
     Ok(())
 }
 
 fn phone_activate_policy(data_dir: &Path, rpc_args: &RpcArgs, approved: &Path) -> Result<()> {
-    let package: vault_cli::ceremony::PolicyPackage = read_artifact(approved)?;
+    let package: core::ceremony::PolicyPackage = read_artifact(approved)?;
     if !package.manifest.phone_approved || !package.manifest.hww_approved {
         bail!("policy package requires both phone and HWW approval");
     }
     let workspace = data_dir.join("phone/policy-activation");
     reset_workspace(&workspace)?;
-    vault_cli::ceremony::materialize_policy_package(&package, &workspace)?;
-    let backend = rpc_args.connect(data_dir)?;
-    let schedule =
-        vault_cli::ceremony::finalize_and_broadcast(data_dir, backend.as_ref(), &workspace)?;
-    vault_cli::state::set_monthly_limit(data_dir, package.manifest.monthly_limit_sats)?;
+    core::ceremony::materialize_policy_package(&package, &workspace)?;
+    let backend = rpc_args.connect_hot(data_dir)?;
+    let schedule = hot_wallet::activate_policy(data_dir, backend.as_ref(), &workspace)?;
+    core::storage::set_monthly_limit(data_dir, package.manifest.monthly_limit_sats)?;
     println!("Rollover broadcast: {}", schedule.rollover_txid);
     println!("Active monthly limit: {} sats", schedule.monthly_limit_sats);
     println!(
@@ -490,9 +504,8 @@ fn phone_create_sweep(
     output: &Path,
 ) -> Result<()> {
     let address = configured_address(data_dir, destination)?;
-    let backend = rpc_args.connect(data_dir)?;
-    let package =
-        vault_cli::recovery::create_cooperative_sweep(data_dir, backend.as_ref(), &address)?;
+    let backend = rpc_args.connect_hot(data_dir)?;
+    let package = hot_wallet::create_cooperative_sweep(data_dir, backend.as_ref(), &address)?;
     report_sweep(&package, artifact_reports_to_stderr(output))?;
     write_artifact(output, &package)?;
     report_artifact(output, "Phone-signed cooperative sweep")?;
@@ -500,7 +513,7 @@ fn phone_create_sweep(
 }
 
 fn print_hww_sweep_prompt(
-    package: &vault_cli::recovery::CooperativeSweepPackage,
+    package: &core::recovery::CooperativeSweepPackage,
     yes: bool,
     proposal: &Path,
 ) -> Result<()> {
@@ -508,35 +521,17 @@ fn print_hww_sweep_prompt(
     require_hww_approval(yes, proposal, "cooperative sweep")
 }
 
-fn device_recover(
-    data_dir: &Path,
-    rpc_args: &RpcArgs,
-    destination: &str,
-    path: vault_cli::recovery::SweepPath,
-) -> Result<()> {
-    let destination = configured_address(data_dir, destination)?;
-    let backend = rpc_args.connect(data_dir)?;
-    let result = vault_cli::recovery::sweep(data_dir, backend.as_ref(), path, &destination)?;
-    let label = match path {
-        vault_cli::recovery::SweepPath::PhoneRecovery => "Phone recovery sweep broadcast",
-        vault_cli::recovery::SweepPath::HwwRecovery => "HWW recovery sweep broadcast",
-        vault_cli::recovery::SweepPath::Cooperative => "Cooperative sweep broadcast",
-    };
-    print_sweep_result(label, &result);
-    Ok(())
-}
-
 fn broadcast_monthly(
     data_dir: &Path,
     rpc_args: &RpcArgs,
     month: &str,
-    kind: vault_cli::ceremony::TransactionKind,
+    kind: core::ceremony::TransactionKind,
 ) -> Result<()> {
-    let backend = rpc_args.connect(data_dir)?;
-    let txid = vault_cli::ceremony::broadcast_monthly(data_dir, backend.as_ref(), month, kind)?;
+    let backend = rpc_args.connect_hot(data_dir)?;
+    let txid = hot_wallet::broadcast_monthly(data_dir, backend.as_ref(), month, kind)?;
     let action = match kind {
-        vault_cli::ceremony::TransactionKind::Authorization => "Authorization",
-        vault_cli::ceremony::TransactionKind::Revocation => "Revocation",
+        core::ceremony::TransactionKind::Authorization => "Authorization",
+        core::ceremony::TransactionKind::Revocation => "Revocation",
     };
     println!("Broadcast {action} for {month}: {txid}");
     Ok(())
@@ -544,8 +539,8 @@ fn broadcast_monthly(
 
 fn phone_send(data_dir: &Path, rpc_args: &RpcArgs, address: &str, amount_sats: u64) -> Result<()> {
     let address = configured_address(data_dir, address)?;
-    let backend = rpc_args.connect(data_dir)?;
-    let mut hot = vault_cli::hot::HotWallet::open_or_create(data_dir)?;
+    let backend = rpc_args.connect_hot(data_dir)?;
+    let mut hot = hot_wallet::HotWallet::open_or_create(data_dir)?;
     backend.sync_hot_wallet(&mut hot)?;
     let (transaction, fee_sats) = hot.build_payment(address.script_pubkey(), amount_sats)?;
     let txid = backend.broadcast(&transaction)?;
@@ -557,7 +552,7 @@ fn phone_send(data_dir: &Path, rpc_args: &RpcArgs, address: &str, amount_sats: u
 }
 
 fn print_active_policy(data_dir: &Path) -> Result<()> {
-    let config = vault_cli::state::load_config(data_dir)?;
+    let config = core::storage::load_config(data_dir)?;
     println!("Cold storage descriptor: {}", config.vault_descriptor);
     println!("Vault address: {}", config.vault_address);
     println!(
@@ -572,7 +567,7 @@ fn print_active_policy(data_dir: &Path) -> Result<()> {
         println!("Monthly spending: disabled");
     } else {
         println!("Monthly limit: {} sats", config.monthly_limit_sats);
-        if let Ok(schedule) = vault_cli::ceremony::load_schedule(data_dir) {
+        if let Ok(schedule) = hot_wallet::load_schedule(data_dir) {
             println!(
                 "Presigned monthly transaction pairs: {}",
                 schedule.entries.len()
@@ -583,8 +578,8 @@ fn print_active_policy(data_dir: &Path) -> Result<()> {
 }
 
 fn print_status(data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
-    let config = vault_cli::state::load_config(data_dir)?;
-    let backend = rpc_args.connect(data_dir)?;
+    let config = core::storage::load_config(data_dir)?;
+    let backend = rpc_args.connect_chain(data_dir)?;
     let tip = backend.chain_tip()?;
     let utxos = backend.scan_vault(&config)?;
     let balance = utxos
@@ -656,7 +651,7 @@ fn run_node(command: NodeCommand, rpc_args: &RpcArgs, network: Network) -> Resul
     Ok(())
 }
 
-fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, stderr: bool) -> Result<()> {
+fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Result<()> {
     let mut output: Box<dyn Write> = if stderr {
         Box::new(io::stderr().lock())
     } else {
@@ -681,12 +676,12 @@ fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, stderr: bool) -
     writeln!(output, "Fee rate: {} sat/vB", manifest.fee_rate_sat_vb)?;
     writeln!(output, "Total input: {} sats", manifest.total_input_sats)?;
     writeln!(output, "Monthly pairs: {}", manifest.chunk_count)?;
-    if manifest.chunk_count < vault_cli::MONTHS_PER_ROLLOVER && manifest.monthly_limit_sats > 0 {
+    if manifest.chunk_count < core::MONTHS_PER_ROLLOVER && manifest.monthly_limit_sats > 0 {
         writeln!(
             output,
             "WARNING: balance funds only {} of {} monthly allowances",
             manifest.chunk_count,
-            vault_cli::MONTHS_PER_ROLLOVER
+            core::MONTHS_PER_ROLLOVER
         )?;
     }
     writeln!(output, "Rollover txid: {}", manifest.rollover.unsigned_txid)?;
@@ -699,10 +694,7 @@ fn print_manifest(manifest: &vault_cli::ceremony::BatchManifest, stderr: bool) -
     Ok(())
 }
 
-fn report_sweep(
-    package: &vault_cli::recovery::CooperativeSweepPackage,
-    stderr: bool,
-) -> Result<()> {
+fn report_sweep(package: &core::recovery::CooperativeSweepPackage, stderr: bool) -> Result<()> {
     let mut output: Box<dyn Write> = if stderr {
         Box::new(io::stderr().lock())
     } else {
@@ -720,10 +712,7 @@ fn report_sweep(
     Ok(())
 }
 
-fn report_rotation(
-    package: &vault_cli::recovery::PhoneRotationPackage,
-    stderr: bool,
-) -> Result<()> {
+fn report_rotation(package: &core::recovery::PhoneRotationPackage, stderr: bool) -> Result<()> {
     let mut output: Box<dyn Write> = if stderr {
         Box::new(io::stderr().lock())
     } else {
@@ -783,7 +772,7 @@ fn require_hww_approval(yes: bool, input: &Path, description: &str) -> Result<()
     Ok(())
 }
 
-fn print_sweep_result(label: &str, result: &vault_cli::recovery::SweepResult) {
+fn print_sweep_result(label: &str, result: &core::recovery::SweepResult) {
     println!("{label}: {}", result.txid);
     println!("Inputs: {}", result.input_count);
     println!("Sent: {} sats", result.sent_sats);
@@ -803,7 +792,7 @@ fn read_artifact<T: DeserializeOwned>(path: &Path) -> Result<T> {
         serde_json::from_reader(io::stdin().lock())
             .context("failed to read JSON artifact from stdin")
     } else {
-        vault_cli::state::read_json(path)
+        core::storage::read_json(path)
     }
 }
 
@@ -814,7 +803,7 @@ fn write_artifact<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         writeln!(stdout)?;
         Ok(())
     } else {
-        vault_cli::state::write_json(path, value)
+        core::storage::write_json(path, value)
     }
 }
 
@@ -831,7 +820,7 @@ fn report_artifact(path: &Path, description: &str) -> Result<()> {
 
 fn configured_address(data_dir: &Path, text: &str) -> Result<bitcoin::Address> {
     use std::str::FromStr;
-    let config = vault_cli::state::load_config(data_dir)?;
+    let config = core::storage::load_config(data_dir)?;
     bitcoin::Address::from_str(text)?
         .require_network(config.bitcoin_network()?)
         .map_err(Into::into)
@@ -842,16 +831,16 @@ fn command_network(
     dangerously_enable_mainnet: bool,
     _command: &Command,
 ) -> Result<Network> {
-    let configured = if data_dir.join(vault_cli::state::CONFIG_FILE).exists() {
-        Some(vault_cli::state::load_config(data_dir)?.bitcoin_network()?)
-    } else if data_dir.join(vault_cli::state::PHONE_DEVICE_FILE).exists() {
+    let configured = if data_dir.join(core::storage::CONFIG_FILE).exists() {
+        Some(core::storage::load_config(data_dir)?.bitcoin_network()?)
+    } else if data_dir.join(core::storage::PHONE_DEVICE_FILE).exists() {
         Some(
-            vault_cli::state::load_device(data_dir, vault_cli::state::PHONE_DEVICE_FILE)?
+            core::storage::load_device(data_dir, core::storage::PHONE_DEVICE_FILE)?
                 .bitcoin_network()?,
         )
-    } else if data_dir.join(vault_cli::state::HWW_DEVICE_FILE).exists() {
+    } else if data_dir.join(core::storage::HWW_DEVICE_FILE).exists() {
         Some(
-            vault_cli::state::load_device(data_dir, vault_cli::state::HWW_DEVICE_FILE)?
+            core::storage::load_device(data_dir, core::storage::HWW_DEVICE_FILE)?
                 .bitcoin_network()?,
         )
     } else {

@@ -1,4 +1,4 @@
-use crate::{hot::HotWallet, state::VaultConfig};
+use super::{storage::VaultConfig, types::VaultUtxo};
 use anyhow::{Context, Result, bail};
 use bdk_electrum::{
     BdkElectrumClient,
@@ -12,7 +12,6 @@ use bitcoincore_rpc::{
     Client, RpcApi,
     json::{GetBlockchainInfoResult, ScanTxOutRequest},
 };
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub const MAINNET_ELECTRUM_SERVERS: &[&str] = &[
@@ -35,7 +34,7 @@ pub struct RegtestRpc {
 }
 
 pub struct ElectrumBackend {
-    client: BdkElectrumClient<ElectrumClient>,
+    pub(crate) client: BdkElectrumClient<ElectrumClient>,
     server: String,
 }
 
@@ -53,14 +52,6 @@ pub trait Blockchain {
     fn chain_tip(&self) -> Result<ChainTip>;
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>>;
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid>;
-    fn sync_hot_wallet(&self, wallet: &mut HotWallet) -> Result<()>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VaultUtxo {
-    pub outpoint: OutPoint,
-    pub txout: TxOut,
-    pub confirmation_height: u64,
 }
 
 impl Blockchain for RegtestRpc {
@@ -90,10 +81,6 @@ impl Blockchain for RegtestRpc {
         self.client
             .send_raw_transaction(transaction)
             .context("Bitcoin Core transaction broadcast failed")
-    }
-
-    fn sync_hot_wallet(&self, wallet: &mut HotWallet) -> Result<()> {
-        wallet.sync(&self.client)
     }
 }
 
@@ -206,10 +193,6 @@ impl Blockchain for ElectrumBackend {
         self.client
             .transaction_broadcast(transaction)
             .context("Electrum transaction broadcast failed")
-    }
-
-    fn sync_hot_wallet(&self, wallet: &mut HotWallet) -> Result<()> {
-        wallet.sync_electrum(&self.client)
     }
 }
 

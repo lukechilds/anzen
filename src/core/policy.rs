@@ -1,4 +1,4 @@
-use crate::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS};
+use super::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS};
 use anyhow::{Context, Result, bail};
 use bitcoin::{
     Address, Network, ScriptBuf,
@@ -144,7 +144,7 @@ impl VaultPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keys::DeviceKeys;
+    use crate::core::keys::DeviceKeys;
     use bitcoin::key::Secp256k1;
 
     #[test]

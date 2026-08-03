@@ -342,6 +342,23 @@ Sent: 198997378 sats
 Fee: 162 sats (1 sat/vB)
 ```
 
+## Library architecture
+
+The Rust library has three public modules with a one-way dependency boundary:
+
+```text
+CLI / future apps
+├── hot_wallet ──┐
+├── cold_wallet ─┼──> core
+└── core ────────┘
+```
+
+- `hot_wallet` owns phone keys, the BDK hot wallet, encrypted monthly transactions, phone recovery, and phone-key rotation. Future iOS and Android apps should build on this API.
+- `cold_wallet` owns the deliberately small HWW surface: backup encryption/decryption, complete policy review and signing, cooperative-sweep approval, offline HWW recovery signing, and rotation approval. It imports only `core` and has no BDK wallet, Electrum, Bitcoin Core, or `hot_wallet` dependency.
+- `core` contains shared serialized protocol objects, key derivation, Miniscript policy construction, PSBT construction and validation, cryptography, storage formats, and chain backend interfaces. It has no dependency on either device implementation.
+
+The CLI composes these low-level APIs. `vault phone *` dispatches only through `hot_wallet` and `core`; `vault hww *` dispatches only through `cold_wallet` and `core`. Chain scanning and broadcasting for HWW recovery remain in the CLI, keeping the cold signer offline. Architecture tests enforce the dependency direction and command-dispatch boundaries.
+
 ## Run the end-to-end tests
 
 Docker is the only host dependency:
