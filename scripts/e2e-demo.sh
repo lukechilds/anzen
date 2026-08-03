@@ -84,8 +84,8 @@ print_cli_output() {
 }
 
 show_command() {
-    printf '$ vault-cli --data-dir %q' "$1"
     shift
+    printf '$ vault-cli'
     printf ' %q' "$@"
     printf '\n'
 }

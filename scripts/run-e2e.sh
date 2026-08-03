@@ -3,6 +3,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Compose scopes containers, networks, and volumes by project name. Give every
+# invocation its own project so another local test runner cannot tear it down.
+COMPOSE_PROJECT_NAME="vault-e2e-$$-$RANDOM"
+export COMPOSE_PROJECT_NAME
+readonly COMPOSE_PROJECT_NAME
+
 usage() {
     cat <<'EOF'
 Usage: ./scripts/run-e2e.sh [--list | all | TEST...]
