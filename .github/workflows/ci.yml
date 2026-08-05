@@ -85,15 +85,30 @@ jobs:
         env:
           VAULT_SKIP_DOCKER_BUILD: "1"
 
-  e2e-tests:
-    name: End-to-end tests
+  prepare_e2e:
+    name: Prepare end-to-end test matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
+    outputs:
+      tests: ${{ steps.discover.outputs.tests }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Discover end-to-end tests
+        id: discover
+        shell: bash
+        run: |
+          tests="$(./scripts/run-e2e.sh --list | jq --raw-input --slurp --compact-output 'split("\n") | map(select(length > 0))')"
+          if [[ "$(jq 'length' <<<"$tests")" -eq 0 ]]; then
+            printf 'No end-to-end tests were discovered.\n' >&2
+            exit 1
+          fi
+          printf 'tests=%s\n' "$tests" >> "$GITHUB_OUTPUT"
+          printf '### Discovered end-to-end tests\n\n' >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.[] | "- `\(.)`"' <<<"$tests" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Show Docker versions
         run: |
@@ -103,19 +118,72 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build cached E2E image
+      - name: Build and export cached E2E image
         uses: docker/build-push-action@v7
         with:
           context: .
           target: runtime
-          load: true
           tags: vault-demo:local
+          outputs: type=docker,dest=${{ runner.temp }}/vault-demo.tar
           cache-from: |
             type=gha,scope=vault-runtime
             type=gha,scope=vault-tests
           cache-to: type=gha,mode=max,scope=vault-runtime,timeout=20m,ignore-error=true
 
-      - name: Run every isolated test serially
-        run: ./scripts/run-e2e.sh all
+      - name: Upload E2E image
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-demo-image
+          path: ${{ runner.temp }}/vault-demo.tar
+          compression-level: 1
+          retention-days: 1
+
+  e2e_test:
+    name: "E2E · ${{ matrix.test }}"
+    needs: prepare_e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJSON(needs.prepare_e2e.outputs.tests) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download E2E image
+        uses: actions/download-artifact@v4
+        with:
+          name: vault-demo-image
+          path: ${{ runner.temp }}
+
+      - name: Load E2E image
+        run: docker load --input "${{ runner.temp }}/vault-demo.tar"
+
+      - name: Run isolated end-to-end test
         env:
+          E2E_TEST: ${{ matrix.test }}
           VAULT_SKIP_DOCKER_BUILD: "1"
+        run: ./scripts/run-e2e.sh "$E2E_TEST"
+
+  e2e-tests:
+    name: End-to-end tests
+    if: ${{ always() }}
+    needs:
+      - prepare_e2e
+      - e2e_test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require preparation and every matrix worker to pass
+        env:
+          PREPARE_RESULT: ${{ needs.prepare_e2e.result }}
+          MATRIX_RESULT: ${{ needs.e2e_test.result }}
+        run: |
+          if [[ "$PREPARE_RESULT" != success || "$MATRIX_RESULT" != success ]]; then
+            printf 'E2E preparation: %s\nE2E matrix: %s\n' "$PREPARE_RESULT" "$MATRIX_RESULT" >&2
+            exit 1
+          fi
+          printf 'Every dynamically discovered end-to-end test passed.\n'
