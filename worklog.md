@@ -2,6 +2,15 @@
 
 This file records implementation decisions and unforeseen constraints that were not fully specified in `vault-design.md`.
 
+## 2026-08-05
+
+- Supersede the equal-chunk rollover model with a two-layer annual package. The rollover always consolidates every live vault UTXO into one output. A separately presigned and phone-encrypted split spends it into up to twelve exact `monthly limit + authorization fee` UTXOs plus one remainder. Activation broadcasts only the rollover; the first authorization or revocation broadcasts the split before its child. This keeps all excess in one remainder and lets an unused policy epoch roll over from one input.
+- Treat duplicate split broadcasts as idempotent only for explicit backend responses (`txn-already-in-mempool`, already-known/in-chain, or Bitcoin Core RPC -27 outputs-already-in-UTXO-set). Other parent broadcast failures still abort the monthly action. A failed premature authorization may leave its valid split parent in the mempool, which is safe and expected.
+- Replace the mnemonic-only backup with a versioned cloud envelope. A random 32-byte key encrypts an authenticated payload containing the phone mnemonic, vault descriptor, address, public binding, and network. The same key is wrapped once with an HWW-derived key and independently to every configured friend's OpenPGP encryption subkey. The complete friend-wrapper manifest is authenticated under that symmetric key, so cloud edits cannot silently inject, remove, or alter friends before rotation. Friends are 1-of-N recipients, not threshold shares.
+- Pin pure-Rust `pgp` 0.17 because it supports the repository's Rust 1.85 MSRV. The simulated friend-key generator creates an Ed25519 certification key plus Curve25519 ECDH encryption subkey; production must support hardware/user-managed OpenPGP secrets and passphrase UX rather than generating unencrypted private-key files.
+- Social emergency access reconstructs only the phone signer. It deliberately reuses the normal `PhoneRecovery` sweep planner and therefore cannot bypass the 61,200-block CSV delay. A real-node end-to-end test deletes both device files, decrypts with a friend key, proves early rejection, mines the full delay, and confirms the sweep.
+- Preserve recovery-friend recipients during phone rotation by generating a fresh symmetric key and rewrapping it for the unchanged HWW and every stored friend public key. Read-time migration lets an HWW open the legacy mnemonic blob and replace the default cloud file with the descriptor-bound envelope.
+
 ## 2026-08-03
 
 - Use the current modular BDK crates (`bdk_wallet` 3.1 and `bdk_bitcoind_rpc` 0.22) rather than the deprecated monolithic `bdk` crate. The versions are pinned in `Cargo.lock` for reproducible builds.

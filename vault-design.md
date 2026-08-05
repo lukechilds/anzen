@@ -60,7 +60,7 @@ With the delays above, a 12-month expected rollover gives roughly:
 - **two months of grace** before the phone-only path activates;
 - **three months of grace** before the HWW-only path activates.
 
-The rollover should consume every current vault UTXO and every unused monthly-spending chunk, then recreate them as new outputs to the same vault address with newly reset relative timers.
+The rollover should consume every current vault UTXO and every unused monthly-spending chunk, then recreate the balance as one output to the same vault address with a newly reset relative timer. A separately presigned split transaction creates the next set of monthly outputs only if one of them is actually used or revoked.
 
 The expected calendar date is a UX reminder. The actual deadlines are based on the confirmation height of each UTXO, so the wallet must track the oldest live vault output and show an estimated recovery date.
 
@@ -105,17 +105,22 @@ Until such a change is activated, block-based CSV is the only stateless single-o
 
 Vault initialization creates only the static cold-storage policy. Its monthly limit is zero, so there are no presigned monthly transactions. The phone later proposes a limit, including zero to disable spending, and the HWW confirms it through the signing protocol described below.
 
-When a positive monthly policy is activated, the wallet divides the entire post-fee vault balance equally across twelve independent cold chunks and creates a pair of presigned transactions for each month. Each authorization releases the approved monthly limit and returns that chunk's remainder to the vault address. If the balance cannot fund twelve chunks that can each release the full limit plus fees, the wallet warns the user, chooses the largest fundable chunk count below twelve, and creates authorizations only for those earliest consecutive months. The entire post-fee balance is still divided equally across the selected chunks; there is no separate main-vault remainder output. Any indivisible satoshi remainder is distributed deterministically across the earliest chunks. Activating a zero-limit policy instead creates one cold rollover output and no monthly pairs.
+When a positive monthly policy is activated, the wallet presigns two transaction layers. The rollover consumes every live vault UTXO and creates exactly one consolidated vault output. A child split transaction spends that output into up to twelve exact monthly UTXOs plus one remainder UTXO. The split remains encrypted and unbroadcast until the phone first attempts an authorization or revocation for that policy epoch; the phone broadcasts the split parent before the selected child.
+
+Each monthly UTXO has the exact value `monthly limit + authorization fee`, calculated at the fixed 1 sat/vB MVP fee rate. Its authorization therefore has one hot-wallet output of exactly the monthly limit and no per-month cold-change output. The separate remainder UTXO receives every satoshi not needed for monthly chunks or the split fee. If the balance cannot fund twelve exact chunks plus a non-dust remainder and fees, the wallet warns the user, chooses the largest fundable count below twelve, and creates only those earliest consecutive months. Activating a zero-limit policy creates one cold rollover output, no split, and no monthly pairs.
 
 Conceptually:
 
 ```text
-Monthly chunk i
-    ├─ monthly authorization, after 00:00 UTC on day 1 of month i
-    │    ├─ monthly limit       → mobile hot wallet
-    │    └─ remainder           → vault address
-    └─ immediate revocation
-         └─ all value, less fee      → vault address
+Consolidated rollover output
+    └─ deferred split transaction
+         ├─ exact monthly chunk i
+         │    ├─ authorization after month i starts
+         │    │    └─ monthly limit       → mobile hot wallet
+         │    └─ immediate revocation
+         │         └─ all value, less fee → vault address
+         ├─ other exact monthly chunks
+         └─ one remainder UTXO            → vault address
 ```
 
 Each monthly authorization transaction:
@@ -123,7 +128,7 @@ Each monthly authorization transaction:
 - is signed in advance by both `M` and `H`;
 - uses absolute timestamp `nLockTime` for `00:00 UTC` on the first day of its calendar month;
 - sends exactly the approved monthly-limit amount to a fresh address from the mobile hot wallet;
-- returns any cold remainder to the static vault address;
+- spends an exact monthly UTXO, so the input minus its fee equals the approved limit with no cold-change output;
 - is encrypted individually with a dedicated phone-derived encryption key;
 - is stored on the phone and in encrypted cloud storage;
 - can be decrypted and broadcast by the phone after its date.
@@ -142,7 +147,7 @@ The phone should revoke before the authorization matures. Until the revocation c
 
 Because the chunks are independent, at most twelve authorization transactions and twelve matching revocation transactions are needed.
 
-If a month is unused, neither transaction needs to be broadcast and the chunk remains cold. The next annual rollover spends the original chunk, permanently invalidating retained copies of both presigned transactions.
+If no month is touched, the split never needs to be broadcast and the annual rollover spends the single consolidated output, invalidating the split and every child. After a split is broadcast, an unused month remains cold as its own exact UTXO. The next annual rollover consumes every remaining monthly chunk and the remainder, permanently invalidating retained copies of the old presigned transactions.
 
 Loss of the presigned transactions does **not** lose bitcoin. It only removes the phone-only convenience path; the underlying chunks remain recoverable through the vault script.
 
@@ -164,7 +169,7 @@ The child can also provide CPFP fee bumping for the presigned parent. The soft l
 - **Phone only:** can access up to one newly authorized monthly-limit chunk per month without carrying the HWW.
 - **Phone-only revocation:** can invalidate a future monthly authorization by broadcasting its presigned revocation transaction before the authorization matures.
 - **Phone + HWW:** can spend the entire balance immediately.
-- **Unused monthly allowance:** remains under full vault protection until the corresponding presigned transaction is broadcast.
+- **Unused monthly allowance:** remains under full vault protection; before first use it exists only as an encrypted presigned split branch, and afterward as its exact vault UTXO.
 - **Annual rollover:** resets the recovery timers and invalidates all unused old monthly authorizations.
 - **No essential transaction state:** keys plus the static descriptor are sufficient to recover the vault; presigned monthly transactions are convenience authorizations only.
 - **No provider dependency:** spending limits and recovery paths require no server co-signer.
@@ -182,7 +187,8 @@ For the MVP:
 
 - `M` and `H` are software keys managed by separate simulated phone and HWW components;
 - hot-wallet receiving and change use normal external and internal address derivation;
-- the phone seed backup is encrypted to a backup/decryption key controlled by the simulated HWW and stored locally as a stand-in for cloud storage;
+- the phone mnemonic and cold-storage descriptor are encrypted together with a random symmetric key and stored locally as a stand-in for cloud storage;
+- the symmetric key is authenticated-encrypted to an HWW-derived key and may also be independently OpenPGP-encrypted to each configured recovery friend's public key; the complete friend-wrapper manifest is authenticated with that symmetric key before it can be reused during rotation, and every friend is a 1-of-N recovery recipient rather than part of a threshold scheme;
 - every finalized authorization and revocation transaction is separately encrypted to a phone-derived encryption key and stored as an independent local ciphertext;
 - all ordinary transactions use a fixed fee rate of 1 sat/vB;
 - policy setup, rollover, signing, revocation, allowance use, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
@@ -193,9 +199,9 @@ The implementation library is split into three public modules. `core` contains s
 
 The monthly-policy protocol has three stages:
 
-1. `vault phone set-policy --monthly-limit SATS --output PROPOSAL.json` constructs the rollover and monthly PSBTs, signs the phone side, and emits a portable JSON policy object.
+1. `vault phone set-policy --monthly-limit SATS --output PROPOSAL.json` constructs the one-output rollover, deferred split, and monthly PSBTs, signs the phone side, and emits a portable JSON policy object.
 2. `vault hww confirm-policy PROPOSAL.json --output APPROVED.json` presents the complete high-level policy once, obtains one approval, independently validates every PSBT against the manifest, and signs the complete batch without per-transaction prompts.
-3. `vault phone activate-policy APPROVED.json` verifies both approvals, broadcasts the rollover, and stores the individually encrypted monthly artifacts.
+3. `vault phone activate-policy APPROVED.json` verifies both approvals, broadcasts only the one-output rollover, and stores the deferred split plus every authorization and revocation as individually encrypted phone artifacts. The first monthly action broadcasts the split before its selected child.
 
 The JSON interchange embeds PSBTs plus a versioned policy/batch manifest, so the simulated devices do not share an implicit signing workspace. Phone backup restoration, cooperative sweeping, and phone-key rotation use the same explicit JSON handoff model.
 
@@ -228,11 +234,14 @@ The demonstration should derive its schedule from the actual UTC date when the t
   - The surviving HWW can then recover the vault alone.
 
 - **Both devices lost**
-  - Recovery depends on optional social recovery of the encrypted mobile-key backup.
+  - Recovery depends on social recovery having been configured before the loss.
+  - Any configured friend can use their OpenPGP private key to unwrap the symmetric backup key and authenticate/decrypt the phone mnemonic plus descriptor.
+  - The recovered phone key still cannot bypass the 61,200-block phone-recovery delay. After that path matures, `vault social emergency-access` can sweep directly to replacement keys without recreating either lost device.
   - Without social recovery, simultaneous permanent loss of both devices is unrecoverable.
 
 - **Cloud account compromised**
-  - The attacker obtains encrypted backup material but still needs the HWW decryption capability or an authorized social-recovery path.
+  - The attacker obtains encrypted payload and key wrappers but still needs the HWW decryption capability or one configured friend's OpenPGP private key.
+  - A recovery friend is trusted with eventual phone-key capability and can spend matured monthly artifacts or use the delayed phone-recovery path; social recovery is therefore a deliberate 1-of-N trust expansion.
 
 - **Rollover forgotten**
   - The phone-only path eventually activates, followed by the HWW-only path.

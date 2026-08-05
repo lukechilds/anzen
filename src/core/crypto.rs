@@ -18,6 +18,12 @@ pub struct EncryptedBlob {
     pub ciphertext: Vec<u8>,
 }
 
+pub fn random_key() -> Zeroizing<[u8; 32]> {
+    let mut key = Zeroizing::new([0_u8; 32]);
+    OsRng.fill_bytes(key.as_mut());
+    key
+}
+
 pub fn derive_key(seed: &[u8], purpose: &str) -> Result<Zeroizing<[u8; 32]>> {
     let hk = Hkdf::<Sha256>::new(Some(b"renewable-bitcoin-vault/mvp/v1"), seed);
     let mut key = Zeroizing::new([0_u8; 32]);

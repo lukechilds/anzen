@@ -10,6 +10,7 @@ pub mod crypto;
 pub mod keys;
 pub mod policy;
 pub mod recovery;
+pub mod social;
 pub mod storage;
 pub mod transactions;
 pub mod types;

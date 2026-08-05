@@ -35,6 +35,7 @@ pub(crate) mod test_support {
         let phone = hot_wallet::initialize(data_dir, network)?;
         cold_wallet::initialize(data_dir, network)?;
         let config = core::storage::initialize_vault_for_network(data_dir, network)?;
+        cold_wallet::create_cloud_recovery_backup(data_dir, &config)?;
         Ok(InitializedVault {
             config,
             phone_mnemonic: phone.mnemonic,

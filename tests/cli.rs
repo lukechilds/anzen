@@ -160,3 +160,79 @@ fn dangerous_mainnet_flag_cannot_convert_an_existing_regtest_vault() {
         .failure()
         .stderr(predicate::str::contains("cannot change an existing vault"));
 }
+
+#[test]
+fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    for args in [vec!["phone", "init"], vec!["hww", "init"], vec!["init"]] {
+        Command::cargo_bin("vault")
+            .unwrap()
+            .args(["--data-dir", data_dir])
+            .args(args)
+            .assert()
+            .success();
+    }
+
+    let public = dir.path().join("alice.pub.asc");
+    let private = dir.path().join("alice.sec.asc");
+    let recovery = dir.path().join("friend-recovery.json");
+    let backup = dir.path().join("cloud/phone-seed-backup.json");
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args([
+            "--data-dir",
+            data_dir,
+            "social",
+            "generate-friend-key",
+            "--name",
+            "Alice",
+        ])
+        .arg("--public-key")
+        .arg(&public)
+        .arg("--private-key")
+        .arg(&private)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OpenPGP key generated"));
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, "hww", "add-recovery-friend"])
+        .arg(&public)
+        .arg("--yes")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recovery friend added"));
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("vault.json")).unwrap()).unwrap();
+    let backup_text = std::fs::read_to_string(&backup).unwrap();
+    let backup_json: serde_json::Value = serde_json::from_str(&backup_text).unwrap();
+    assert_eq!(backup_json["friends"].as_array().unwrap().len(), 1);
+    assert!(!backup_text.contains(config["vault_descriptor"].as_str().unwrap()));
+
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, "social", "decrypt-backup"])
+        .arg(&backup)
+        .arg("--private-key")
+        .arg(&private)
+        .arg("--output")
+        .arg(&recovery)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Social recovery decrypted"))
+        .stdout(predicate::str::contains("Cold storage descriptor: tr("));
+    let recovered: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&recovery).unwrap()).unwrap();
+    assert_eq!(recovered["vault_descriptor"], config["vault_descriptor"]);
+
+    std::fs::remove_file(dir.path().join("phone/device.json")).unwrap();
+    Command::cargo_bin("vault")
+        .unwrap()
+        .args(["--data-dir", data_dir, "phone", "restore"])
+        .arg(&recovery)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Phone key restored"));
+}

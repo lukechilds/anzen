@@ -45,6 +45,11 @@ enum Command {
         #[command(subcommand)]
         command: HwwCommand,
     },
+    /// OpenPGP social-recovery and delayed emergency-access actions.
+    Social {
+        #[command(subcommand)]
+        command: SocialCommand,
+    },
     /// Regtest-only node controls used by the end-to-end tests.
     Node {
         #[command(subcommand)]
@@ -122,6 +127,13 @@ enum HwwCommand {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Add a friend's OpenPGP public key as a 1-of-N cloud recovery recipient.
+    AddRecoveryFriend {
+        public_key: PathBuf,
+        /// Approve non-interactively; intended for deterministic tests.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Sweep mature vault outputs using the HWW-only recovery path.
     Recover { destination: String },
     /// Validate and sign a phone-created cooperative sweep.
@@ -139,6 +151,34 @@ enum HwwCommand {
         output: PathBuf,
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SocialCommand {
+    /// Generate a simulated recovery friend's OpenPGP keypair.
+    GenerateFriendKey {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(long)]
+        private_key: PathBuf,
+    },
+    /// Decrypt the phone key and descriptor using one configured friend's private key.
+    DecryptBackup {
+        backup: PathBuf,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Decrypt social recovery and sweep funds through the delayed phone-recovery path.
+    EmergencyAccess {
+        backup: PathBuf,
+        #[arg(long)]
+        private_key: PathBuf,
+        destination: String,
     },
 }
 
@@ -209,12 +249,14 @@ fn main() -> Result<()> {
         Command::Status => print_status(&cli.data_dir, &cli.rpc),
         Command::Phone { command } => run_phone(command, &cli.data_dir, &cli.rpc, network),
         Command::Hww { command } => run_hww(command, &cli.data_dir, &cli.rpc, network),
+        Command::Social { command } => run_social(command, &cli.data_dir, &cli.rpc),
         Command::Node { command } => run_node(command, &cli.rpc, network),
     }
 }
 
 fn initialize_vault(data_dir: &Path, network: Network) -> Result<()> {
     let config = core::storage::initialize_vault_for_network(data_dir, network)?;
+    let backup = cold_wallet::create_cloud_recovery_backup(data_dir, &config)?;
     println!("Vault initialized ({})", network_label(network));
     if network == Network::Bitcoin {
         println!("DANGER: mainnet mode uses real bitcoin and fixed 1 sat/vB MVP fees");
@@ -230,6 +272,10 @@ fn initialize_vault(data_dir: &Path, network: Network) -> Result<()> {
         format_number(u64::from(config.hww_recovery_blocks))
     );
     println!("Monthly spending: disabled");
+    println!(
+        "Cloud recovery backup: phone key + descriptor encrypted; {} recovery friends",
+        backup.friends.len()
+    );
     Ok(())
 }
 
@@ -294,7 +340,7 @@ fn run_phone(
         PhoneCommand::Restore { recovery } => {
             let package: core::recovery::PhoneRecoveryPackage = read_artifact(&recovery)?;
             let mnemonic = hot_wallet::restore_phone(data_dir, &package)?;
-            println!("Phone key restored from HWW recovery package");
+            println!("Phone key restored from authenticated recovery package");
             println!("Recovered phone mnemonic: {mnemonic}");
         }
         PhoneCommand::Recover { destination } => {
@@ -371,7 +417,7 @@ fn run_hww(
             println!("Simulated HWW initialized ({})", network_label(network));
             println!("HWW mnemonic: {}", hww.mnemonic);
             println!("HWW vault key: {}", hww.vault_pubkey);
-            println!("Phone backup encrypted for the HWW");
+            println!("HWW ready to wrap the descriptor-bound cloud backup at vault init");
         }
         HwwCommand::ConfirmPolicy {
             proposal,
@@ -382,6 +428,22 @@ fn run_hww(
             let package = cold_wallet::decrypt_phone_backup_package(data_dir, &backup)?;
             write_artifact(&output, &package)?;
             report_artifact(&output, "Decrypted phone recovery package")?;
+        }
+        HwwCommand::AddRecoveryFriend { public_key, yes } => {
+            let key = fs::read(&public_key).with_context(|| {
+                format!("failed to read friend public key {}", public_key.display())
+            })?;
+            let proposed_fingerprint = core::social::friend_fingerprint(&key)?;
+            eprintln!("SIMULATED HWW — ADD RECOVERY FRIEND");
+            eprintln!("OpenPGP fingerprint: {proposed_fingerprint}");
+            eprintln!(
+                "This friend gains the phone key and descriptor if they obtain the cloud backup"
+            );
+            eprintln!("The 61,200-block phone recovery delay still applies to vault funds");
+            require_hww_approval(yes, &public_key, "recovery friend")?;
+            let fingerprint = cold_wallet::add_recovery_friend(data_dir, &key)?;
+            println!("Recovery friend added: {fingerprint}");
+            println!("Cloud backup now grants this friend delayed phone recovery access");
         }
         HwwCommand::Recover { destination } => {
             let destination = configured_address(data_dir, &destination)?;
@@ -421,7 +483,8 @@ fn run_hww(
             if let Some(policy) = &approved.renewed_policy {
                 eprintln!(
                     "HWW validated and signed the phone-key rotation plus {} renewed-policy PSBTs",
-                    1 + policy.manifest.chunk_count * 2
+                    1 + usize::from(policy.manifest.split.is_some())
+                        + policy.manifest.chunk_count * 2
                 );
             } else {
                 eprintln!("HWW validated and signed the phone-key rotation");
@@ -431,6 +494,106 @@ fn run_hww(
         }
     }
     Ok(())
+}
+
+fn run_social(command: SocialCommand, data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
+    match command {
+        SocialCommand::GenerateFriendKey {
+            name,
+            public_key,
+            private_key,
+        } => {
+            if public_key == private_key {
+                bail!("friend public and private key paths must be different");
+            }
+            let generated = core::social::generate_friend_key(&name)?;
+            core::storage::write_private(&public_key, generated.public_key_armored.as_bytes())?;
+            core::storage::write_private(&private_key, generated.private_key_armored.as_bytes())?;
+            println!(
+                "Recovery friend OpenPGP key generated: {}",
+                generated.fingerprint
+            );
+            println!("Public key: {}", public_key.display());
+            println!(
+                "Private key: {} (give only to the recovery friend)",
+                private_key.display()
+            );
+        }
+        SocialCommand::DecryptBackup {
+            backup,
+            private_key,
+            output,
+        } => {
+            let package = friend_recovery_package(data_dir, &backup, &private_key)?;
+            println!("Social recovery decrypted and authenticated");
+            println!("Phone vault key: {}", package.phone_vault_pubkey);
+            println!("Cold storage descriptor: {}", package.vault_descriptor);
+            println!("Vault address: {}", package.vault_address);
+            write_artifact(&output, &package)?;
+            report_artifact(&output, "Friend-decrypted phone recovery package")?;
+        }
+        SocialCommand::EmergencyAccess {
+            backup,
+            private_key,
+            destination,
+        } => {
+            let package = friend_recovery_package(data_dir, &backup, &private_key)?;
+            let config = core::storage::load_config(data_dir)?;
+            let destination = configured_address(data_dir, &destination)?;
+            let backend = rpc_args.connect_chain(data_dir)?;
+            let tip = backend.chain_tip()?;
+            let utxos = backend.scan_vault(&config)?;
+            let plan = core::recovery::prepare_sweep(
+                &config,
+                &utxos,
+                tip.height,
+                core::recovery::SweepPath::PhoneRecovery,
+                &destination,
+            )?;
+            let phone = core::keys::DeviceKeys::parse_for_network(
+                &bitcoin::key::Secp256k1::new(),
+                &package.phone_mnemonic,
+                config.bitcoin_network()?,
+            )?;
+            let (transaction, result) = core::recovery::sign_recovery_sweep(
+                plan,
+                core::recovery::SweepPath::PhoneRecovery,
+                &phone,
+            )?;
+            let txid = backend.broadcast(&transaction)?;
+            if txid != result.txid {
+                bail!("chain backend returned an unexpected emergency-access transaction ID");
+            }
+            print_sweep_result("Social emergency-access sweep broadcast", &result);
+            println!("On-chain phone recovery delay was enforced");
+        }
+    }
+    Ok(())
+}
+
+fn friend_recovery_package(
+    data_dir: &Path,
+    backup_path: &Path,
+    private_key_path: &Path,
+) -> Result<core::recovery::PhoneRecoveryPackage> {
+    let config = core::storage::load_config(data_dir)?;
+    let backup: core::social::CloudRecoveryBackup = core::storage::read_json(backup_path)?;
+    let private_key = fs::read(private_key_path).with_context(|| {
+        format!(
+            "failed to read friend private key {}",
+            private_key_path.display()
+        )
+    })?;
+    let payload = core::social::decrypt_with_friend(&backup, &private_key)?;
+    payload.validate_against(&config)?;
+    Ok(core::recovery::PhoneRecoveryPackage {
+        version: 2,
+        kind: "phone-recovery".to_owned(),
+        phone_mnemonic: payload.phone_mnemonic,
+        phone_vault_pubkey: payload.phone_vault_pubkey,
+        vault_descriptor: payload.vault_descriptor,
+        vault_address: payload.vault_address,
+    })
 }
 
 fn phone_set_policy(
@@ -469,7 +632,7 @@ fn hww_confirm_policy(data_dir: &Path, proposal: &Path, output: &Path, yes: bool
     let approved_manifest = cold_wallet::approve_policy(data_dir, &workspace)?;
     eprintln!(
         "HWW validated and signed all {} PSBTs after one approval",
-        1 + approved_manifest.chunk_count * 2
+        1 + usize::from(approved_manifest.split.is_some()) + approved_manifest.chunk_count * 2
     );
     let approved = core::ceremony::package_from_batch(&workspace)?;
     write_artifact(output, &approved)?;
@@ -489,6 +652,9 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &RpcArgs, approved: &Path) -
     let schedule = hot_wallet::activate_policy(data_dir, backend.as_ref(), &workspace)?;
     core::storage::set_monthly_limit(data_dir, package.manifest.monthly_limit_sats)?;
     println!("Rollover broadcast: {}", schedule.rollover_txid);
+    if let Some(split_txid) = &schedule.split_txid {
+        println!("Deferred monthly split encrypted: {split_txid}");
+    }
     println!("Active monthly limit: {} sats", schedule.monthly_limit_sats);
     println!(
         "Encrypted monthly transaction pairs: {}",
@@ -528,12 +694,23 @@ fn broadcast_monthly(
     kind: core::ceremony::TransactionKind,
 ) -> Result<()> {
     let backend = rpc_args.connect_hot(data_dir)?;
-    let txid = hot_wallet::broadcast_monthly(data_dir, backend.as_ref(), month, kind)?;
+    let result = hot_wallet::broadcast_monthly(data_dir, backend.as_ref(), month, kind)?;
     let action = match kind {
         core::ceremony::TransactionKind::Authorization => "Authorization",
         core::ceremony::TransactionKind::Revocation => "Revocation",
     };
-    println!("Broadcast {action} for {month}: {txid}");
+    if result.split_was_broadcast {
+        println!(
+            "Deferred monthly split broadcast: {}",
+            result
+                .split_txid
+                .context("broadcast result omitted its split transaction ID")?
+        );
+    }
+    println!(
+        "Broadcast {action} for {month}: {}",
+        result.transaction_txid
+    );
     Ok(())
 }
 
@@ -686,10 +863,24 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
     }
     writeln!(output, "Rollover txid: {}", manifest.rollover.unsigned_txid)?;
     writeln!(output, "Rollover fee: {} sats", manifest.rollover.fee_sats)?;
+    if let Some(split) = &manifest.split {
+        writeln!(output, "Deferred split txid: {}", split.unsigned_txid)?;
+        writeln!(output, "Deferred split fee: {} sats", split.fee_sats)?;
+        writeln!(
+            output,
+            "Exact monthly UTXO: {} sats",
+            manifest.months[0].chunk_value_sats
+        )?;
+        writeln!(
+            output,
+            "Split remainder: {} sats",
+            manifest.remainder_value_sats
+        )?;
+    }
     writeln!(
         output,
         "Phone signed PSBTs: {}",
-        1 + manifest.chunk_count * 2
+        1 + usize::from(manifest.split.is_some()) + manifest.chunk_count * 2
     )?;
     Ok(())
 }
@@ -747,7 +938,7 @@ fn report_rotation(package: &core::recovery::PhoneRotationPackage, stderr: bool)
         writeln!(
             output,
             "Renewed policy PSBTs: {}",
-            1 + policy.manifest.chunk_count * 2
+            1 + usize::from(policy.manifest.split.is_some()) + policy.manifest.chunk_count * 2
         )?;
     } else {
         writeln!(output, "Monthly spending remains disabled")?;

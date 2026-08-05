@@ -8,10 +8,17 @@ mod wallet;
 pub use rotation::{activate_phone_rotation, create_phone_rotation};
 pub use wallet::HotWallet;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonthlyBroadcastResult {
+    pub split_txid: Option<Txid>,
+    pub split_was_broadcast: bool,
+    pub transaction_txid: Txid,
+}
+
 use crate::core::{
     ceremony::{
-        self, BatchManifest, EncryptedTransaction, HotAddressProvider, PolicyPackage,
-        SCHEDULE_FILE, Schedule, ScheduleEntry, TransactionKind,
+        self, BatchManifest, EncryptedSplitTransaction, EncryptedTransaction, HotAddressProvider,
+        PolicyPackage, SCHEDULE_FILE, Schedule, ScheduleEntry, TransactionKind,
     },
     chain::{Blockchain, ElectrumBackend, RegtestRpc},
     recovery::{self, CooperativeSweepPackage, PhoneRecoveryPackage, SweepPath, SweepResult},
@@ -92,6 +99,16 @@ pub fn activate_policy(
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
 
     let rollover = finalize_vault_psbt(read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?)?;
+    let (split_file, split_txid) = match &manifest.split {
+        Some(split) => {
+            let transaction = finalize_vault_psbt(read_psbt(&batch_dir.join(&split.psbt_file))?)?;
+            let txid = transaction.compute_txid().to_string();
+            let path = data_dir.join(format!("phone/transactions/split-{txid}.json"));
+            write_encrypted_split(&path, &phone.seed, &transaction)?;
+            (Some(relative_to(data_dir, &path)?), Some(txid))
+        }
+        None => (None, None),
+    };
     let mut entries = Vec::with_capacity(manifest.months.len());
     for month in &manifest.months {
         let authorization =
@@ -129,8 +146,10 @@ pub fn activate_policy(
         });
     }
     let schedule = Schedule {
-        version: 1,
+        version: 2,
         rollover_txid: rollover.compute_txid().to_string(),
+        split_file,
+        split_txid,
         monthly_limit_sats: manifest.monthly_limit_sats,
         entries,
     };
@@ -146,7 +165,7 @@ pub fn broadcast_monthly(
     backend: &dyn HotWalletBackend,
     month: &str,
     kind: TransactionKind,
-) -> Result<Txid> {
+) -> Result<MonthlyBroadcastResult> {
     let schedule = load_schedule(data_dir)?;
     let entry = schedule
         .entries
@@ -160,6 +179,8 @@ pub fn broadcast_monthly(
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    let (split_txid, split_was_broadcast) =
+        broadcast_split_if_needed(data_dir, backend, &schedule, &phone.seed)?;
     let artifact: EncryptedTransaction = read_json(&data_dir.join(file))?;
     if artifact.month != month || artifact.kind != kind {
         bail!("encrypted monthly transaction metadata does not match the requested action");
@@ -174,9 +195,61 @@ pub fn broadcast_monthly(
     }
     // TODO(production): revocations need a phone-available CPFP path. The fixed 1 sat/vB MVP fee
     // is deterministic on regtest and explicitly unsafe under dangerously enabled mainnet mode.
-    backend
-        .broadcast(&transaction)
-        .with_context(|| format!("failed to broadcast {kind:?} for {month}"))
+    let transaction_txid = backend.broadcast(&transaction).with_context(|| {
+        let split_note = split_txid
+            .filter(|_| split_was_broadcast)
+            .map(|txid| format!("deferred split {txid} was broadcast; "))
+            .unwrap_or_default();
+        format!("{split_note}failed to broadcast {kind:?} for {month}")
+    })?;
+    Ok(MonthlyBroadcastResult {
+        split_txid,
+        split_was_broadcast,
+        transaction_txid,
+    })
+}
+
+fn broadcast_split_if_needed(
+    data_dir: &Path,
+    backend: &dyn HotWalletBackend,
+    schedule: &Schedule,
+    phone_seed: &[u8],
+) -> Result<(Option<Txid>, bool)> {
+    let (Some(file), Some(expected_txid)) = (&schedule.split_file, &schedule.split_txid) else {
+        return Ok((None, false));
+    };
+    let artifact: EncryptedSplitTransaction = read_json(&data_dir.join(file))?;
+    if artifact.version != 1 || artifact.txid != *expected_txid {
+        bail!("encrypted split transaction metadata does not match the active schedule");
+    }
+    let purpose = split_purpose(&artifact.txid);
+    let plaintext =
+        crate::core::crypto::decrypt(phone_seed, &purpose, &artifact.encrypted_transaction)?;
+    let transaction: Transaction =
+        consensus::deserialize(&plaintext).context("decrypted split transaction was invalid")?;
+    let txid = transaction.compute_txid();
+    if txid.to_string() != artifact.txid {
+        bail!("decrypted split transaction ID does not match its metadata");
+    }
+    match backend.broadcast(&transaction) {
+        Ok(broadcast_txid) if broadcast_txid == txid => Ok((Some(txid), true)),
+        Ok(_) => bail!("chain backend returned an unexpected split transaction ID"),
+        Err(error) if duplicate_broadcast_error(&error) => Ok((Some(txid), false)),
+        Err(error) => Err(error).context("failed to broadcast deferred monthly split transaction"),
+    }
+}
+
+fn duplicate_broadcast_error(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    [
+        "txn-already-in-mempool",
+        "already in block chain",
+        "already known",
+        "transaction already exists",
+        "transaction outputs already in utxo set",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 pub fn load_schedule(data_dir: &Path) -> Result<Schedule> {
@@ -220,7 +293,7 @@ pub fn apply_soft_limit(
 }
 
 pub fn restore_phone(data_dir: &Path, package: &PhoneRecoveryPackage) -> Result<String> {
-    if package.version != 1 || package.kind != "phone-recovery" {
+    if package.version != 2 || package.kind != "phone-recovery" {
         bail!("unsupported phone recovery package");
     }
     let phone_path = data_dir.join(PHONE_DEVICE_FILE);
@@ -238,6 +311,8 @@ pub fn restore_phone(data_dir: &Path, package: &PhoneRecoveryPackage) -> Result<
     )?;
     if phone.vault_pubkey.to_string() != package.phone_vault_pubkey
         || package.phone_vault_pubkey != config.phone_vault_pubkey
+        || package.vault_descriptor != config.vault_descriptor
+        || package.vault_address != config.vault_address
     {
         bail!("phone recovery package does not match the configured vault policy");
     }
@@ -308,7 +383,7 @@ fn broadcast_cooperative_sweep_for_config(
 }
 
 pub fn validate_policy_package(package: &PolicyPackage) -> Result<()> {
-    if package.version != 1 || package.kind != "monthly-policy" {
+    if package.version != 2 || package.kind != "monthly-policy" {
         bail!("unsupported policy package");
     }
     Ok(())
@@ -392,6 +467,25 @@ fn write_encrypted_transaction(
             encrypted_transaction,
         },
     )
+}
+
+fn write_encrypted_split(path: &Path, phone_seed: &[u8], transaction: &Transaction) -> Result<()> {
+    let txid = transaction.compute_txid().to_string();
+    let purpose = split_purpose(&txid);
+    let encrypted_transaction =
+        crate::core::crypto::encrypt(phone_seed, &purpose, &consensus::serialize(transaction))?;
+    write_json(
+        path,
+        &EncryptedSplitTransaction {
+            version: 1,
+            txid,
+            encrypted_transaction,
+        },
+    )
+}
+
+fn split_purpose(txid: &str) -> String {
+    format!("monthly/split/{txid}")
 }
 
 fn transaction_purpose(month: &str, kind: TransactionKind, txid: &str) -> String {

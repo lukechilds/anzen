@@ -78,7 +78,7 @@ pub fn create_phone_rotation(
         monthly_limit_sats: old_config.monthly_limit_sats,
         sweep,
         renewed_policy,
-        encrypted_phone_backup: None,
+        cloud_recovery_backup: None,
     })
 }
 
@@ -90,7 +90,7 @@ pub fn activate_phone_rotation(
     let (old_config, new_config, new_phone) = validate_phone_rotation(data_dir, package)?;
     ensure_backend_network(backend, &old_config)?;
     let backup = package
-        .encrypted_phone_backup
+        .cloud_recovery_backup
         .as_ref()
         .context("HWW-approved phone backup is missing from the rotation package")?;
     if !package.sweep.hww_approved {

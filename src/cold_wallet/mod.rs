@@ -12,6 +12,7 @@ use crate::core::{
         self, CooperativeSweepPackage, PhoneRecoveryPackage, PhoneRotationPackage, SweepPath,
         SweepResult,
     },
+    social::{self, CloudRecoveryBackup, RecoveryPayload},
     storage::{
         DeviceFile, HWW_DEVICE_FILE, InitializedDevice, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE,
         VaultConfig, load_config, load_device, load_device_keys, network_name, read_json,
@@ -25,7 +26,7 @@ use bitcoin::{Address, Network, Transaction, key::Secp256k1};
 use std::path::Path;
 use std::str::FromStr;
 
-/// Initialize the simulated HWW and create its encrypted backup of the phone seed.
+/// Initialize the simulated HWW. The descriptor-bound cloud backup is created after vault init.
 pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice> {
     validate_supported_network(network)?;
     let hww_path = data_dir.join(HWW_DEVICE_FILE);
@@ -41,7 +42,7 @@ pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice
             phone_file.network
         );
     }
-    let phone = DeviceKeys::parse_for_network(&secp, &phone_file.mnemonic, network)?;
+    DeviceKeys::parse_for_network(&secp, &phone_file.mnemonic, network)?;
     let hww = DeviceKeys::generate_for_network(&secp, network)?;
     let mnemonic = hww.mnemonic.to_string();
     write_json(
@@ -52,12 +53,6 @@ pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice
             mnemonic: mnemonic.clone(),
         },
     )?;
-    let backup = crypto::encrypt(
-        &hww.seed,
-        "phone-seed-backup",
-        phone.mnemonic.to_string().as_bytes(),
-    )?;
-    write_json(&data_dir.join(PHONE_BACKUP_FILE), &backup)?;
     Ok(InitializedDevice {
         mnemonic,
         vault_pubkey: hww.vault_pubkey.to_string(),
@@ -65,10 +60,37 @@ pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice
 }
 
 pub fn decrypt_phone_backup(data_dir: &Path) -> Result<String> {
+    let config = load_config(data_dir)?;
     let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
-    let backup: EncryptedBlob = read_json(&data_dir.join(PHONE_BACKUP_FILE))?;
-    let words = crypto::decrypt(&hww.seed, "phone-seed-backup", &backup)?;
-    String::from_utf8(words.to_vec()).context("decrypted phone backup was not UTF-8")
+    let backup =
+        load_or_migrate_cloud_backup(data_dir, &data_dir.join(PHONE_BACKUP_FILE), &config, &hww)?;
+    let payload = social::decrypt_with_hww(&backup, &hww.seed)?;
+    payload.validate_against(&config)?;
+    Ok(payload.phone_mnemonic)
+}
+
+/// Create a descriptor-bound cloud backup after the vault configuration exists.
+pub fn create_cloud_recovery_backup(
+    data_dir: &Path,
+    config: &VaultConfig,
+) -> Result<CloudRecoveryBackup> {
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
+    let backup = social::create_backup(&RecoveryPayload::new(config, &phone)?, &hww.seed, &[])?;
+    write_json(&data_dir.join(PHONE_BACKUP_FILE), &backup)?;
+    Ok(backup)
+}
+
+/// Add a 1-of-N OpenPGP recovery friend by wrapping the existing symmetric backup key.
+pub fn add_recovery_friend(data_dir: &Path, public_key: &[u8]) -> Result<String> {
+    let config = load_config(data_dir)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
+    let mut backup =
+        load_or_migrate_cloud_backup(data_dir, &data_dir.join(PHONE_BACKUP_FILE), &config, &hww)?;
+    social::decrypt_with_hww(&backup, &hww.seed)?.validate_against(&config)?;
+    let fingerprint = social::add_friend(&mut backup, &hww.seed, public_key)?;
+    write_json(&data_dir.join(PHONE_BACKUP_FILE), &backup)?;
+    Ok(fingerprint)
 }
 
 /// Validate every transaction against the displayed policy, verify the phone signatures, and add
@@ -114,20 +136,22 @@ pub fn decrypt_phone_backup_package(
 ) -> Result<PhoneRecoveryPackage> {
     let config = load_config(data_dir)?;
     let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
-    let backup: EncryptedBlob = read_json(backup_path)?;
-    let words = crypto::decrypt(&hww.seed, "phone-seed-backup", &backup)?;
-    let words =
-        String::from_utf8(words.to_vec()).context("decrypted phone backup was not UTF-8")?;
+    let backup = load_or_migrate_cloud_backup(data_dir, backup_path, &config, &hww)?;
+    let payload = social::decrypt_with_hww(&backup, &hww.seed)?;
+    payload.validate_against(&config)?;
+    let words = payload.phone_mnemonic;
     let phone =
         DeviceKeys::parse_for_network(&Secp256k1::new(), &words, config.bitcoin_network()?)?;
     if phone.vault_pubkey.to_string() != config.phone_vault_pubkey {
         anyhow::bail!("decrypted phone backup does not match the configured vault policy");
     }
     Ok(PhoneRecoveryPackage {
-        version: 1,
+        version: 2,
         kind: "phone-recovery".to_owned(),
         phone_mnemonic: words,
         phone_vault_pubkey: phone.vault_pubkey.to_string(),
+        vault_descriptor: payload.vault_descriptor,
+        vault_address: payload.vault_address,
     })
 }
 
@@ -205,12 +229,44 @@ pub fn approve_phone_rotation(
     }
 
     let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
-    approved.encrypted_phone_backup = Some(crypto::encrypt(
+    let current_backup = load_or_migrate_cloud_backup(
+        data_dir,
+        &data_dir.join(PHONE_BACKUP_FILE),
+        &old_config,
+        &hww,
+    )?;
+    social::decrypt_with_hww(&current_backup, &hww.seed)?.validate_against(&old_config)?;
+    let friend_public_keys = social::friend_public_keys(&current_backup);
+    let payload = RecoveryPayload::new(&new_config, &new_phone)?;
+    approved.cloud_recovery_backup = Some(social::create_backup(
+        &payload,
         &hww.seed,
-        "phone-seed-backup",
-        new_phone.mnemonic.to_string().as_bytes(),
+        &friend_public_keys,
     )?);
     Ok(approved)
+}
+
+fn load_or_migrate_cloud_backup(
+    data_dir: &Path,
+    backup_path: &Path,
+    config: &VaultConfig,
+    hww: &DeviceKeys,
+) -> Result<CloudRecoveryBackup> {
+    if let Ok(backup) = read_json::<CloudRecoveryBackup>(backup_path) {
+        return Ok(backup);
+    }
+    let legacy: EncryptedBlob = read_json(backup_path)
+        .context("backup is neither a cloud recovery envelope nor a legacy phone backup")?;
+    let words = crypto::decrypt(&hww.seed, "phone-seed-backup", &legacy)?;
+    let words = String::from_utf8(words.to_vec()).context("legacy phone backup was not UTF-8")?;
+    let phone =
+        DeviceKeys::parse_for_network(&Secp256k1::new(), &words, config.bitcoin_network()?)?;
+    let payload = RecoveryPayload::new(config, &phone)?;
+    let migrated = social::create_backup(&payload, &hww.seed, &[])?;
+    if backup_path == data_dir.join(PHONE_BACKUP_FILE) {
+        write_json(backup_path, &migrated)?;
+    }
+    Ok(migrated)
 }
 
 fn reset_workspace(path: &Path) -> Result<()> {

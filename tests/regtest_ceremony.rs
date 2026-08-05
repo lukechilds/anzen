@@ -50,7 +50,7 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     assert!(approved.hww_approved);
     let schedule = hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
     rpc.mine(1, &mining_address).unwrap();
-    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 12);
+    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 1);
 
     let first = schedule.entries[0].clone();
     let second = schedule.entries[1].clone();

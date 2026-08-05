@@ -28,6 +28,7 @@ readonly TESTS=(
     lost-phone-no-cloud
     both-lost
     cloud-compromise
+    social-recovery
     both-compromised
     rollover-on-time
     rollover-forgotten
@@ -300,17 +301,18 @@ init_vault() {
         /^(Simulated phone initialized|Phone mnemonic:|Phone vault key:)/ { print }
     ' "$MAIN" phone init
     vault_filtered '
-        /^(Simulated HWW initialized|HWW mnemonic:|HWW vault key:|Phone backup encrypted)/ { print }
+        /^(Simulated HWW initialized|HWW mnemonic:|HWW vault key:|HWW ready)/ { print }
     ' "$MAIN" hww init
     vault_filtered '
-        /^(Vault initialized|Cold storage descriptor:|Vault address:|Phone recovery:|HWW recovery:|Monthly spending:)/ { print }
+        /^(Vault initialized|Cold storage descriptor:|Vault address:|Phone recovery:|HWW recovery:|Monthly spending:|Cloud recovery backup:)/ { print }
     ' "$MAIN" init
 }
 
 show_backup_metadata() {
-    printf 'Encrypted phone backup: HWW-derived key, %s-byte nonce, %s-byte ciphertext.\n' \
-        "$(jq -r '.nonce | length' "$MAIN/cloud/phone-seed-backup.json")" \
-        "$(jq -r '.ciphertext | length' "$MAIN/cloud/phone-seed-backup.json")"
+    printf 'Encrypted cloud payload: random symmetric key, %s-byte nonce, %s-byte ciphertext; key wrapped for HWW and %s friend(s).\n' \
+        "$(jq -r '.encrypted_payload.nonce | length' "$MAIN/cloud/phone-seed-backup.json")" \
+        "$(jq -r '.encrypted_payload.ciphertext | length' "$MAIN/cloud/phone-seed-backup.json")" \
+        "$(jq -r '.friends | length' "$MAIN/cloud/phone-seed-backup.json")"
 }
 
 ceremony() {
@@ -319,14 +321,14 @@ ceremony() {
     local proposal="${E2E_TEST}-policy.json"
     local approved="${E2E_TEST}-approved-policy.json"
     vault_filtered '
-        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
+        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Deferred split txid:|Deferred split fee:|Exact monthly UTXO:|Split remainder:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
     ' "$MAIN" phone set-policy --monthly-limit "$monthly_limit" \
         --output "$proposal" --now "$now"
     vault_filtered '
-        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Monthly pairs:|Rollover txid:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
+        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Monthly pairs:|Rollover txid:|Deferred split txid:|Exact monthly UTXO:|Split remainder:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
     ' "$MAIN" hww confirm-policy "$proposal" --output "$approved" --yes
     vault_filtered '
-        /^(Rollover broadcast:|Active monthly limit:|Encrypted monthly transaction pairs:)/ { print }
+        /^(Rollover broadcast:|Deferred monthly split encrypted:|Active monthly limit:|Encrypted monthly transaction pairs:)/ { print }
     ' "$MAIN" phone activate-policy "$approved"
 }
 
@@ -671,7 +673,7 @@ test_both_lost() {
     mine_to_next_height "$target" "Mining the real 65,535-block HWW recovery delay"
     expect_failure "no surviving key can sign either mature recovery path" \
         "$MAIN" hww recover "$recovery_address"
-    printf 'Without the optional social-recovery mechanism (outside MVP scope), the funds are unrecoverable.\n'
+    printf 'No recovery friend was configured for this vault, so no surviving key exists.\n'
     success "Mature funds remain unrecoverable without a key."
 }
 
@@ -696,6 +698,42 @@ test_cloud_compromise() {
         "$attacker_dir" phone create-sweep "$attacker_address" \
         --output "${E2E_TEST}-cloud-sweep.json"
     success "Cloud ciphertext revealed no spending capability."
+}
+
+test_social_recovery() {
+    local friend_public="$DEMO_ROOT/alice-recovery.pub.asc"
+    local friend_private="$DEMO_ROOT/alice-recovery.sec.asc"
+    local recovery_package="$DEMO_ROOT/alice-phone-recovery.json"
+    local recovery_address target
+    setup_vault
+    make_receiver recovery_address "Replacement owner"
+
+    step "Create a recovery friend's OpenPGP key and add it with the HWW"
+    vault "$MAIN" social generate-friend-key --name "Alice <alice@example.test>" \
+        --public-key "$friend_public" --private-key "$friend_private"
+    vault "$MAIN" hww add-recovery-friend "$friend_public" --yes
+    printf 'Cloud backup contains one encrypted payload, one HWW key wrapper, and %s OpenPGP friend wrapper.\n' \
+        "$(jq '.friends | length' "$MAIN/cloud/phone-seed-backup.json")"
+    success "Phone key and descriptor protected for HWW and recovery friend."
+
+    step "Lose both devices and decrypt the cloud backup with the friend key"
+    show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
+    rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
+    vault "$MAIN" social decrypt-backup "$MAIN/cloud/phone-seed-backup.json" \
+        --private-key "$friend_private" --output "$recovery_package"
+    expect_failure "social recovery reconstructs M but cannot bypass its on-chain delay" \
+        "$MAIN" social emergency-access "$MAIN/cloud/phone-seed-backup.json" \
+        --private-key "$friend_private" "$recovery_address"
+    success "Friend decrypted the backup; early emergency access stayed locked."
+
+    target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
+    step "Wait for delayed social emergency access"
+    mine_to_next_height "$target" "Mining the real 61,200-block phone recovery delay"
+    vault "$MAIN" social emergency-access "$MAIN/cloud/phone-seed-backup.json" \
+        --private-key "$friend_private" "$recovery_address"
+    confirm_transaction "Confirming the social emergency-access sweep"
+    status_compact
+    success "Recovery friend swept the vault after the phone delay matured."
 }
 
 test_both_compromised() {
@@ -820,6 +858,7 @@ case "$E2E_TEST" in
     lost-phone-no-cloud) test_lost_phone_no_cloud ;;
     both-lost) test_both_lost ;;
     cloud-compromise) test_cloud_compromise ;;
+    social-recovery) test_social_recovery ;;
     both-compromised) test_both_compromised ;;
     rollover-on-time) test_rollover_on_time ;;
     rollover-forgotten) test_rollover_forgotten ;;

@@ -6,9 +6,10 @@ use vault_cli::{
         HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
         chain::{Blockchain, RegtestRpc, RpcConfig},
         recovery::SweepResult,
+        social::{self, CloudRecoveryBackup},
         storage::{
             HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, VaultConfig, initialize_vault,
-            load_config, set_monthly_limit,
+            load_config, read_json, set_monthly_limit,
         },
     },
     hot_wallet::{self, HotWallet},
@@ -23,6 +24,7 @@ fn initialize(data_dir: &std::path::Path) -> InitializedVault {
     let phone = hot_wallet::initialize(data_dir, Network::Regtest).unwrap();
     cold_wallet::initialize(data_dir, Network::Regtest).unwrap();
     let config = initialize_vault(data_dir).unwrap();
+    cold_wallet::create_cloud_recovery_backup(data_dir, &config).unwrap();
     InitializedVault {
         config,
         phone_mnemonic: phone.mnemonic,
@@ -83,6 +85,12 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     let phone_vault = initialize(phone_dir.path());
     let hww_vault = initialize(hww_dir.path());
     let rotation_vault = initialize(rotation_dir.path());
+    let recovery_friend = social::generate_friend_key("Rotation recovery friend").unwrap();
+    cold_wallet::add_recovery_friend(
+        rotation_dir.path(),
+        recovery_friend.public_key_armored.as_bytes(),
+    )
+    .unwrap();
     let mut phone_hot = HotWallet::open_or_create(phone_dir.path()).unwrap();
     let destination = phone_hot.next_receive_address().unwrap();
 
@@ -148,6 +156,17 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
         cold_wallet::decrypt_phone_backup(rotation_dir.path()).unwrap(),
         rotation.new_phone_mnemonic
     );
+    let rotated_backup: CloudRecoveryBackup =
+        read_json(&rotation_dir.path().join(PHONE_BACKUP_FILE)).unwrap();
+    let friend_payload = social::decrypt_with_friend(
+        &rotated_backup,
+        recovery_friend.private_key_armored.as_bytes(),
+    )
+    .unwrap();
+    friend_payload
+        .validate_against(&load_config(rotation_dir.path()).unwrap())
+        .unwrap();
+    assert_eq!(friend_payload.phone_mnemonic, rotation.new_phone_mnemonic);
     assert!(rotation_dir.path().join(HWW_DEVICE_FILE).exists());
     let renewed_schedule = rotation.renewed_schedule.as_ref().unwrap();
     assert_eq!(renewed_schedule.monthly_limit_sats, 10_000_000);
@@ -164,7 +183,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     let new_config = load_config(rotation_dir.path()).unwrap();
     assert_eq!(new_config.monthly_limit_sats, 10_000_000);
     assert_eq!(rpc.scan_vault(&old_config).unwrap().len(), 0);
-    assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 12);
+    assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 1);
 }
 
 fn mine_until_next_height(rpc: &RegtestRpc, target_next_height: u64, address: &Address) {

@@ -1,9 +1,9 @@
 use super::{
     DEFAULT_FEE_RATE_SAT_VB, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
     ceremony::{PolicyPackage, Schedule},
-    crypto::EncryptedBlob,
     keys::DeviceKeys,
     policy::{SpendPath, VaultPolicy},
+    social::CloudRecoveryBackup,
     storage::{DeviceFile, VaultConfig, load_config, read_json},
     transactions::{
         create_vault_psbt, estimate_vault_vsize, finalize_vault_psbt, sign_vault_psbt,
@@ -78,6 +78,8 @@ pub struct PhoneRecoveryPackage {
     pub kind: String,
     pub phone_mnemonic: String,
     pub phone_vault_pubkey: String,
+    pub vault_descriptor: String,
+    pub vault_address: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +107,7 @@ pub struct PhoneRotationPackage {
     pub monthly_limit_sats: u64,
     pub sweep: CooperativeSweepPackage,
     pub renewed_policy: Option<PolicyPackage>,
-    pub encrypted_phone_backup: Option<EncryptedBlob>,
+    pub cloud_recovery_backup: Option<CloudRecoveryBackup>,
 }
 
 pub struct SweepPlan {
@@ -369,7 +371,7 @@ pub fn validate_rotation_policy_binding(
     sweep: &CooperativeSweepPackage,
     renewed: &PolicyPackage,
 ) -> Result<()> {
-    if renewed.version != 1
+    if renewed.version != 2
         || renewed.kind != "monthly-policy"
         || !renewed.manifest.phone_approved
         || renewed.manifest.vault_descriptor != new_config.vault_descriptor
@@ -498,6 +500,28 @@ mod tests {
             .is_err()
         );
         assert!(dir.path().join(PHONE_BACKUP_FILE).exists());
+    }
+
+    #[test]
+    fn legacy_hww_phone_backup_migrates_to_the_descriptor_bound_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let hww = crate::core::storage::load_device_keys(dir.path(), HWW_DEVICE_FILE).unwrap();
+        let legacy = crate::core::crypto::encrypt(
+            &hww.seed,
+            "phone-seed-backup",
+            initialized.phone_mnemonic.as_bytes(),
+        )
+        .unwrap();
+        crate::core::storage::write_json(&dir.path().join(PHONE_BACKUP_FILE), &legacy).unwrap();
+
+        assert_eq!(
+            cold_wallet::decrypt_phone_backup(dir.path()).unwrap(),
+            initialized.phone_mnemonic
+        );
+        let migrated: crate::core::social::CloudRecoveryBackup =
+            crate::core::storage::read_json(&dir.path().join(PHONE_BACKUP_FILE)).unwrap();
+        assert_eq!(migrated.kind, "vault-cloud-recovery");
     }
 
     #[test]
