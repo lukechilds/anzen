@@ -28,7 +28,7 @@ Anzen is designed to make permanent loss extraordinarily difficult. It has no si
 | Scenario | What happens |
 | --- | --- |
 | Phone lost | The hardware wallet immediately decrypts the cloud backup of the phone key, allowing the phone key to be restored and rotated. |
-| Hardware wallet lost | Existing monthly allowances continue to work from the phone. The phone-only recovery path activates after 61,200 blocks—about 14 months from confirmation, and potentially much sooner after the device is lost. |
+| Hardware wallet lost | Existing monthly allowances continue to work from the phone. The phone-only recovery path activates after 61,200 blocks (~14 months) from confirmation, and potentially much sooner after the device is lost. |
 | Phone stolen | The attacker may take the hot balance or matured allowances, but cannot immediately spend the main vault. The honest hardware-wallet holder can restore the backed-up phone key and rotate the vault before the delayed phone path activates. |
 | Hardware wallet stolen | The attacker cannot immediately spend the vault. The honest phone’s recovery path activates first, leaving roughly a one-month priority window before the hardware-wallet-only path matures. |
 | Both devices lost | If social recovery was configured, any approved recovery friend can decrypt the phone backup and use the delayed phone-recovery path to sweep into replacement keys. Without social recovery, permanent loss of both devices is unrecoverable. |
