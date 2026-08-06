@@ -196,7 +196,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     assert_eq!(new_config.monthly_limit_sats, 10_000_000);
     assert_eq!(new_config.emergency_access_limit_sats, 20_000_000);
     assert_eq!(rpc.scan_vault(&old_config).unwrap().len(), 0);
-    assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 1);
+    assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 13);
 }
 
 fn mine_until_next_height(rpc: &BitcoinCoreBackend, target_next_height: u64, address: &Address) {

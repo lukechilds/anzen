@@ -325,15 +325,15 @@ ceremony() {
     local proposal="${E2E_TEST}-policy.json"
     local approved="${E2E_TEST}-approved-policy.json"
     anzen_filtered '
-        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Deferred split txid:|Deferred split fee:|Exact monthly UTXO:|Split remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
+        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Exact monthly UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
     ' "$MAIN" phone set-policy --monthly-limit "$monthly_limit" \
         --emergency-access-limit "$emergency_access_limit" \
         --output "$proposal" --now "$now"
     anzen_filtered '
-        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Monthly pairs:|Rollover txid:|Deferred split txid:|Exact monthly UTXO:|Split remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
+        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Monthly pairs:|Rollover txid:|Exact monthly UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
     ' "$MAIN" hww confirm-policy "$proposal" --output "$approved" --yes
     anzen_filtered '
-        /^(Rollover broadcast:|Deferred monthly split encrypted:|Active monthly limit:|Encrypted monthly transaction pairs:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
+        /^(Rollover broadcast:|Active monthly limit:|Encrypted monthly transaction pairs:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
     ' "$MAIN" phone activate-policy "$approved"
 }
 

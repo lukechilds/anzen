@@ -54,7 +54,7 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     assert!(approved.hww_approved);
     let schedule = hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
     rpc.mine(1, &mining_address).unwrap();
-    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 1);
+    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 13);
 
     let first = schedule.entries[0].clone();
     let second = schedule.entries[1].clone();
@@ -125,8 +125,7 @@ fn real_regtest_enforces_emergency_delay_and_cancellation() {
     set_policy_limits(dir.path(), 10_000_000, 50_000_000).unwrap();
     rpc.mine(1, &mining_address).unwrap();
 
-    let initiated = hot_wallet::initiate_emergency_access(dir.path(), &rpc).unwrap();
-    assert!(initiated.split_was_broadcast);
+    hot_wallet::initiate_emergency_access(dir.path(), &rpc).unwrap();
     rpc.mine(1, &mining_address).unwrap();
 
     let premature = hot_wallet::withdraw_emergency_access(dir.path(), &rpc).unwrap_err();

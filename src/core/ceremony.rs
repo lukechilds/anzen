@@ -24,7 +24,6 @@ use std::{
 pub const DEFAULT_BATCH_DIR: &str = "ceremony/active";
 pub const SCHEDULE_FILE: &str = "phone/schedule.json";
 pub const POLICY_PACKAGE_KIND: &str = "vault-policy";
-const LEGACY_POLICY_PACKAGE_KIND: &str = "monthly-policy";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PolicyLimits {
@@ -80,8 +79,7 @@ pub struct BatchManifest {
     pub total_input_sats: u64,
     pub chunk_count: usize,
     pub rollover: BatchTransaction,
-    pub split: Option<BatchTransaction>,
-    pub remainder_vout: Option<u32>,
+    pub remainder_vout: u32,
     pub remainder_value_sats: u64,
     pub months: Vec<MonthPair>,
     #[serde(default)]
@@ -97,13 +95,6 @@ pub struct EncryptedTransaction {
     pub kind: TransactionKind,
     pub txid: String,
     pub unlock_timestamp: Option<u32>,
-    pub encrypted_transaction: EncryptedBlob,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncryptedSplitTransaction {
-    pub version: u8,
-    pub txid: String,
     pub encrypted_transaction: EncryptedBlob,
 }
 
@@ -158,8 +149,6 @@ pub struct EmergencyAccessSchedule {
 pub struct Schedule {
     pub version: u8,
     pub rollover_txid: String,
-    pub split_file: Option<String>,
-    pub split_txid: Option<String>,
     pub monthly_limit_sats: u64,
     #[serde(default)]
     pub emergency_access_limit_sats: u64,
@@ -194,7 +183,7 @@ pub fn package_from_batch(batch_dir: &Path) -> Result<PolicyPackage> {
         psbts.insert(transaction.psbt_file.clone(), text.trim().to_owned());
     }
     Ok(PolicyPackage {
-        version: 2,
+        version: 3,
         kind: POLICY_PACKAGE_KIND.to_owned(),
         manifest,
         psbts,
@@ -202,11 +191,7 @@ pub fn package_from_batch(batch_dir: &Path) -> Result<PolicyPackage> {
 }
 
 pub fn is_supported_policy_package(package: &PolicyPackage) -> bool {
-    package.version == 2
-        && matches!(
-            package.kind.as_str(),
-            POLICY_PACKAGE_KIND | LEGACY_POLICY_PACKAGE_KIND
-        )
+    package.version == 3 && package.kind == POLICY_PACKAGE_KIND
 }
 
 pub fn materialize_policy_package(package: &PolicyPackage, batch_dir: &Path) -> Result<()> {
@@ -278,51 +263,6 @@ pub fn build_policy_proposal(
         .map(|utxo| vault_input(utxo.outpoint, Sequence::MAX))
         .collect::<Vec<_>>();
 
-    // The rollover always consolidates the live vault into one output. Monthly chunks are created
-    // by a separately presigned split transaction that remains off chain until the first monthly
-    // authorization or revocation is attempted.
-    let rollover_template = Transaction {
-        version: Version::TWO,
-        lock_time: absolute::LockTime::ZERO,
-        input: input_template.clone(),
-        output: vec![TxOut {
-            value: Amount::from_sat(1),
-            script_pubkey: vault_script.clone(),
-        }],
-    };
-    let rollover_fee = estimate_vault_vsize(&rollover_template, &policy, SpendPath::Cooperative)?
-        * DEFAULT_FEE_RATE_SAT_VB;
-    let rollover_value = total_input_sats
-        .checked_sub(rollover_fee)
-        .context("vault balance cannot pay the rollover fee")?;
-    if rollover_value < vault_script.minimal_non_dust().to_sat() {
-        bail!("vault balance cannot create a non-dust rollover output");
-    }
-
-    let rollover_tx = Transaction {
-        version: Version::TWO,
-        lock_time: absolute::LockTime::ZERO,
-        input: input_template,
-        output: vec![TxOut {
-            value: Amount::from_sat(rollover_value),
-            script_pubkey: vault_script.clone(),
-        }],
-    };
-    let rollover_txid = rollover_tx.compute_txid();
-    let prevouts = utxos
-        .iter()
-        .map(|utxo| utxo.txout.clone())
-        .collect::<Vec<_>>();
-    let mut rollover_psbt = create_vault_psbt(rollover_tx.clone(), &prevouts, &policy)?;
-    sign_vault_psbt(
-        &mut rollover_psbt,
-        &policy,
-        SpendPath::Cooperative,
-        &phone.vault_keypair,
-    )?;
-    let rollover_file = "rollover.psbt".to_owned();
-    write_psbt(&batch_dir.join(&rollover_file), &rollover_psbt)?;
-
     let emergency_hot_address = (emergency_access_limit_sats > 0)
         .then(|| hot.next_receive_address())
         .transpose()?;
@@ -362,91 +302,97 @@ pub fn build_policy_proposal(
             .context("emergency access reserve overflowed")?
     };
 
-    let (chunk_count, split, split_tx, chunk_value, remainder_value_sats) =
-        if monthly_limit_sats == 0 {
-            (0, None, None, 0, 0)
-        } else {
-            let authorization_fee = authorization_fee(
-                &policy,
-                OutPoint::null(),
-                monthly_limit_sats,
-                500_000_001,
+    let chunk_value = if monthly_limit_sats == 0 {
+        0
+    } else {
+        let authorization_fee = authorization_fee(
+            &policy,
+            OutPoint::null(),
+            monthly_limit_sats,
+            500_000_001,
+            vault_script.clone(),
+        )?;
+        monthly_limit_sats
+            .checked_add(authorization_fee)
+            .context("monthly limit plus fee overflowed")?
+    };
+
+    // The annual rollover directly creates every funded monthly chunk plus one cold remainder.
+    // This keeps each policy action one transaction deep and avoids a shared deferred parent.
+    let mut selected_rollover = None;
+    if monthly_limit_sats > 0 {
+        for count in (1..=MONTHS_PER_ROLLOVER).rev() {
+            let template = rollover_template(
+                input_template.clone(),
+                count,
+                chunk_value,
+                1,
                 vault_script.clone(),
-            )?;
-            let chunk_value = monthly_limit_sats
-                .checked_add(authorization_fee)
-                .context("monthly limit plus fee overflowed")?;
-            let mut selected = None;
-            for count in (1..=MONTHS_PER_ROLLOVER).rev() {
-                let template = split_template(
-                    OutPoint::new(rollover_txid, 0),
-                    count,
-                    chunk_value,
-                    1,
-                    vault_script.clone(),
-                );
-                let split_fee = estimate_vault_vsize(&template, &policy, SpendPath::Cooperative)?
-                    * DEFAULT_FEE_RATE_SAT_VB;
-                let required = split_fee
-                    .checked_add(
-                        chunk_value
-                            .checked_mul(count as u64)
-                            .context("monthly chunk total overflowed")?,
-                    )
-                    .and_then(|value| value.checked_add(minimum_remainder_value))
-                    .context("monthly split requirement overflowed")?;
-                if rollover_value >= required {
-                    let remainder = rollover_value - split_fee - chunk_value * count as u64;
-                    selected = Some((count, split_fee, remainder));
-                    break;
-                }
+            );
+            let fee = estimate_vault_vsize(&template, &policy, SpendPath::Cooperative)?
+                * DEFAULT_FEE_RATE_SAT_VB;
+            let required = fee
+                .checked_add(
+                    chunk_value
+                        .checked_mul(count as u64)
+                        .context("monthly chunk total overflowed")?,
+                )
+                .and_then(|value| value.checked_add(minimum_remainder_value))
+                .context("monthly rollover requirement overflowed")?;
+            if total_input_sats >= required {
+                let remainder = total_input_sats - fee - chunk_value * count as u64;
+                selected_rollover = Some((count, fee, remainder));
+                break;
             }
-            match selected {
-                None => (0, None, None, 0, 0),
-                Some((count, split_fee, remainder)) => {
-                    let split_tx = split_template(
-                        OutPoint::new(rollover_txid, 0),
-                        count,
-                        chunk_value,
-                        remainder,
-                        vault_script.clone(),
-                    );
-                    let mut split_psbt = create_vault_psbt(
-                        split_tx.clone(),
-                        std::slice::from_ref(&rollover_tx.output[0]),
-                        &policy,
-                    )?;
-                    sign_vault_psbt(
-                        &mut split_psbt,
-                        &policy,
-                        SpendPath::Cooperative,
-                        &phone.vault_keypair,
-                    )?;
-                    let split_file = "split.psbt".to_owned();
-                    write_psbt(&batch_dir.join(&split_file), &split_psbt)?;
-                    (
-                        count,
-                        Some(BatchTransaction {
-                            psbt_file: split_file,
-                            unsigned_txid: split_tx.compute_txid().to_string(),
-                            fee_sats: split_fee,
-                        }),
-                        Some(split_tx),
-                        chunk_value,
-                        remainder,
-                    )
-                }
-            }
-        };
+        }
+    }
+
+    let (chunk_count, rollover_fee, remainder_value_sats) = match selected_rollover {
+        Some(selected) => selected,
+        None => {
+            let template = rollover_template(input_template.clone(), 0, 0, 1, vault_script.clone());
+            let fee = estimate_vault_vsize(&template, &policy, SpendPath::Cooperative)?
+                * DEFAULT_FEE_RATE_SAT_VB;
+            let remainder = total_input_sats
+                .checked_sub(fee)
+                .context("vault balance cannot pay the rollover fee")?;
+            (0, fee, remainder)
+        }
+    };
+    if remainder_value_sats < minimum_remainder_value {
+        if emergency_access_limit_sats > 0 {
+            bail!("vault balance cannot fund the configured emergency access amount and fees");
+        }
+        bail!("vault balance cannot create a non-dust rollover remainder");
+    }
+
+    let rollover_tx = rollover_template(
+        input_template,
+        chunk_count,
+        chunk_value,
+        remainder_value_sats,
+        vault_script.clone(),
+    );
+    let rollover_txid = rollover_tx.compute_txid();
+    let prevouts = utxos
+        .iter()
+        .map(|utxo| utxo.txout.clone())
+        .collect::<Vec<_>>();
+    let mut rollover_psbt = create_vault_psbt(rollover_tx.clone(), &prevouts, &policy)?;
+    sign_vault_psbt(
+        &mut rollover_psbt,
+        &policy,
+        SpendPath::Cooperative,
+        &phone.vault_keypair,
+    )?;
+    let rollover_file = "rollover.psbt".to_owned();
+    write_psbt(&batch_dir.join(&rollover_file), &rollover_psbt)?;
 
     let month_starts = next_month_starts(now, chunk_count)?;
     let mut months = Vec::with_capacity(chunk_count);
     for (index, (month, unlock_timestamp)) in month_starts.into_iter().enumerate() {
         let hot_address = hot.next_receive_address()?;
-        let split_tx = split_tx
-            .as_ref()
-            .context("active monthly policy is missing its split transaction")?;
-        let chunk_outpoint = OutPoint::new(split_tx.compute_txid(), index as u32);
+        let chunk_outpoint = OutPoint::new(rollover_txid, index as u32);
         let authorization_fee = authorization_fee(
             &policy,
             chunk_outpoint,
@@ -465,7 +411,7 @@ pub fn build_policy_proposal(
         )?;
         let mut authorization_psbt = create_vault_psbt(
             authorization_tx.clone(),
-            std::slice::from_ref(&split_tx.output[index]),
+            std::slice::from_ref(&rollover_tx.output[index]),
             &policy,
         )?;
         sign_vault_psbt(
@@ -485,7 +431,7 @@ pub fn build_policy_proposal(
         )?;
         let mut revocation_psbt = create_vault_psbt(
             revocation_tx.clone(),
-            std::slice::from_ref(&split_tx.output[index]),
+            std::slice::from_ref(&rollover_tx.output[index]),
             &policy,
         )?;
         sign_vault_psbt(
@@ -521,16 +467,8 @@ pub fn build_policy_proposal(
 
     let emergency_access = match emergency_hot_address {
         Some(hot_address) => {
-            let (source_outpoint, source_txout) = match &split_tx {
-                Some(split_tx) => (
-                    OutPoint::new(split_tx.compute_txid(), chunk_count as u32),
-                    split_tx.output[chunk_count].clone(),
-                ),
-                None => (
-                    OutPoint::new(rollover_txid, 0),
-                    rollover_tx.output[0].clone(),
-                ),
-            };
+            let source_outpoint = OutPoint::new(rollover_txid, chunk_count as u32);
+            let source_txout = rollover_tx.output[chunk_count].clone();
             Some(build_emergency_access(
                 &policy,
                 source_outpoint,
@@ -547,7 +485,7 @@ pub fn build_policy_proposal(
     };
 
     let manifest = BatchManifest {
-        version: 2,
+        version: 3,
         created_at: now.timestamp(),
         network: config.network.clone(),
         vault_descriptor: config.vault_descriptor.clone(),
@@ -562,8 +500,7 @@ pub fn build_policy_proposal(
             unsigned_txid: rollover_txid.to_string(),
             fee_sats: rollover_fee,
         },
-        split,
-        remainder_vout: (chunk_count > 0).then_some(chunk_count as u32),
+        remainder_vout: chunk_count as u32,
         remainder_value_sats,
         months,
         emergency_access,
@@ -583,7 +520,7 @@ pub fn validate_batch(
     manifest: &BatchManifest,
     batch_dir: &Path,
 ) -> Result<VaultPolicy> {
-    if manifest.version != 2 || manifest.network != config.network {
+    if manifest.version != 3 || manifest.network != config.network {
         bail!("unsupported ceremony manifest or network mismatch");
     }
     if manifest.vault_descriptor != config.vault_descriptor
@@ -609,7 +546,14 @@ pub fn validate_batch(
     let rollover = read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?;
     let rollover_tx = &rollover.unsigned_tx;
     if rollover_tx.compute_txid().to_string() != manifest.rollover.unsigned_txid
-        || rollover_tx.output.len() != 1
+        || rollover_tx.version != Version::TWO
+        || rollover_tx.lock_time != absolute::LockTime::ZERO
+        || rollover_tx.input.is_empty()
+        || rollover_tx
+            .input
+            .iter()
+            .any(|input| input.sequence != Sequence::MAX)
+        || rollover_tx.output.len() != manifest.chunk_count + 1
         || rollover_tx.input.len() != rollover.inputs.len()
     {
         bail!("rollover PSBT does not match its manifest");
@@ -633,73 +577,27 @@ pub fn validate_batch(
     if manifest.rollover.fee_sats != expected_rollover_fee {
         bail!("rollover does not pay the approved fixed fee rate");
     }
-
-    let split = match (&manifest.split, manifest.chunk_count == 0) {
-        (None, true) => {
-            if manifest.remainder_vout.is_some() || manifest.remainder_value_sats != 0 {
-                bail!("unfunded monthly policy contains split remainder metadata");
-            }
-            None
-        }
-        (Some(_), true) => bail!("unfunded monthly policy must not contain a split transaction"),
-        (None, false) => bail!("funded monthly policy is missing its split transaction"),
-        (Some(split_manifest), false) => {
-            let split = read_psbt(&batch_dir.join(&split_manifest.psbt_file))?;
-            let split_tx = &split.unsigned_tx;
-            let expected_outpoint = OutPoint::new(rollover_tx.compute_txid(), 0);
-            if split_tx.compute_txid().to_string() != split_manifest.unsigned_txid
-                || split_tx.input.len() != 1
-                || split.inputs.len() != 1
-                || split_tx.input[0].previous_output != expected_outpoint
-                || split_tx.input[0].sequence != Sequence::MAX
-                || split.inputs[0].witness_utxo.as_ref() != Some(&rollover_tx.output[0])
-                || split_tx.output.len() != manifest.chunk_count + 1
-                || split_tx
-                    .output
-                    .iter()
-                    .any(|output| output.script_pubkey != vault_script)
-            {
-                bail!("split PSBT does not create the approved monthly outputs");
-            }
-            let fee = rollover_tx.output[0]
-                .value
-                .to_sat()
-                .checked_sub(output_sum(split_tx)?)
-                .context("split outputs exceed its rollover input")?;
-            let expected_fee = estimate_vault_vsize(split_tx, &policy, SpendPath::Cooperative)?
-                * DEFAULT_FEE_RATE_SAT_VB;
-            if fee != split_manifest.fee_sats || fee != expected_fee {
-                bail!("split transaction does not pay the approved fixed fee rate");
-            }
-            if manifest.remainder_vout != Some(manifest.chunk_count as u32)
-                || split_tx.output[manifest.chunk_count].value.to_sat()
-                    != manifest.remainder_value_sats
-                || manifest.remainder_value_sats < vault_script.minimal_non_dust().to_sat()
-            {
-                bail!("split remainder does not match its manifest");
-            }
-            Some(split)
-        }
-    };
+    if manifest.remainder_vout != manifest.chunk_count as u32
+        || rollover_tx.output[manifest.chunk_count].value.to_sat() != manifest.remainder_value_sats
+        || manifest.remainder_value_sats < vault_script.minimal_non_dust().to_sat()
+    {
+        bail!("rollover remainder does not match its manifest");
+    }
 
     for (index, month) in manifest.months.iter().enumerate() {
-        let split = split
-            .as_ref()
-            .context("monthly entry is missing its split transaction")?;
-        let split_tx = &split.unsigned_tx;
         if month.chunk_vout != index as u32
-            || month.chunk_value_sats != split_tx.output[index].value.to_sat()
+            || month.chunk_value_sats != rollover_tx.output[index].value.to_sat()
         {
-            bail!("month {} does not match its split chunk", month.month);
+            bail!("month {} does not match its rollover chunk", month.month);
         }
-        let expected_outpoint = OutPoint::new(split_tx.compute_txid(), index as u32);
+        let expected_outpoint = OutPoint::new(rollover_tx.compute_txid(), index as u32);
         let hot_script = Address::from_str(&month.hot_address)?
             .require_network(config.bitcoin_network()?)?
             .script_pubkey();
         let authorization = read_psbt(&batch_dir.join(&month.authorization.psbt_file))?;
         validate_child_common(
             &authorization,
-            &split_tx.output[index],
+            &rollover_tx.output[index],
             expected_outpoint,
             &month.authorization,
         )?;
@@ -722,7 +620,7 @@ pub fn validate_batch(
         let revocation = read_psbt(&batch_dir.join(&month.revocation.psbt_file))?;
         validate_child_common(
             &revocation,
-            &split_tx.output[index],
+            &rollover_tx.output[index],
             expected_outpoint,
             &month.revocation,
         )?;
@@ -749,14 +647,7 @@ pub fn validate_batch(
             bail!("monthly transaction does not pay the approved fixed fee rate");
         }
     }
-    validate_emergency_access(
-        config,
-        manifest,
-        batch_dir,
-        &policy,
-        &rollover,
-        split.as_ref(),
-    )?;
+    validate_emergency_access(config, manifest, batch_dir, &policy, &rollover)?;
     Ok(policy)
 }
 
@@ -766,7 +657,6 @@ fn validate_emergency_access(
     batch_dir: &Path,
     policy: &VaultPolicy,
     rollover: &Psbt,
-    split: Option<&Psbt>,
 ) -> Result<()> {
     let emergency = match (
         manifest.emergency_access_limit_sats,
@@ -790,19 +680,10 @@ fn validate_emergency_access(
         .require_network(config.bitcoin_network()?)?
         .script_pubkey();
     let vault_script = policy.address.script_pubkey();
-    let (source_outpoint, source_txout) = match split {
-        Some(split) => {
-            let index = manifest.chunk_count;
-            (
-                OutPoint::new(split.unsigned_tx.compute_txid(), index as u32),
-                &split.unsigned_tx.output[index],
-            )
-        }
-        None => (
-            OutPoint::new(rollover.unsigned_tx.compute_txid(), 0),
-            &rollover.unsigned_tx.output[0],
-        ),
-    };
+    let remainder_index = manifest.remainder_vout as usize;
+    let source_outpoint =
+        OutPoint::new(rollover.unsigned_tx.compute_txid(), manifest.remainder_vout);
+    let source_txout = &rollover.unsigned_tx.output[remainder_index];
     let trigger = read_psbt(&batch_dir.join(&emergency.trigger.psbt_file))?;
     validate_child_common(&trigger, source_txout, source_outpoint, &emergency.trigger)?;
     let trigger_tx = &trigger.unsigned_tx;
@@ -1159,8 +1040,8 @@ fn authorization_template(
     })
 }
 
-fn split_template(
-    rollover_outpoint: OutPoint,
+fn rollover_template(
+    inputs: Vec<TxIn>,
     chunk_count: usize,
     chunk_value: u64,
     remainder_value: u64,
@@ -1179,7 +1060,7 @@ fn split_template(
     Transaction {
         version: Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![vault_input(rollover_outpoint, Sequence::MAX)],
+        input: inputs,
         output: outputs,
     }
 }
@@ -1283,11 +1164,8 @@ pub fn read_psbt(path: &Path) -> Result<Psbt> {
 }
 
 pub fn manifest_transactions(manifest: &BatchManifest) -> Vec<&BatchTransaction> {
-    let mut transactions = Vec::with_capacity(5 + manifest.months.len() * 2);
+    let mut transactions = Vec::with_capacity(4 + manifest.months.len() * 2);
     transactions.push(&manifest.rollover);
-    if let Some(split) = &manifest.split {
-        transactions.push(split);
-    }
     for month in &manifest.months {
         transactions.push(&month.authorization);
         transactions.push(&month.revocation);
@@ -1393,16 +1271,22 @@ mod tests {
         assert_eq!(manifest.months.first().unwrap().month, "2026-09");
         assert_eq!(manifest.months.last().unwrap().month, "2027-08");
         let rollover = read_psbt(&batch.join(&manifest.rollover.psbt_file)).unwrap();
-        assert_eq!(rollover.unsigned_tx.output.len(), 1);
-        let split = read_psbt(&batch.join(&manifest.split.as_ref().unwrap().psbt_file)).unwrap();
-        assert_eq!(split.unsigned_tx.output.len(), 13);
+        assert_eq!(rollover.unsigned_tx.output.len(), 13);
+        assert!(!batch.join("split.psbt").exists());
         assert!(manifest.months.iter().all(|month| {
             month.chunk_value_sats == manifest.monthly_limit_sats + month.authorization.fee_sats
+                && read_psbt(&batch.join(&month.authorization.psbt_file))
+                    .unwrap()
+                    .unsigned_tx
+                    .input[0]
+                    .previous_output
+                    .txid
+                    == rollover.unsigned_tx.compute_txid()
                 && batch.join(&month.authorization.psbt_file).exists()
                 && batch.join(&month.revocation.psbt_file).exists()
         }));
         assert_eq!(
-            split.unsigned_tx.output[12].value.to_sat(),
+            rollover.unsigned_tx.output[12].value.to_sat(),
             manifest.remainder_value_sats
         );
         validate_batch(&initialized.config, &manifest, &batch).unwrap();
@@ -1441,17 +1325,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(manifest.chunk_count, 12);
-        assert_eq!(manifest_transactions(&manifest).len(), 29);
+        assert_eq!(manifest_transactions(&manifest).len(), 28);
         let emergency = manifest.emergency_access.as_ref().unwrap();
         assert_eq!(emergency.amount_sats, 50_000_000);
         assert_eq!(emergency.delay_seconds, EMERGENCY_ACCESS_DELAY_SECONDS);
 
-        let split = read_psbt(&batch.join(&manifest.split.as_ref().unwrap().psbt_file)).unwrap();
+        let rollover = read_psbt(&batch.join(&manifest.rollover.psbt_file)).unwrap();
         let trigger = read_psbt(&batch.join(&emergency.trigger.psbt_file)).unwrap();
         assert_eq!(
             trigger.unsigned_tx.input[0].previous_output,
             OutPoint::new(
-                split.unsigned_tx.compute_txid(),
+                rollover.unsigned_tx.compute_txid(),
                 manifest.chunk_count as u32
             )
         );
@@ -1503,7 +1387,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(manifest.chunk_count, 0);
-        assert!(manifest.split.is_none());
         assert_eq!(manifest_transactions(&manifest).len(), 4);
         let emergency = manifest.emergency_access.as_ref().unwrap();
         let trigger = read_psbt(&batch.join(&emergency.trigger.psbt_file)).unwrap();
@@ -1552,7 +1435,6 @@ mod tests {
         .unwrap();
         assert_eq!(manifest.monthly_limit_sats, 10_000_000);
         assert_eq!(manifest.chunk_count, 0);
-        assert!(manifest.split.is_none());
         assert!(manifest.months.is_empty());
         assert_eq!(
             manifest.emergency_access.as_ref().unwrap().amount_sats,
@@ -1637,6 +1519,27 @@ mod tests {
     }
 
     #[test]
+    fn hww_rejects_a_tampered_direct_rollover_chunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        let manifest = prepare_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 200_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
+            &batch,
+        )
+        .unwrap();
+        let path = batch.join(&manifest.rollover.psbt_file);
+        let mut psbt = read_psbt(&path).unwrap();
+        psbt.unsigned_tx.output[0].value += Amount::from_sat(1);
+        write_psbt(&path, &psbt).unwrap();
+        assert!(cold_wallet::approve_policy(dir.path(), &batch).is_err());
+    }
+
+    #[test]
     fn zero_monthly_limit_creates_only_a_cold_rollover() {
         let dir = tempfile::tempdir().unwrap();
         let initialized = initialize(dir.path()).unwrap();
@@ -1701,12 +1604,12 @@ mod tests {
         let imported = dir.path().join("imported");
         materialize_policy_package(&package, &imported).unwrap();
         validate_batch(&initialized.config, &package.manifest, &imported).unwrap();
-        assert_eq!(package.psbts.len(), 26);
+        assert_eq!(package.version, 3);
+        assert_eq!(package.psbts.len(), 25);
 
         let mut legacy = package.clone();
-        legacy.kind = LEGACY_POLICY_PACKAGE_KIND.to_owned();
+        legacy.version = 2;
         let legacy_imported = dir.path().join("legacy-imported");
-        materialize_policy_package(&legacy, &legacy_imported).unwrap();
-        validate_batch(&initialized.config, &legacy.manifest, &legacy_imported).unwrap();
+        assert!(materialize_policy_package(&legacy, &legacy_imported).is_err());
     }
 }

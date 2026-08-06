@@ -432,11 +432,6 @@ fn run_phone(
             match command {
                 EmergencyCommand::Initiate => {
                     let result = hot_wallet::initiate_emergency_access(data_dir, backend.as_ref())?;
-                    if let (true, Some(split_txid)) =
-                        (result.split_was_broadcast, result.split_txid)
-                    {
-                        println!("Deferred monthly split broadcast: {split_txid}");
-                    }
                     println!("Emergency access initiated: {}", result.transaction_txid);
                     let schedule = hot_wallet::load_schedule(data_dir)?;
                     let emergency = schedule
@@ -785,9 +780,6 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path)
         package.manifest.emergency_access_limit_sats,
     )?;
     println!("Rollover broadcast: {}", schedule.rollover_txid);
-    if let Some(split_txid) = &schedule.split_txid {
-        println!("Deferred monthly split encrypted: {split_txid}");
-    }
     println!("Active monthly limit: {} sats", schedule.monthly_limit_sats);
     println!(
         "Encrypted monthly transaction pairs: {}",
@@ -839,14 +831,6 @@ fn broadcast_monthly(
         core::ceremony::TransactionKind::Authorization => "Authorization",
         core::ceremony::TransactionKind::Revocation => "Revocation",
     };
-    if result.split_was_broadcast {
-        println!(
-            "Deferred monthly split broadcast: {}",
-            result
-                .split_txid
-                .context("broadcast result omitted its split transaction ID")?
-        );
-    }
     println!(
         "Broadcast {action} for {month}: {}",
         result.transaction_txid
@@ -1042,9 +1026,7 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
     }
     writeln!(output, "Rollover txid: {}", manifest.rollover.unsigned_txid)?;
     writeln!(output, "Rollover fee: {} sats", manifest.rollover.fee_sats)?;
-    if let Some(split) = &manifest.split {
-        writeln!(output, "Deferred split txid: {}", split.unsigned_txid)?;
-        writeln!(output, "Deferred split fee: {} sats", split.fee_sats)?;
+    if manifest.chunk_count > 0 {
         writeln!(
             output,
             "Exact monthly UTXO: {} sats",
@@ -1052,7 +1034,7 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
         )?;
         writeln!(
             output,
-            "Split remainder: {} sats",
+            "Rollover remainder: {} sats",
             manifest.remainder_value_sats
         )?;
     }
