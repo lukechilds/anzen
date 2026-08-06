@@ -14,6 +14,16 @@ The main balance normally requires both devices. The user performs an expected r
 
 The phone can also access a policy-defined monthly spending limit without carrying the HWW. A lower soft limit controls how much of an unlocked allowance the phone keeps hot. A new vault starts with monthly spending disabled; the limit is introduced later through an explicit phone proposal and HWW approval. No server, custodian, or online co-signer is required.
 
+## Designed to be hard to misuse
+
+Anzen's operating model should remain simple even though the transaction graph underneath it is not. The wallet must guide the user through complete, high-level operations—create a policy, approve it, withdraw, revoke, renew, rotate, or recover—rather than expose raw transaction machinery and leave the user to assemble a safe sequence themselves. At every stage it should explain what happened, what protection remains active, and what action is required next.
+
+The HWW approves a human-readable vault policy, not a stream of unrelated transaction prompts. It independently verifies the complete transaction graph implied by that policy and signs the batch in one ceremony. Once approved, the phone can safely execute or revoke the permitted behavior for the next year without asking the user to reconstruct the policy or repeatedly access cold storage.
+
+Annual renewal should be one guided operation on the same calendar date each year. The wallet tracks the oldest live vault output, warns well before recovery paths mature, and guides the user through refreshing every live output and renewing the policy. Recovery and key rotation should likewise be complete workflows with safe defaults, explicit checks, and a clear destination—not collections of low-level tools that require the user to invent a recovery procedure during an emergency.
+
+This principle applies throughout the product: monthly spending begins disabled, the HWW validates proposals independently, partial funding degrades predictably with a warning, and dangerous or incomplete state transitions are rejected. The goal is not merely to document the safe path, but to make the safe path the normal and easiest way to use Anzen.
+
 ## Vault script
 
 Each vault output is Taproot with a provably unspendable **NUMS internal key**, so there is no usable key-path spend. All spending conditions are explicit Tapscript leaves.

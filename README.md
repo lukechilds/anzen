@@ -2,11 +2,13 @@
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
-Anzen is a hot wallet and a cold wallet designed to work together. It combines the resilience people want from 2-of-3 multisig with the everyday simplicity of a hot wallet. Savings remain in cold storage, where the cold wallet acts as a programmable 2-of-2 Taproot vault, while the hot wallet handles everyday access.
+Anzen is a Bitcoin wallet with the security of a 2-of-3 multisig, but the simplicity of a mobile hot wallet. It pairs a mobile hot wallet with a cold wallet that acts as a programmable 2-of-2 Taproot vault, keeping savings in cold storage while making everyday access simple.
 
 A core design philosophy is that the hardware wallet signs vault policies, not individual day-to-day transactions. In one approval ceremony, it authorizes the policy and presigns everything the hot wallet needs to execute that policy for the next year. The hardware wallet is then unnecessary until the policy changes or the vault timelocks are renewed on the same calendar date the following year.
 
 A vault policy can permit the hot wallet to withdraw up to a predefined amount from cold storage each month. The hot wallet alone can execute an approved withdrawal or revoke it before it becomes available. This behavior is enforced by Bitcoin—not an Anzen server, custodian, or online co-signer—using Bitcoin Script, signatures, and timelocks.
+
+Anzen is designed to be difficult to operate incorrectly. It guides the user through complete policy, renewal, revocation, and recovery operations instead of leaving them to construct transactions or work out the next step themselves.
 
 Anzen is designed to make permanent loss extraordinarily difficult. It has no single point of failure: no single lost device or unavailable service can strand a correctly configured vault forever, and no single stolen key can immediately drain it. Every on-chain spending and recovery path is encoded in Bitcoin Script and enforced by Bitcoin’s consensus rules.
 
