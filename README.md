@@ -15,7 +15,7 @@ Anzen is designed to make permanent loss extraordinarily difficult. It has no si
 ### What Anzen guarantees
 
 - **No single-device failure:** either surviving key has a path to recover funds if the other key is permanently lost.
-- **No immediate single-key theft:** one stolen key cannot spend the main vault before its delayed recovery path activates. A correctly maintained vault gives the honest key holder time to rotate away from the attacker.
+- **No immediate single-key theft:** one stolen key cannot spend the main vault before its delayed recovery path activates. An honest key holder can always rotate funds away from an attacker before the stolen key gets access.
 - **Hardware-wallet independence:** routine monthly spending uses the phone alone. With annual rollover maintained, the hardware wallet normally needs to be accessed only once per year.
 - **Programmable monthly liquidity:** the phone can withdraw a fixed, pre-approved amount from the vault each calendar month without another hardware-wallet prompt.
 - **Phone-controlled revocation:** the phone can cancel a future monthly allowance by broadcasting its presigned revocation before the allowance becomes spendable.
