@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use anzen::{cold_wallet, core, hot_wallet};
 use bitcoin::Network;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fs,
@@ -21,7 +21,7 @@ struct Cli {
     dangerously_enable_mainnet: bool,
 
     #[command(flatten)]
-    rpc: RpcArgs,
+    chain: ChainArgs,
 
     #[command(subcommand)]
     command: Command,
@@ -187,14 +187,12 @@ enum SocialCommand {
 }
 
 #[derive(Debug, Clone, Args)]
-struct RpcArgs {
-    #[arg(
-        long,
-        env = "ANZEN_RPC_URL",
-        default_value = "http://127.0.0.1:18443",
-        global = true
-    )]
-    rpc_url: String,
+struct ChainArgs {
+    /// Chain backend to use. Defaults to RPC on regtest and Electrum on mainnet.
+    #[arg(long, env = "ANZEN_CHAIN_BACKEND", value_enum, global = true)]
+    chain_backend: Option<ChainBackendKind>,
+    #[arg(long, env = "ANZEN_RPC_URL", global = true)]
+    rpc_url: Option<String>,
     #[arg(long, env = "ANZEN_RPC_USER", default_value = "anzen", global = true)]
     rpc_user: String,
     #[arg(
@@ -204,32 +202,70 @@ struct RpcArgs {
         global = true
     )]
     rpc_password: String,
+    /// Use one Electrum endpoint instead of the network's built-in defaults.
+    #[arg(long, env = "ANZEN_ELECTRUM_URL", global = true)]
+    electrum_url: Option<String>,
 }
 
-impl RpcArgs {
-    fn connect_regtest(&self) -> Result<core::chain::RegtestRpc> {
-        core::chain::RegtestRpc::connect(&core::chain::RpcConfig {
-            url: self.rpc_url.clone(),
-            user: self.rpc_user.clone(),
-            password: self.rpc_password.clone(),
-        })
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ChainBackendKind {
+    Rpc,
+    Electrum,
+}
+
+impl ChainArgs {
+    fn selected_backend(&self, network: Network) -> Result<ChainBackendKind> {
+        self.chain_backend.map_or_else(
+            || match network {
+                Network::Regtest => Ok(ChainBackendKind::Rpc),
+                Network::Bitcoin => Ok(ChainBackendKind::Electrum),
+                other => bail!("unsupported vault network: {other}"),
+            },
+            Ok,
+        )
+    }
+
+    fn connect_core(&self, network: Network) -> Result<core::chain::BitcoinCoreBackend> {
+        let default_url = match network {
+            Network::Regtest => "http://127.0.0.1:18443",
+            Network::Bitcoin => "http://127.0.0.1:8332",
+            other => bail!("unsupported Bitcoin Core network: {other}"),
+        };
+        core::chain::BitcoinCoreBackend::connect(
+            &core::chain::RpcConfig {
+                url: self
+                    .rpc_url
+                    .clone()
+                    .unwrap_or_else(|| default_url.to_owned()),
+                user: self.rpc_user.clone(),
+                password: self.rpc_password.clone(),
+            },
+            network,
+        )
+    }
+
+    fn connect_electrum(&self, network: Network) -> Result<core::chain::ElectrumBackend> {
+        match &self.electrum_url {
+            Some(server) => core::chain::ElectrumBackend::connect(network, &[server.as_str()]),
+            None => core::chain::ElectrumBackend::connect_default(network),
+        }
     }
 
     fn connect_chain(&self, data_dir: &Path) -> Result<Box<dyn core::chain::Blockchain>> {
         let config = core::storage::load_config(data_dir)?;
-        match config.bitcoin_network()? {
-            Network::Regtest => Ok(Box::new(self.connect_regtest()?)),
-            Network::Bitcoin => Ok(Box::new(core::chain::ElectrumBackend::connect_default()?)),
-            other => bail!("unsupported vault network: {other}"),
+        let network = config.bitcoin_network()?;
+        match self.selected_backend(network)? {
+            ChainBackendKind::Rpc => Ok(Box::new(self.connect_core(network)?)),
+            ChainBackendKind::Electrum => Ok(Box::new(self.connect_electrum(network)?)),
         }
     }
 
     fn connect_hot(&self, data_dir: &Path) -> Result<Box<dyn hot_wallet::HotWalletBackend>> {
         let config = core::storage::load_config(data_dir)?;
-        match config.bitcoin_network()? {
-            Network::Regtest => Ok(Box::new(self.connect_regtest()?)),
-            Network::Bitcoin => Ok(Box::new(core::chain::ElectrumBackend::connect_default()?)),
-            other => bail!("unsupported vault network: {other}"),
+        let network = config.bitcoin_network()?;
+        match self.selected_backend(network)? {
+            ChainBackendKind::Rpc => Ok(Box::new(self.connect_core(network)?)),
+            ChainBackendKind::Electrum => Ok(Box::new(self.connect_electrum(network)?)),
         }
     }
 }
@@ -250,11 +286,11 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Init => initialize_vault(&cli.data_dir, network),
         Command::Policy => print_active_policy(&cli.data_dir),
-        Command::Status => print_status(&cli.data_dir, &cli.rpc),
-        Command::Phone { command } => run_phone(command, &cli.data_dir, &cli.rpc, network),
-        Command::Hww { command } => run_hww(command, &cli.data_dir, &cli.rpc, network),
-        Command::Social { command } => run_social(command, &cli.data_dir, &cli.rpc),
-        Command::Node { command } => run_node(command, &cli.rpc, network),
+        Command::Status => print_status(&cli.data_dir, &cli.chain),
+        Command::Phone { command } => run_phone(command, &cli.data_dir, &cli.chain, network),
+        Command::Hww { command } => run_hww(command, &cli.data_dir, &cli.chain, network),
+        Command::Social { command } => run_social(command, &cli.data_dir, &cli.chain),
+        Command::Node { command } => run_node(command, &cli.chain, network),
     }
 }
 
@@ -286,7 +322,7 @@ fn initialize_vault(data_dir: &Path, network: Network) -> Result<()> {
 fn run_phone(
     command: PhoneCommand,
     data_dir: &Path,
-    rpc_args: &RpcArgs,
+    rpc_args: &ChainArgs,
     network: Network,
 ) -> Result<()> {
     match command {
@@ -435,7 +471,7 @@ fn run_phone(
 fn run_hww(
     command: HwwCommand,
     data_dir: &Path,
-    rpc_args: &RpcArgs,
+    rpc_args: &ChainArgs,
     network: Network,
 ) -> Result<()> {
     match command {
@@ -523,7 +559,7 @@ fn run_hww(
     Ok(())
 }
 
-fn run_social(command: SocialCommand, data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
+fn run_social(command: SocialCommand, data_dir: &Path, rpc_args: &ChainArgs) -> Result<()> {
     match command {
         SocialCommand::GenerateFriendKey {
             name,
@@ -627,7 +663,7 @@ fn friend_recovery_package(
 
 fn phone_set_policy(
     data_dir: &Path,
-    rpc_args: &RpcArgs,
+    rpc_args: &ChainArgs,
     monthly_limit: u64,
     now: Option<i64>,
     output: &Path,
@@ -669,7 +705,7 @@ fn hww_confirm_policy(data_dir: &Path, proposal: &Path, output: &Path, yes: bool
     Ok(())
 }
 
-fn phone_activate_policy(data_dir: &Path, rpc_args: &RpcArgs, approved: &Path) -> Result<()> {
+fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path) -> Result<()> {
     let package: core::ceremony::PolicyPackage = read_artifact(approved)?;
     if !package.manifest.phone_approved || !package.manifest.hww_approved {
         bail!("policy package requires both phone and HWW approval");
@@ -694,7 +730,7 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &RpcArgs, approved: &Path) -
 
 fn phone_create_sweep(
     data_dir: &Path,
-    rpc_args: &RpcArgs,
+    rpc_args: &ChainArgs,
     destination: &str,
     output: &Path,
 ) -> Result<()> {
@@ -718,7 +754,7 @@ fn print_hww_sweep_prompt(
 
 fn broadcast_monthly(
     data_dir: &Path,
-    rpc_args: &RpcArgs,
+    rpc_args: &ChainArgs,
     month: &str,
     kind: core::ceremony::TransactionKind,
 ) -> Result<()> {
@@ -743,7 +779,12 @@ fn broadcast_monthly(
     Ok(())
 }
 
-fn phone_send(data_dir: &Path, rpc_args: &RpcArgs, address: &str, amount_sats: u64) -> Result<()> {
+fn phone_send(
+    data_dir: &Path,
+    rpc_args: &ChainArgs,
+    address: &str,
+    amount_sats: u64,
+) -> Result<()> {
     let address = configured_address(data_dir, address)?;
     let backend = rpc_args.connect_hot(data_dir)?;
     let mut hot = hot_wallet::HotWallet::open_or_create(data_dir)?;
@@ -783,7 +824,7 @@ fn print_active_policy(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn print_status(data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
+fn print_status(data_dir: &Path, rpc_args: &ChainArgs) -> Result<()> {
     let config = core::storage::load_config(data_dir)?;
     let backend = rpc_args.connect_chain(data_dir)?;
     let tip = backend.chain_tip()?;
@@ -826,11 +867,11 @@ fn print_status(data_dir: &Path, rpc_args: &RpcArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_node(command: NodeCommand, rpc_args: &RpcArgs, network: Network) -> Result<()> {
+fn run_node(command: NodeCommand, rpc_args: &ChainArgs, network: Network) -> Result<()> {
     if network != Network::Regtest {
         bail!("vault node commands are unavailable in mainnet mode");
     }
-    let rpc = rpc_args.connect_regtest()?;
+    let rpc = rpc_args.connect_core(Network::Regtest)?;
     match command {
         NodeCommand::Info => {
             let info = rpc.chain_info()?;
@@ -1117,4 +1158,43 @@ fn format_number(value: u64) -> String {
         formatted.push(character);
     }
     formatted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_chain_args() -> ChainArgs {
+        ChainArgs {
+            chain_backend: None,
+            rpc_url: None,
+            rpc_user: "anzen".to_owned(),
+            rpc_password: "anzen".to_owned(),
+            electrum_url: None,
+        }
+    }
+
+    #[test]
+    fn chain_backend_defaults_can_be_overridden_on_either_network() {
+        let mut args = default_chain_args();
+        assert_eq!(
+            args.selected_backend(Network::Regtest).unwrap(),
+            ChainBackendKind::Rpc
+        );
+        assert_eq!(
+            args.selected_backend(Network::Bitcoin).unwrap(),
+            ChainBackendKind::Electrum
+        );
+
+        args.chain_backend = Some(ChainBackendKind::Electrum);
+        assert_eq!(
+            args.selected_backend(Network::Regtest).unwrap(),
+            ChainBackendKind::Electrum
+        );
+        args.chain_backend = Some(ChainBackendKind::Rpc);
+        assert_eq!(
+            args.selected_backend(Network::Bitcoin).unwrap(),
+            ChainBackendKind::Rpc
+        );
+    }
 }

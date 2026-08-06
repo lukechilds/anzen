@@ -20,7 +20,7 @@ use crate::core::{
         self, BatchManifest, EncryptedSplitTransaction, EncryptedTransaction, HotAddressProvider,
         PolicyPackage, SCHEDULE_FILE, Schedule, ScheduleEntry, TransactionKind,
     },
-    chain::{Blockchain, ElectrumBackend, RegtestRpc},
+    chain::{BitcoinCoreBackend, Blockchain, ElectrumBackend},
     policy::VaultAddressTemplate,
     recovery::{self, CooperativeSweepPackage, PhoneRecoveryPackage, SweepPath, SweepResult},
 };
@@ -617,7 +617,7 @@ pub trait HotWalletBackend: Blockchain {
     fn sync_hot_wallet(&self, wallet: &mut HotWallet) -> Result<()>;
 }
 
-impl HotWalletBackend for RegtestRpc {
+impl HotWalletBackend for BitcoinCoreBackend {
     fn sync_hot_wallet(&self, wallet: &mut HotWallet) -> Result<()> {
         wallet.sync_core(&self.client)
     }

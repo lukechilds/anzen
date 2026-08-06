@@ -56,7 +56,7 @@ fn hot_and_cold_wallets_are_independent() {
         assert!(
             !source.contains("chain::")
                 && !source.contains("ElectrumBackend")
-                && !source.contains("RegtestRpc"),
+                && !source.contains("BitcoinCoreBackend"),
             "{} gives the cold signer a network client",
             path.display()
         );

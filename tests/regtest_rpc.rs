@@ -1,7 +1,7 @@
 use anzen::{
     cold_wallet,
     core::{
-        chain::{RegtestRpc, RpcConfig},
+        chain::{BitcoinCoreBackend, RpcConfig},
         keys::DeviceKeys,
         policy::{SpendPath, VaultPolicy},
         storage::{HWW_DEVICE_FILE, PHONE_DEVICE_FILE, initialize_vault, load_config, load_device},
@@ -16,12 +16,15 @@ use bitcoin::{
 use bitcoincore_rpc::RpcApi;
 use std::{env, str::FromStr};
 
-fn rpc_from_env() -> RegtestRpc {
-    RegtestRpc::connect(&RpcConfig {
-        url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
-        user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
-        password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
-    })
+fn rpc_from_env() -> BitcoinCoreBackend {
+    BitcoinCoreBackend::connect(
+        &RpcConfig {
+            url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
+            user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
+            password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
+        },
+        Network::Regtest,
+    )
     .unwrap()
 }
 

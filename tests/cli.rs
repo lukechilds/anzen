@@ -8,7 +8,10 @@ fn binary_and_help_use_the_anzen_name() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Usage: anzen"));
+        .stdout(predicate::str::contains("Usage: anzen"))
+        .stdout(predicate::str::contains("--chain-backend <CHAIN_BACKEND>"))
+        .stdout(predicate::str::contains("--rpc-url <RPC_URL>"))
+        .stdout(predicate::str::contains("--electrum-url <ELECTRUM_URL>"));
 }
 
 #[test]

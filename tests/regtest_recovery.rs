@@ -2,7 +2,7 @@ use anzen::{
     cold_wallet,
     core::{
         HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
-        chain::{Blockchain, RegtestRpc, RpcConfig},
+        chain::{BitcoinCoreBackend, Blockchain, RpcConfig},
         recovery::SweepResult,
         social::{self, CloudRecoveryBackup},
         storage::{
@@ -31,12 +31,15 @@ fn initialize(data_dir: &std::path::Path) -> InitializedVault {
     }
 }
 
-fn rpc_from_env() -> RegtestRpc {
-    RegtestRpc::connect(&RpcConfig {
-        url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
-        user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
-        password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
-    })
+fn rpc_from_env() -> BitcoinCoreBackend {
+    BitcoinCoreBackend::connect(
+        &RpcConfig {
+            url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
+            user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
+            password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
+        },
+        Network::Regtest,
+    )
     .unwrap()
 }
 
@@ -49,7 +52,7 @@ fn address(text: &str) -> Address {
 
 fn phone_recover(
     data_dir: &std::path::Path,
-    rpc: &RegtestRpc,
+    rpc: &BitcoinCoreBackend,
     destination: &Address,
 ) -> anyhow::Result<SweepResult> {
     let config = load_config(data_dir)?;
@@ -63,7 +66,7 @@ fn phone_recover(
 
 fn hww_recover(
     data_dir: &std::path::Path,
-    rpc: &RegtestRpc,
+    rpc: &BitcoinCoreBackend,
     destination: &Address,
 ) -> anyhow::Result<SweepResult> {
     let config = load_config(data_dir)?;
@@ -186,7 +189,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 1);
 }
 
-fn mine_until_next_height(rpc: &RegtestRpc, target_next_height: u64, address: &Address) {
+fn mine_until_next_height(rpc: &BitcoinCoreBackend, target_next_height: u64, address: &Address) {
     let tip = rpc.chain_info().unwrap().blocks;
     let mut remaining = target_next_height.saturating_sub(tip + 1);
     while remaining > 0 {

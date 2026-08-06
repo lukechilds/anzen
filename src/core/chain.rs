@@ -15,12 +15,13 @@ use bitcoincore_rpc::{
 use std::time::Duration;
 
 pub const MAINNET_ELECTRUM_SERVERS: &[&str] = &[
-    // Public TLS endpoints are an MVP convenience, not a privacy boundary. Production should
-    // prefer a user-controlled Electrum server and make backend selection configurable.
+    "ssl://bitcoin.lu.ke:50002",
     "ssl://electrum.blockstream.info:50002",
     "ssl://electrum.bullbitcoin.com:50002",
     "ssl://electrum.cakewallet.com:50002",
 ];
+
+pub const REGTEST_ELECTRUM_SERVERS: &[&str] = &["tcp://127.0.0.1:50001"];
 
 #[derive(Debug, Clone)]
 pub struct RpcConfig {
@@ -29,13 +30,15 @@ pub struct RpcConfig {
     pub password: String,
 }
 
-pub struct RegtestRpc {
+pub struct BitcoinCoreBackend {
     pub client: Client,
+    network: Network,
 }
 
 pub struct ElectrumBackend {
     pub(crate) client: BdkElectrumClient<ElectrumClient>,
     server: String,
+    network: Network,
 }
 
 #[derive(Debug, Clone)]
@@ -54,9 +57,9 @@ pub trait Blockchain {
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid>;
 }
 
-impl Blockchain for RegtestRpc {
+impl Blockchain for BitcoinCoreBackend {
     fn network(&self) -> Network {
-        Network::Regtest
+        self.network
     }
 
     fn backend_description(&self) -> String {
@@ -74,7 +77,7 @@ impl Blockchain for RegtestRpc {
     }
 
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
-        RegtestRpc::scan_vault(self, config)
+        BitcoinCoreBackend::scan_vault(self, config)
     }
 
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid> {
@@ -85,15 +88,20 @@ impl Blockchain for RegtestRpc {
 }
 
 impl ElectrumBackend {
-    pub fn connect_default() -> Result<Self> {
-        Self::connect(MAINNET_ELECTRUM_SERVERS)
+    pub fn connect_default(network: Network) -> Result<Self> {
+        let servers = match network {
+            Network::Bitcoin => MAINNET_ELECTRUM_SERVERS,
+            Network::Regtest => REGTEST_ELECTRUM_SERVERS,
+            other => bail!("unsupported Electrum network: {other}"),
+        };
+        Self::connect(network, servers)
     }
 
-    pub fn connect(servers: &[&str]) -> Result<Self> {
+    pub fn connect(network: Network, servers: &[&str]) -> Result<Self> {
         if servers.is_empty() {
-            bail!("no mainnet Electrum servers are configured");
+            bail!("no Electrum servers are configured for {network}");
         }
-        let expected_genesis = genesis_block(Network::Bitcoin).block_hash();
+        let expected_genesis = genesis_block(network).block_hash();
         let mut errors = Vec::new();
         for server in servers {
             let attempt = (|| -> Result<Self> {
@@ -104,11 +112,12 @@ impl ElectrumBackend {
                     .with_context(|| format!("Electrum server {server} did not return genesis"))?
                     .block_hash();
                 if genesis != expected_genesis {
-                    bail!("Electrum server {server} is not on Bitcoin mainnet");
+                    bail!("Electrum server {server} is not on {network}");
                 }
                 Ok(Self {
                     client: BdkElectrumClient::new(raw),
                     server: (*server).to_owned(),
+                    network,
                 })
             })();
             match attempt {
@@ -117,7 +126,7 @@ impl ElectrumBackend {
             }
         }
         bail!(
-            "failed to connect to any built-in mainnet Electrum server: {}",
+            "failed to connect to any Electrum server for {network}: {}",
             errors.join("; ")
         )
     }
@@ -125,7 +134,7 @@ impl ElectrumBackend {
 
 impl Blockchain for ElectrumBackend {
     fn network(&self) -> Network {
-        Network::Bitcoin
+        self.network
     }
 
     fn backend_description(&self) -> String {
@@ -153,7 +162,7 @@ impl Blockchain for ElectrumBackend {
         times.sort_unstable();
         let median_time = times[times.len() / 2];
         Ok(ChainTip {
-            network: Network::Bitcoin,
+            network: self.network,
             height: tip.height as u64,
             median_time,
             best_block_hash: tip.header.block_hash(),
@@ -161,13 +170,17 @@ impl Blockchain for ElectrumBackend {
     }
 
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
-        if config.bitcoin_network()? != Network::Bitcoin {
-            bail!("refusing to scan a non-mainnet vault with Electrum");
+        if config.bitcoin_network()? != self.network {
+            bail!(
+                "refusing to scan a {} vault with {} Electrum",
+                config.network,
+                self.network
+            );
         }
         let address = config
             .vault_address
             .parse::<Address<_>>()?
-            .require_network(Network::Bitcoin)?;
+            .require_network(self.network)?;
         let script_pubkey = address.script_pubkey();
         let mut utxos = self
             .client
@@ -196,8 +209,8 @@ impl Blockchain for ElectrumBackend {
     }
 }
 
-impl RegtestRpc {
-    pub fn connect(config: &RpcConfig) -> Result<Self> {
+impl BitcoinCoreBackend {
+    pub fn connect(config: &RpcConfig, expected_network: Network) -> Result<Self> {
         // Real CSV recovery tests intentionally mine tens of thousands of blocks. Core can
         // legitimately spend more than the jsonrpc crate's 15-second default on that request.
         let transport = bitcoincore_rpc::jsonrpc::simple_http::Builder::new()
@@ -209,7 +222,10 @@ impl RegtestRpc {
         let client = Client::from_jsonrpc(
             bitcoincore_rpc::jsonrpc::client::Client::with_transport(transport),
         );
-        let rpc = Self { client };
+        let rpc = Self {
+            client,
+            network: expected_network,
+        };
         rpc.chain_info()?;
         Ok(rpc)
     }
@@ -219,8 +235,12 @@ impl RegtestRpc {
             .client
             .get_blockchain_info()
             .context("Bitcoin Core getblockchaininfo failed")?;
-        if info.chain != Network::Regtest {
-            bail!("refusing non-regtest Bitcoin Core network: {}", info.chain);
+        if info.chain != self.network {
+            bail!(
+                "Bitcoin Core network {} does not match requested network {}",
+                info.chain,
+                self.network
+            );
         }
         Ok(info)
     }
@@ -240,8 +260,12 @@ impl RegtestRpc {
     }
 
     pub fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
-        if config.bitcoin_network()? != Network::Regtest {
-            bail!("refusing to scan a non-regtest vault with Bitcoin Core regtest RPC");
+        if config.bitcoin_network()? != self.network {
+            bail!(
+                "refusing to scan a {} vault with {} Bitcoin Core RPC",
+                config.network,
+                self.network
+            );
         }
         let request = ScanTxOutRequest::Single(format!("addr({})", config.vault_address));
         let result = self
@@ -294,12 +318,13 @@ mod tests {
     }
 
     #[test]
-    fn mainnet_fallbacks_are_tls_only() {
-        assert!(MAINNET_ELECTRUM_SERVERS.len() >= 2);
+    fn electrum_defaults_cover_public_mainnet_and_local_regtest() {
+        assert!(MAINNET_ELECTRUM_SERVERS.contains(&"ssl://bitcoin.lu.ke:50002"));
         assert!(
             MAINNET_ELECTRUM_SERVERS
                 .iter()
                 .all(|server| server.starts_with("ssl://"))
         );
+        assert_eq!(REGTEST_ELECTRUM_SERVERS, &["tcp://127.0.0.1:50001"]);
     }
 }

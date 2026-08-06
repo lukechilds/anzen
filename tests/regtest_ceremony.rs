@@ -2,7 +2,7 @@ use anzen::{
     cold_wallet,
     core::{
         ceremony::TransactionKind,
-        chain::{RegtestRpc, RpcConfig},
+        chain::{BitcoinCoreBackend, RpcConfig},
         storage::initialize_vault,
     },
     hot_wallet::{self, HotWallet},
@@ -11,12 +11,15 @@ use bitcoin::{Address, Network};
 use chrono::{DateTime, Utc};
 use std::{env, str::FromStr};
 
-fn rpc_from_env() -> RegtestRpc {
-    RegtestRpc::connect(&RpcConfig {
-        url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
-        user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
-        password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
-    })
+fn rpc_from_env() -> BitcoinCoreBackend {
+    BitcoinCoreBackend::connect(
+        &RpcConfig {
+            url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
+            user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
+            password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
+        },
+        Network::Regtest,
+    )
     .unwrap()
 }
 
@@ -93,7 +96,7 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     assert!(format!("{revoked:#}").contains("missingorspent"));
 }
 
-fn advance_mtp(rpc: &RegtestRpc, timestamp: u32, mining_address: &Address) {
+fn advance_mtp(rpc: &BitcoinCoreBackend, timestamp: u32, mining_address: &Address) {
     rpc.set_mock_time(u64::from(timestamp) + 60).unwrap();
     while rpc.chain_info().unwrap().median_time <= u64::from(timestamp) {
         rpc.mine(1, mining_address).unwrap();

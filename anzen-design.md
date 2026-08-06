@@ -181,7 +181,7 @@ The monthly limit is transaction-enforced in **satoshis**, not dollars.
 
 ## MVP implementation scope
 
-The initial implementation is a Rust CLI built with BDK and run by default against a Bitcoin Core regtest node. The CLI and node are orchestrated with Docker. An experimental mainnet mode is available only when `--dangerously-enable-mainnet` is used during initialization and repeated on every later invocation. It persists mainnet in the wallet configuration, uses BIP86 coin type 0, and connects through a failover list of public TLS Electrum servers whose genesis header must match Bitcoin mainnet. This mode does not make the MVP production-safe: software HWW keys, printed mnemonics, fixed fees, public-server privacy/trust, and crash consistency remain unresolved. Signet, a graphical mobile application, and integration with a physical hardware wallet are out of scope.
+The initial implementation is a Rust CLI built with BDK and run by default against a Bitcoin Core regtest node. The CLI and node are orchestrated with Docker. Bitcoin Core RPC and Electrum are selectable independently of the configured regtest or mainnet network, and every connection verifies that the backend is on the expected chain. An experimental mainnet mode is available only when `--dangerously-enable-mainnet` is used during initialization and repeated on every later invocation. This mode does not make the MVP production-safe: software HWW keys, printed mnemonics, fixed fees, public-server privacy/trust, and crash consistency remain unresolved. Signet, a graphical mobile application, and integration with a physical hardware wallet are out of scope.
 
 For the MVP:
 

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
-Anzen is a Rust/BDK implementation of the renewable Bitcoin vault described in [anzen-design.md](anzen-design.md). The default and fully tested mode uses a real Bitcoin Core regtest node. An explicitly danger-gated mainnet mode uses public TLS Electrum servers.
+Anzen is a Rust/BDK implementation of the renewable Bitcoin vault described in [anzen-design.md](anzen-design.md).
 
 ## Use the CLI manually
 
@@ -25,6 +25,8 @@ The examples in this section use regtest and 1 sat/vB. Mnemonics are intentional
 ### Create a vault
 
 Initialize each simulated device separately, then combine their public keys into the static cold-storage policy:
+
+For mainnet, pass `--dangerously-enable-mainnet` to every command. Chain access defaults to RPC on regtest and Electrum on mainnet; use `--chain-backend rpc|electrum` to select either backend on either network, with `--rpc-url` or `--electrum-url` when overriding its endpoint.
 
 ```console
 $ anzen phone init
@@ -94,49 +96,6 @@ Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
 ```
 
 The search does not weaken the HWW key, phone seed, Taproot policy, or address checksum. It only selects which phone vault key is used from the phone seed. Ordinary hot-wallet receive and change derivation is unchanged. Record the printed vault-key index alongside a manual mnemonic backup; the encrypted cloud backup already contains it.
-
-### Dangerously enable mainnet
-
-Mainnet mode is deliberately awkward to enable. Pass `--dangerously-enable-mainnet` when creating the phone, HWW, and vault. The resulting `anzen.json` persists `"network": "mainnet"`; every later command refuses to run unless the same flag is present again. The flag never converts an existing regtest vault.
-
-This remains MVP software: it prints mnemonics, simulates the HWW in software, and hardcodes 1 sat/vB fees. Public Electrum servers also learn the scripts queried by the wallet and can provide an incomplete chain view. Do not use meaningful funds.
-
-```console
-$ anzen --data-dir .anzen-mainnet --dangerously-enable-mainnet phone init
-Simulated phone initialized (MAINNET — REAL FUNDS)
-Phone mnemonic: vessel box trade security marble lock bunker feed easy party salute mobile right replace six section rabbit just now advance equal feature market lava
-Phone vault key: 0d4c4acb945c18e7109ba07a3cc4363b580f6322ee60a37cc91417a56d9baff8
-
-$ anzen --data-dir .anzen-mainnet --dangerously-enable-mainnet hww init
-Simulated HWW initialized (MAINNET — REAL FUNDS)
-HWW mnemonic: solid access reward place inherit fat behind float fresh example purity base final drama save west priority resource office burden swear unhappy reject legal
-HWW vault key: 172183bfeba068f21365cf71c6d1589b1f71748ff2ac147c3043777d77a9cffe
-HWW ready to wrap the descriptor-bound cloud backup at anzen init
-
-$ anzen --data-dir .anzen-mainnet --dangerously-enable-mainnet init
-Vault initialized (MAINNET — REAL FUNDS)
-DANGER: mainnet mode uses real bitcoin and fixed 1 sat/vB MVP fees
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,0d4c4acb945c18e7109ba07a3cc4363b580f6322ee60a37cc91417a56d9baff8,172183bfeba068f21365cf71c6d1589b1f71748ff2ac147c3043777d77a9cffe),{and_v(v:older(61200),pk(0d4c4acb945c18e7109ba07a3cc4363b580f6322ee60a37cc91417a56d9baff8)),and_v(v:older(65535),pk(172183bfeba068f21365cf71c6d1589b1f71748ff2ac147c3043777d77a9cffe))}})#j96agle0
-Vault address: bc1pzuk60uttut79u8v9p9zc8cc0lkd9qy7jmeteaq85pz5tx0uzdlsq5hh7cq
-Phone recovery: 61,200 blocks (~14 months)
-HWW recovery:   65,535 blocks (~15 months)
-Monthly spending: disabled
-Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
-
-$ anzen --data-dir .anzen-mainnet --dangerously-enable-mainnet status
-Network: mainnet
-Chain backend: Electrum (ssl://electrum.blockstream.info:50002)
-Height: 960893
-Median time past: 1785775986
-Vault UTXOs: 0
-Vault balance: 0 sats
-Monthly spending: disabled
-
-$ anzen --data-dir .anzen-mainnet policy
-Error: mainnet vault is locked; pass --dangerously-enable-mainnet on every command
-```
-
-Mainnet connections try these built-in TLS endpoints in order: `electrum.blockstream.info:50002`, `electrum.bullbitcoin.com:50002`, and `electrum.cakewallet.com:50002`. A server must return Bitcoin’s mainnet genesis header before it is accepted; if connection or validation fails, the next server is tried. Production should make the backend configurable and prefer the user’s own Electrum server.
 
 ### Set or replace the monthly policy
 
@@ -441,23 +400,6 @@ Sent: 198997378 sats
 Fee: 162 sats (1 sat/vB)
 ```
 
-## Library architecture
-
-The Rust library has three public modules with a one-way dependency boundary:
-
-```text
-CLI / future apps
-├── hot_wallet ──┐
-├── cold_wallet ─┼──> core
-└── core ────────┘
-```
-
-- `hot_wallet` owns phone keys, the BDK hot wallet, encrypted monthly transactions, phone recovery, and phone-key rotation. Future iOS and Android apps should build on this API.
-- `cold_wallet` owns the deliberately small HWW surface: backup encryption/decryption, complete policy review and signing, cooperative-sweep approval, offline HWW recovery signing, and rotation approval. It imports only `core` and has no BDK wallet, Electrum, Bitcoin Core, or `hot_wallet` dependency.
-- `core` contains shared serialized protocol objects, key derivation, Miniscript policy construction, PSBT construction and validation, authenticated encryption/OpenPGP recovery envelopes, storage formats, and chain backend interfaces. It has no dependency on either device implementation.
-
-The Anzen CLI composes these low-level APIs. `anzen phone *` dispatches only through `hot_wallet` and `core`; `anzen hww *` dispatches only through `cold_wallet` and `core`. Chain scanning and broadcasting for HWW recovery remain in the CLI, keeping the cold signer offline. Architecture tests enforce the dependency direction and command-dispatch boundaries.
-
 ## Run the end-to-end tests
 
 Docker is the only host dependency:
@@ -488,8 +430,8 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
-## Continuous integration
+Implementation rationale, library boundaries, and CI details are recorded in [design-decisions.md](design-decisions.md).
 
-GitHub Actions runs formatting, Clippy, unit/CLI tests, the real Bitcoin Core integration suite, and every isolated end-to-end test on pushes to `main` and on every pull request. The workflow can also be started manually. A preparation job reads the test names dynamically from `./scripts/run-e2e.sh --list`, then a matrix assigns every discovered test to a separate GitHub-hosted worker so the long recovery-delay tests run concurrently. A final aggregate `End-to-end tests` check passes only when preparation and every matrix worker pass. Superseded runs on the same branch are cancelled.
+## License
 
-The quality job restores Cargo registry and `target/` data with the GitHub Actions cache. Docker jobs build through Buildx with separate GHA-backed `test` and `runtime` cache scopes. The E2E preparation job builds the runtime image once and uploads it as a short-lived workflow artifact; every matrix worker loads that exact image and tells the Compose script not to rebuild it. The Dockerfile compiles dependencies before copying application source, so dependency layers remain reusable when Rust code changes.
+[MIT](LICENSE) © 2026 Luke Childs
