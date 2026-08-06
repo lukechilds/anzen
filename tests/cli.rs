@@ -63,6 +63,53 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
 }
 
 #[test]
+fn hww_can_be_initialized_first_for_a_future_vanity_phone() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["--data-dir", data_dir, "hww", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Simulated HWW initialized"));
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["--data-dir", data_dir, "phone", "init"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["--data-dir", data_dir, "init"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn vanity_phone_init_requires_an_initialized_hww() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["--data-dir", data_dir, "phone", "init", "--vanity"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "initialize the HWW before using phone init --vanity",
+        ));
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["phone", "init", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--vanity"));
+}
+
+#[test]
 fn legacy_config_filename_remains_readable() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_str().unwrap();

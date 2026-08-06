@@ -14,9 +14,9 @@ use crate::core::{
     },
     social::{self, CloudRecoveryBackup, RecoveryPayload},
     storage::{
-        DeviceFile, HWW_DEVICE_FILE, InitializedDevice, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE,
-        VaultConfig, load_config, load_device, load_device_keys, network_name, read_json,
-        validate_supported_network, write_json,
+        DeviceFile, HWW_DEVICE_FILE, HWW_PUBLIC_FILE, InitializedDevice, PHONE_BACKUP_FILE,
+        PHONE_DEVICE_FILE, PublicDeviceFile, VaultConfig, load_config, load_device,
+        load_device_keys, network_name, read_json, validate_supported_network, write_json,
     },
     transactions::{sign_vault_psbt, verify_vault_psbt_signature},
     types::VaultUtxo,
@@ -34,28 +34,45 @@ pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice
         anyhow::bail!("HWW already initialized at {}", hww_path.display());
     }
     let secp = Secp256k1::new();
-    let phone_file =
-        load_device(data_dir, PHONE_DEVICE_FILE).context("initialize the phone before the HWW")?;
-    if phone_file.bitcoin_network()? != network {
-        anyhow::bail!(
-            "phone is configured for {}; initialize the HWW for the same network",
-            phone_file.network
-        );
+    if data_dir.join(PHONE_DEVICE_FILE).exists() {
+        let phone_file = load_device(data_dir, PHONE_DEVICE_FILE)?;
+        if phone_file.bitcoin_network()? != network {
+            anyhow::bail!(
+                "phone is configured for {}; initialize the HWW for the same network",
+                phone_file.network
+            );
+        }
+        DeviceKeys::parse_for_network_at_index(
+            &secp,
+            &phone_file.mnemonic,
+            network,
+            phone_file.vault_key_index,
+        )?;
     }
-    DeviceKeys::parse_for_network(&secp, &phone_file.mnemonic, network)?;
     let hww = DeviceKeys::generate_for_network(&secp, network)?;
     let mnemonic = hww.mnemonic.to_string();
+    write_json(
+        &data_dir.join(HWW_PUBLIC_FILE),
+        &PublicDeviceFile {
+            version: 1,
+            kind: "hww-public-key".to_owned(),
+            network: network_name(network).to_owned(),
+            vault_pubkey: hww.vault_pubkey.to_string(),
+        },
+    )?;
     write_json(
         &hww_path,
         &DeviceFile {
             kind: "hww".to_owned(),
             network: network_name(network).to_owned(),
             mnemonic: mnemonic.clone(),
+            vault_key_index: hww.vault_key_index,
         },
     )?;
     Ok(InitializedDevice {
         mnemonic,
         vault_pubkey: hww.vault_pubkey.to_string(),
+        vault_key_index: hww.vault_key_index,
     })
 }
 
@@ -140,8 +157,12 @@ pub fn decrypt_phone_backup_package(
     let payload = social::decrypt_with_hww(&backup, &hww.seed)?;
     payload.validate_against(&config)?;
     let words = payload.phone_mnemonic;
-    let phone =
-        DeviceKeys::parse_for_network(&Secp256k1::new(), &words, config.bitcoin_network()?)?;
+    let phone = DeviceKeys::parse_for_network_at_index(
+        &Secp256k1::new(),
+        &words,
+        config.bitcoin_network()?,
+        payload.phone_vault_key_index,
+    )?;
     if phone.vault_pubkey.to_string() != config.phone_vault_pubkey {
         anyhow::bail!("decrypted phone backup does not match the configured vault policy");
     }
@@ -149,6 +170,7 @@ pub fn decrypt_phone_backup_package(
         version: 2,
         kind: "phone-recovery".to_owned(),
         phone_mnemonic: words,
+        phone_vault_key_index: phone.vault_key_index,
         phone_vault_pubkey: phone.vault_pubkey.to_string(),
         vault_descriptor: payload.vault_descriptor,
         vault_address: payload.vault_address,

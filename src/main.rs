@@ -60,7 +60,11 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum PhoneCommand {
     /// Create the simulated phone key and hot-wallet account.
-    Init,
+    Init {
+        /// Grind a combined HWW/phone vault address beginning with bc1pvault or bcrt1pvault.
+        #[arg(long)]
+        vanity: bool,
+    },
     /// Derive and persist the next hot-wallet receive address.
     ReceiveAddress,
     /// Send an exact amount from the phone hot wallet.
@@ -286,7 +290,30 @@ fn run_phone(
     network: Network,
 ) -> Result<()> {
     match command {
-        PhoneCommand::Init => {
+        PhoneCommand::Init { vanity } => {
+            if vanity {
+                let target = hot_wallet::vanity_address_prefix(network)?;
+                eprintln!(
+                    "Grinding phone vault keys across all available CPU threads for {target}..."
+                );
+                let result = hot_wallet::initialize_vanity(data_dir, network, |attempts| {
+                    eprintln!(
+                        "Vanity search: {} candidates tested...",
+                        format_number(attempts)
+                    );
+                })?;
+                println!("Simulated phone initialized ({})", network_label(network));
+                println!("Phone mnemonic: {}", result.device.mnemonic);
+                println!("Phone vault key: {}", result.device.vault_pubkey);
+                println!("Phone vault key index: {}", result.device.vault_key_index);
+                println!("Vanity vault address: {}", result.vault_address);
+                println!(
+                    "Vanity search: {} candidates across {} threads",
+                    format_number(result.attempts),
+                    result.worker_count
+                );
+                return Ok(());
+            }
             let phone = hot_wallet::initialize(data_dir, network)?;
             println!("Simulated phone initialized ({})", network_label(network));
             println!("Phone mnemonic: {}", phone.mnemonic);
@@ -550,10 +577,11 @@ fn run_social(command: SocialCommand, data_dir: &Path, rpc_args: &RpcArgs) -> Re
                 core::recovery::SweepPath::PhoneRecovery,
                 &destination,
             )?;
-            let phone = core::keys::DeviceKeys::parse_for_network(
+            let phone = core::keys::DeviceKeys::parse_for_network_at_index(
                 &bitcoin::key::Secp256k1::new(),
                 &package.phone_mnemonic,
                 config.bitcoin_network()?,
+                package.phone_vault_key_index,
             )?;
             let (transaction, result) = core::recovery::sign_recovery_sweep(
                 plan,
@@ -590,6 +618,7 @@ fn friend_recovery_package(
         version: 2,
         kind: "phone-recovery".to_owned(),
         phone_mnemonic: payload.phone_mnemonic,
+        phone_vault_key_index: payload.phone_vault_key_index,
         phone_vault_pubkey: payload.phone_vault_pubkey,
         vault_descriptor: payload.vault_descriptor,
         vault_address: payload.vault_address,

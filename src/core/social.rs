@@ -33,6 +33,8 @@ pub struct RecoveryPayload {
     pub kind: String,
     pub network: String,
     pub phone_mnemonic: String,
+    #[serde(default)]
+    pub phone_vault_key_index: u32,
     pub phone_vault_pubkey: String,
     pub vault_descriptor: String,
     pub vault_address: String,
@@ -72,6 +74,7 @@ impl RecoveryPayload {
             kind: "vault-recovery-payload".to_owned(),
             network: config.network.clone(),
             phone_mnemonic: phone.mnemonic.to_string(),
+            phone_vault_key_index: phone.vault_key_index,
             phone_vault_pubkey: phone.vault_pubkey.to_string(),
             vault_descriptor: config.vault_descriptor.clone(),
             vault_address: config.vault_address.clone(),
@@ -88,10 +91,11 @@ impl RecoveryPayload {
         {
             bail!("recovery payload does not match the configured vault");
         }
-        let phone = DeviceKeys::parse_for_network(
+        let phone = DeviceKeys::parse_for_network_at_index(
             &bitcoin::key::Secp256k1::new(),
             &self.phone_mnemonic,
             config.bitcoin_network()?,
+            self.phone_vault_key_index,
         )?;
         if phone.vault_pubkey.to_string() != self.phone_vault_pubkey {
             bail!("recovery payload mnemonic does not match its phone public key");
@@ -371,6 +375,42 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_recovery_payload_preserves_a_vanity_vault_key_index() {
+        use crate::core::{policy::VaultPolicy, recovery::rotated_config};
+        use bitcoin::secp256k1::XOnlyPublicKey;
+        use std::str::FromStr;
+
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let secp = bitcoin::key::Secp256k1::new();
+        let phone = crate::core::storage::load_device_keys(
+            dir.path(),
+            crate::core::storage::PHONE_DEVICE_FILE,
+        )
+        .unwrap()
+        .with_vault_key_index(&secp, 42)
+        .unwrap();
+        let hww = crate::core::storage::load_device_keys(
+            dir.path(),
+            crate::core::storage::HWW_DEVICE_FILE,
+        )
+        .unwrap();
+        let hww_pubkey = XOnlyPublicKey::from_str(&initialized.config.hww_vault_pubkey).unwrap();
+        let policy = VaultPolicy::new(phone.vault_pubkey, hww_pubkey).unwrap();
+        let config = rotated_config(&initialized.config, &phone, &policy).unwrap();
+        let backup = create_backup(
+            &RecoveryPayload::new(&config, &phone).unwrap(),
+            &hww.seed,
+            &[],
+        )
+        .unwrap();
+
+        let recovered = decrypt_with_hww(&backup, &hww.seed).unwrap();
+        assert_eq!(recovered.phone_vault_key_index, 42);
+        recovered.validate_against(&config).unwrap();
+    }
+
+    #[test]
     fn an_unconfigured_friend_cannot_decrypt_the_backup() {
         let dir = tempfile::tempdir().unwrap();
         let initialized = initialize(dir.path()).unwrap();
@@ -460,10 +500,11 @@ mod tests {
         .unwrap();
         let recovered =
             decrypt_with_friend(&backup, friend.private_key_armored.as_bytes()).unwrap();
-        let recovered_phone = DeviceKeys::parse_for_network(
+        let recovered_phone = DeviceKeys::parse_for_network_at_index(
             &bitcoin::key::Secp256k1::new(),
             &recovered.phone_mnemonic,
             initialized.config.bitcoin_network().unwrap(),
+            recovered.phone_vault_key_index,
         )
         .unwrap();
         let destination = Address::from_str(&initialized.config.vault_address)

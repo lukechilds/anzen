@@ -50,6 +50,7 @@ pub fn create_phone_rotation(
             kind: "pending-phone-rotation".to_owned(),
             network: old_config.network.clone(),
             mnemonic: new_phone.mnemonic.to_string(),
+            vault_key_index: new_phone.vault_key_index,
         },
     )?;
 
@@ -118,6 +119,7 @@ pub fn activate_phone_rotation(
             kind: "phone".to_owned(),
             network: new_config.network.clone(),
             mnemonic: pending.mnemonic.clone(),
+            vault_key_index: pending.vault_key_index,
         },
     )?;
     write_json(&data_dir.join(PHONE_BACKUP_FILE), backup)?;

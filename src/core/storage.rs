@@ -1,16 +1,18 @@
 use super::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS, keys::DeviceKeys, policy::VaultPolicy};
 use anyhow::{Context, Result, bail};
-use bitcoin::{Network, key::Secp256k1};
+use bitcoin::{Network, key::Secp256k1, secp256k1::XOnlyPublicKey};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 pub const CONFIG_FILE: &str = "anzen.json";
 const LEGACY_CONFIG_FILE: &str = "vault.json";
 pub const PHONE_DEVICE_FILE: &str = "phone/device.json";
 pub const HWW_DEVICE_FILE: &str = "hww/device.json";
+pub const HWW_PUBLIC_FILE: &str = "hww/public.json";
 pub const PHONE_BACKUP_FILE: &str = "cloud/phone-seed-backup.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +43,26 @@ pub struct DeviceFile {
     #[serde(default = "default_network_name")]
     pub network: String,
     pub mnemonic: String,
+    #[serde(default)]
+    pub vault_key_index: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicDeviceFile {
+    pub version: u8,
+    pub kind: String,
+    pub network: String,
+    pub vault_pubkey: String,
+}
+
+impl PublicDeviceFile {
+    pub fn bitcoin_network(&self) -> Result<Network> {
+        parse_network_name(&self.network)
+    }
+
+    pub fn parsed_vault_pubkey(&self) -> Result<XOnlyPublicKey> {
+        XOnlyPublicKey::from_str(&self.vault_pubkey).context("invalid public device vault key")
+    }
 }
 
 impl DeviceFile {
@@ -53,6 +75,7 @@ impl DeviceFile {
 pub struct InitializedDevice {
     pub mnemonic: String,
     pub vault_pubkey: String,
+    pub vault_key_index: u32,
 }
 
 pub fn initialize_vault(data_dir: &Path) -> Result<VaultConfig> {
@@ -72,8 +95,26 @@ pub fn initialize_vault_for_network(data_dir: &Path, network: Network) -> Result
     if phone_file.bitcoin_network()? != network || hww_file.bitcoin_network()? != network {
         bail!("phone, HWW, and vault must be initialized for the same network");
     }
-    let phone = DeviceKeys::parse_for_network(&secp, &phone_file.mnemonic, network)?;
-    let hww = DeviceKeys::parse_for_network(&secp, &hww_file.mnemonic, network)?;
+    let phone = DeviceKeys::parse_for_network_at_index(
+        &secp,
+        &phone_file.mnemonic,
+        network,
+        phone_file.vault_key_index,
+    )?;
+    let hww = DeviceKeys::parse_for_network_at_index(
+        &secp,
+        &hww_file.mnemonic,
+        network,
+        hww_file.vault_key_index,
+    )?;
+    if data_dir.join(HWW_PUBLIC_FILE).exists() {
+        let public_hww = load_public_device(data_dir, HWW_PUBLIC_FILE)?;
+        if public_hww.bitcoin_network()? != network
+            || public_hww.parsed_vault_pubkey()? != hww.vault_pubkey
+        {
+            bail!("HWW public metadata does not match the initialized HWW key");
+        }
+    }
     let policy = VaultPolicy::new_for_network(phone.vault_pubkey, hww.vault_pubkey, network)?;
     let (hot_external, hot_internal) = phone.hot_descriptors(&secp)?;
     let config = VaultConfig {
@@ -127,9 +168,18 @@ pub fn load_device(data_dir: &Path, relative_path: &str) -> Result<DeviceFile> {
     read_json(&data_dir.join(relative_path))
 }
 
+pub fn load_public_device(data_dir: &Path, relative_path: &str) -> Result<PublicDeviceFile> {
+    read_json(&data_dir.join(relative_path))
+}
+
 pub fn load_device_keys(data_dir: &Path, relative_path: &str) -> Result<DeviceKeys> {
     let file = load_device(data_dir, relative_path)?;
-    DeviceKeys::parse_for_network(&Secp256k1::new(), &file.mnemonic, file.bitcoin_network()?)
+    DeviceKeys::parse_for_network_at_index(
+        &Secp256k1::new(),
+        &file.mnemonic,
+        file.bitcoin_network()?,
+        file.vault_key_index,
+    )
 }
 
 pub fn network_name(network: Network) -> &'static str {

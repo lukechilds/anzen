@@ -77,6 +77,8 @@ pub struct PhoneRecoveryPackage {
     pub version: u8,
     pub kind: String,
     pub phone_mnemonic: String,
+    #[serde(default)]
+    pub phone_vault_key_index: u32,
     pub phone_vault_pubkey: String,
     pub vault_descriptor: String,
     pub vault_address: String,
@@ -314,10 +316,11 @@ pub fn validate_phone_rotation(
     if pending.bitcoin_network()? != old_config.bitcoin_network()? {
         bail!("pending phone key network does not match the current vault");
     }
-    let new_phone = DeviceKeys::parse_for_network(
+    let new_phone = DeviceKeys::parse_for_network_at_index(
         &Secp256k1::new(),
         &pending.mnemonic,
         old_config.bitcoin_network()?,
+        pending.vault_key_index,
     )?;
     if new_phone.vault_pubkey.to_string() != package.new_phone_vault_pubkey {
         bail!("pending phone key does not match the rotation proposal");

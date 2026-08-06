@@ -2,8 +2,11 @@ use super::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS};
 use anyhow::{Context, Result, bail};
 use bitcoin::{
     Address, Network, ScriptBuf,
-    secp256k1::{Secp256k1, XOnlyPublicKey},
-    taproot::{ControlBlock, LeafVersion, TapLeafHash},
+    key::{TapTweak, TweakedPublicKey},
+    opcodes::all::{OP_CHECKSIG, OP_CHECKSIGADD, OP_CSV, OP_NUMEQUAL, OP_VERIFY},
+    script::Builder,
+    secp256k1::{Secp256k1, Verification, XOnlyPublicKey},
+    taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash},
 };
 use miniscript::{
     Descriptor,
@@ -36,6 +39,82 @@ pub struct VaultLeaf {
     pub script: ScriptBuf,
     pub leaf_hash: TapLeafHash,
     pub control_block: ControlBlock,
+}
+
+/// Fast encoder for the fixed Anzen script tree used while grinding phone vault keys.
+///
+/// The scripts and tree shape must remain byte-for-byte equivalent to [`VaultPolicy`]. Tests
+/// compare this optimized path with the canonical Miniscript descriptor construction.
+#[derive(Debug, Clone)]
+pub struct VaultAddressTemplate {
+    internal_key: XOnlyPublicKey,
+    hww_pubkey: XOnlyPublicKey,
+    hww_recovery_node: TapNodeHash,
+}
+
+impl VaultAddressTemplate {
+    pub fn new(hww_pubkey: XOnlyPublicKey) -> Result<Self> {
+        let internal_key = XOnlyPublicKey::from_str(BIP341_NUMS_KEY)
+            .context("invalid BIP341 NUMS internal key")?;
+        let hww_recovery_node = TapNodeHash::from_script(
+            &recovery_script(hww_pubkey, HWW_RECOVERY_BLOCKS),
+            LeafVersion::TapScript,
+        );
+        Ok(Self {
+            internal_key,
+            hww_pubkey,
+            hww_recovery_node,
+        })
+    }
+
+    pub fn output_key<C: Verification>(
+        &self,
+        secp: &Secp256k1<C>,
+        phone_pubkey: XOnlyPublicKey,
+    ) -> TweakedPublicKey {
+        let cooperative_node = TapNodeHash::from_script(
+            &cooperative_script(phone_pubkey, self.hww_pubkey),
+            LeafVersion::TapScript,
+        );
+        let phone_recovery_node = TapNodeHash::from_script(
+            &recovery_script(phone_pubkey, PHONE_RECOVERY_BLOCKS),
+            LeafVersion::TapScript,
+        );
+        let recovery_node =
+            TapNodeHash::from_node_hashes(phone_recovery_node, self.hww_recovery_node);
+        let merkle_root = TapNodeHash::from_node_hashes(cooperative_node, recovery_node);
+        self.internal_key.tap_tweak(secp, Some(merkle_root)).0
+    }
+
+    pub fn address<C: Verification>(
+        &self,
+        secp: &Secp256k1<C>,
+        phone_pubkey: XOnlyPublicKey,
+        network: Network,
+    ) -> Address {
+        Address::p2tr_tweaked(self.output_key(secp, phone_pubkey), network)
+    }
+}
+
+fn cooperative_script(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> ScriptBuf {
+    Builder::new()
+        .push_x_only_key(&phone)
+        .push_opcode(OP_CHECKSIG)
+        .push_x_only_key(&hww)
+        .push_opcode(OP_CHECKSIGADD)
+        .push_int(2)
+        .push_opcode(OP_NUMEQUAL)
+        .into_script()
+}
+
+fn recovery_script(key: XOnlyPublicKey, delay: u16) -> ScriptBuf {
+    Builder::new()
+        .push_int(i64::from(delay))
+        .push_opcode(OP_CSV)
+        .push_opcode(OP_VERIFY)
+        .push_x_only_key(&key)
+        .push_opcode(OP_CHECKSIG)
+        .into_script()
 }
 
 impl VaultPolicy {
@@ -178,5 +257,35 @@ mod tests {
             VaultPolicy::new_for_network(phone.vault_pubkey, hww.vault_pubkey, Network::Bitcoin)
                 .unwrap();
         assert!(policy.address.to_string().starts_with("bc1p"));
+    }
+
+    #[test]
+    fn fast_address_template_matches_the_canonical_miniscript_policy() {
+        let secp = Secp256k1::new();
+        for network in [Network::Regtest, Network::Bitcoin] {
+            let phone = DeviceKeys::generate_for_network(&secp, network).unwrap();
+            let hww = DeviceKeys::generate_for_network(&secp, network).unwrap();
+            let policy =
+                VaultPolicy::new_for_network(phone.vault_pubkey, hww.vault_pubkey, network)
+                    .unwrap();
+            let template = VaultAddressTemplate::new(hww.vault_pubkey).unwrap();
+
+            assert_eq!(
+                template.address(&secp, phone.vault_pubkey, network),
+                policy.address
+            );
+            assert_eq!(
+                cooperative_script(phone.vault_pubkey, hww.vault_pubkey),
+                policy.leaf(SpendPath::Cooperative).unwrap().script
+            );
+            assert_eq!(
+                recovery_script(phone.vault_pubkey, PHONE_RECOVERY_BLOCKS),
+                policy.leaf(SpendPath::PhoneRecovery).unwrap().script
+            );
+            assert_eq!(
+                recovery_script(hww.vault_pubkey, HWW_RECOVERY_BLOCKS),
+                policy.leaf(SpendPath::HwwRecovery).unwrap().script
+            );
+        }
     }
 }
