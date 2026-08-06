@@ -6,7 +6,7 @@ Anzen is a Rust/BDK implementation of the renewable Bitcoin vault described in [
 
 ## Use the CLI manually
 
-Start Core, then define the `anzen` shell helper. The helper itself has no output. The Compose volume preserves Anzen state and JSON handoff files between invocations:
+Start the regtest node and define an `anzen` shell helper:
 
 ```console
 $ docker compose --profile manual up -d bitcoind
@@ -20,13 +20,13 @@ Container anzen-bitcoind-1 Started
 $ anzen() { COMPOSE_PROGRESS=quiet docker compose run --rm cli "$@"; }
 ```
 
-The examples in this section use regtest and 1 sat/vB. Mnemonics are intentionally printed by the simulated devices for demonstration; this is not production key handling. Every value below was captured from real commands against disposable chains; some sections come from independent runs, and a new run generates different mnemonics, keys, addresses, and transaction IDs. The examples assume the vault has confirmed regtest funds; `./scripts/run-e2e.sh monthly-spend` demonstrates funding 2 BTC from a freshly mined hot wallet.
+These examples use disposable regtest wallets. The simulated devices print their mnemonics for demonstration.
 
 ### Create a vault
 
 Initialize each simulated device separately, then combine their public keys into the static cold-storage policy:
 
-For mainnet, pass `--dangerously-enable-mainnet` to every command. Chain access defaults to RPC on regtest and Electrum on mainnet; use `--chain-backend rpc|electrum` to select either backend on either network, with `--rpc-url` or `--electrum-url` when overriding its endpoint.
+For mainnet, pass `--dangerously-enable-mainnet` to every command. Select a chain backend with `--chain-backend rpc|electrum`.
 
 ```console
 $ anzen phone init
@@ -58,44 +58,6 @@ Monthly spending: disabled
 ```
 
 The new vault starts with monthly spending disabled. `anzen init` prints the static cold-storage descriptor, vault address, and recovery delays, but does not create or sign a monthly spending policy.
-
-### Generate a vanity vault address
-
-Pass `--vanity` to make the combined vault address begin with `bc1pvault` on mainnet or `bcrt1pvault` on regtest. Because the address depends on both public keys, initialize the HWW first. The phone keeps one mnemonic and searches different non-hardened vault-key indices across all available CPU threads; the winning index is stored in the phone file and encrypted recovery backup.
-
-The five-character suffix has a 1-in-33,554,432 probability per candidate, so runtime varies. This real release-mode regtest run happened to finish after 4,812,082 candidates on 16 threads:
-
-```console
-$ anzen hww init
-Simulated HWW initialized (REGTEST ONLY)
-HWW mnemonic: energy you senior village latin inch enforce glide there aim twelve false puppy romance post disagree sponsor duty book open wear disorder dentist session
-HWW vault key: dd13a29adc9690853afa552615b8b43297f5d3df55e45c60b413f52fba30a591
-HWW ready to wrap the descriptor-bound cloud backup at anzen init
-
-$ anzen phone init --vanity
-Grinding phone vault keys across all available CPU threads for bcrt1pvault...
-Vanity search: 1,003,520 candidates tested...
-Vanity search: 2,007,040 candidates tested...
-Vanity search: 3,010,560 candidates tested...
-Vanity search: 4,014,080 candidates tested...
-Simulated phone initialized (REGTEST ONLY)
-Phone mnemonic: pilot detect mechanic cactus ability attract measure document want friend gentle symptom gadget rocket rigid already rice clerk emerge crater come day kiss over
-Phone vault key: 253d4e2f59972028819039c40a87ec5d38245894ee9a66fcf44a3e652a1f8d1b
-Phone vault key index: 4820561
-Vanity vault address: bcrt1pvaultfv4h237k58nhjjszgzkn5dj3sfazl0v66renhl2up7umgaq5zekz2
-Vanity search: 4,812,082 candidates across 16 threads
-
-$ anzen init
-Vault initialized (REGTEST ONLY)
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,253d4e2f59972028819039c40a87ec5d38245894ee9a66fcf44a3e652a1f8d1b,dd13a29adc9690853afa552615b8b43297f5d3df55e45c60b413f52fba30a591),{and_v(v:older(61200),pk(253d4e2f59972028819039c40a87ec5d38245894ee9a66fcf44a3e652a1f8d1b)),and_v(v:older(65535),pk(dd13a29adc9690853afa552615b8b43297f5d3df55e45c60b413f52fba30a591))}})#202v967n
-Vault address: bcrt1pvaultfv4h237k58nhjjszgzkn5dj3sfazl0v66renhl2up7umgaq5zekz2
-Phone recovery: 61,200 blocks (~14 months)
-HWW recovery:   65,535 blocks (~15 months)
-Monthly spending: disabled
-Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
-```
-
-The search does not weaken the HWW key, phone seed, Taproot policy, or address checksum. It only selects which phone vault key is used from the phone seed. Ordinary hot-wallet receive and change derivation is unchanged. Record the printed vault-key index alongside a manual mnemonic backup; the encrypted cloud backup already contains it.
 
 ### Set or replace the monthly policy
 
