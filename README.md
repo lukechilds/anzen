@@ -2,7 +2,34 @@
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
-Anzen is a Rust/BDK implementation of the renewable Bitcoin vault described in [anzen-design.md](anzen-design.md).
+Anzen is a Bitcoin wallet with the resilience people want from 2-of-3 multisig and the everyday simplicity of a hot wallet. Savings stay protected in a renewable 2-of-2 Taproot vault, while the phone can withdraw a pre-approved monthly allowance without the hardware wallet.
+
+Anzen is designed to make permanent loss extraordinarily difficult. It has no single point of failure: no one lost device or unavailable service can strand a correctly configured vault forever, and no single stolen key can immediately drain it. There is no custodian, recovery company, or online co-signer: every on-chain spending and recovery path is encoded in Bitcoin Script and enforced by Bitcoin’s consensus rules.
+
+### What Anzen guarantees
+
+- **No single-device failure:** either surviving key has a path to recover funds if the other key is permanently lost.
+- **No immediate single-key theft:** one stolen key cannot spend the main vault before its delayed recovery path activates. A correctly maintained vault gives the honest key holder time to rotate away from the attacker.
+- **Hardware-wallet independence:** routine monthly spending uses the phone alone. With annual rollover maintained, the hardware wallet normally needs to be accessed only once per year.
+- **Programmable monthly liquidity:** the phone can withdraw a fixed, pre-approved amount from the vault each calendar month without another hardware-wallet prompt.
+- **Phone-controlled revocation:** the phone can cancel a future monthly allowance by broadcasting its presigned revocation before the allowance becomes spendable.
+- **Optional social recovery:** a configured recovery friend can decrypt the phone backup if both devices are lost, but still cannot bypass the Bitcoin-enforced phone-recovery delay.
+- **Trustless enforcement:** the 2-of-2 spend and both delayed single-key recovery paths live entirely in Taproot. Presigned monthly transactions are enforced by ordinary Bitcoin signatures and locktimes.
+- **No provider dependency:** Anzen does not rely on a company, server, or proprietary recovery service remaining available.
+
+### Exact loss and theft behavior
+
+| Scenario | What happens |
+| --- | --- |
+| Phone lost | The hardware wallet immediately decrypts the cloud backup of the phone key, allowing the phone key to be restored and rotated. If that backup is unavailable, the hardware-wallet-only path activates after 65,535 blocks—about 15 months from the vault output’s confirmation. |
+| Hardware wallet lost | Existing monthly allowances continue to work from the phone. The phone-only recovery path activates after 61,200 blocks—about 14 months from confirmation, and potentially much sooner after the device is lost. |
+| Phone stolen | The attacker may take the hot balance or matured allowances, but cannot immediately spend the main vault. The honest hardware-wallet holder can restore the backed-up phone key and rotate the vault before the delayed phone path activates. |
+| Hardware wallet stolen | The attacker cannot immediately spend the vault. The honest phone’s recovery path activates first, leaving roughly a one-month priority window before the hardware-wallet-only path matures. |
+| Both devices lost | If social recovery was configured, any approved recovery friend can decrypt the phone backup and use the delayed phone-recovery path to sweep into replacement keys. Without social recovery, permanent loss of both devices is unrecoverable. |
+| Cloud backup stolen | The backup is encrypted. It is useless without the hardware wallet or a configured recovery friend’s private key. |
+| Both signing keys stolen | The attacker can satisfy the immediate 2-of-2 path. No wallet can protect funds after every required signing key is compromised, so the vault must be rotated before that happens. |
+
+The full protocol and its trade-offs are documented in [anzen-design.md](anzen-design.md).
 
 ## Use the CLI manually
 
