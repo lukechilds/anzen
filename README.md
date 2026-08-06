@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
-Anzen is a Bitcoin wallet that achieves the security of a 2-of-3 multisig, but the simplicity of a mobile hot wallet. It pairs a mobile hot wallet with a cold wallet that acts as a programmable vault, keeping savings in cold storage while making everyday access simple.
+Anzen is a Bitcoin wallet that achieves the security of a 2-of-3 multisig with the simplicity of a mobile hot wallet. It pairs a mobile hot wallet with a cold wallet that acts as a programmable vault, keeping savings in cold storage while making everyday access simple.
 
 A core design philosophy is that the hardware wallet signs vault policies, not individual day-to-day transactions. In one approval ceremony, it authorizes the policy and presigns everything the hot wallet needs to execute that policy for the next year. The hardware wallet is then unnecessary until the policy changes or the vault timelocks are renewed on the same calendar date the following year.
 
