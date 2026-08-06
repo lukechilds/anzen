@@ -1,6 +1,6 @@
 # Anzen
 
-[![CI](https://github.com/lukechilds/vault/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/vault/actions/workflows/ci.yml)
+[![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
 Anzen is a Rust/BDK implementation of the renewable Bitcoin vault described in [anzen-design.md](anzen-design.md). The default and fully tested mode uses a real Bitcoin Core regtest node. An explicitly danger-gated mainnet mode uses public TLS Electrum servers.
 
