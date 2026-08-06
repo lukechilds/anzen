@@ -19,7 +19,7 @@ Anzen is designed to make permanent loss extraordinarily difficult. It has no si
 - **Hardware-wallet independence:** routine monthly spending uses the phone alone. With annual rollover maintained, the hardware wallet normally needs to be accessed only once per year.
 - **Programmable monthly liquidity:** the phone can withdraw a fixed, pre-approved amount from the vault each calendar month without another hardware-wallet prompt.
 - **Phone-controlled revocation:** the phone can cancel a future monthly allowance by broadcasting its presigned revocation before the allowance becomes spendable.
-- **Optional social recovery:** a configured recovery friend can decrypt the phone backup if both devices are lost, but still cannot bypass the Bitcoin-enforced phone-recovery delay.
+- **Optional social recovery:** a configured recovery friend can decrypt the phone backup if both devices are lost.
 - **Trustless enforcement:** the 2-of-2 spend and both delayed single-key recovery paths live entirely in Taproot. Presigned monthly transactions are enforced by ordinary Bitcoin signatures and locktimes.
 - **No provider dependency:** Anzen does not rely on a company, server, or proprietary recovery service remaining available.
 
