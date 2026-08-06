@@ -1,4 +1,6 @@
 /target/
+/.anzen-data/
+/.anzen-mainnet/
 /.vault-data/
 /.vault-mainnet/
 /.demo-data/

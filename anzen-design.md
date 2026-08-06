@@ -1,8 +1,8 @@
-# Renewable Bitcoin Vault with Bounded Mobile Spending
+# Anzen: Renewable Bitcoin Vault with Bounded Mobile Spending
 
 ## Overview
 
-This wallet combines:
+Anzen combines:
 
 - a **mobile key** `M`;
 - a **hardware-wallet key** `H`;
@@ -193,15 +193,15 @@ For the MVP:
 - all ordinary transactions use a fixed fee rate of 1 sat/vB;
 - policy setup, rollover, signing, revocation, allowance use, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
 
-Device operations are separated in the CLI. Phone actions live under `vault phone *`; HWW actions live under `vault hww *`. Vault initialization is likewise explicit: `vault phone init`, `vault hww init`, then `vault init`. The final command prints only the cold-storage descriptor and public policy details; hot-wallet descriptors remain internal.
+Device operations are separated in the CLI. Phone actions live under `anzen phone *`; HWW actions live under `anzen hww *`. Vault initialization is likewise explicit: `anzen phone init`, `anzen hww init`, then `anzen init`. The final command prints only the cold-storage descriptor and public policy details; hot-wallet descriptors remain internal.
 
 The implementation library is split into three public modules. `core` contains shared policy, PSBT, cryptographic, protocol, storage-format, and chain primitives and does not depend on a device implementation. `hot_wallet` contains phone/BDK behavior and depends only on `core`. `cold_wallet` contains the minimal HWW validation, backup, and signing surface and likewise depends only on `core`; it has no hot-wallet or network-client dependency. The CLI performs chain scanning/broadcast and composes these APIs into commands. This boundary is intended to let mobile apps reuse `hot_wallet`, hardware signing apps or firmware reuse the smaller `cold_wallet` surface, and reviewers audit the cold path without BDK/mobile implementation details.
 
 The monthly-policy protocol has three stages:
 
-1. `vault phone set-policy --monthly-limit SATS --output PROPOSAL.json` constructs the one-output rollover, deferred split, and monthly PSBTs, signs the phone side, and emits a portable JSON policy object.
-2. `vault hww confirm-policy PROPOSAL.json --output APPROVED.json` presents the complete high-level policy once, obtains one approval, independently validates every PSBT against the manifest, and signs the complete batch without per-transaction prompts.
-3. `vault phone activate-policy APPROVED.json` verifies both approvals, broadcasts only the one-output rollover, and stores the deferred split plus every authorization and revocation as individually encrypted phone artifacts. The first monthly action broadcasts the split before its selected child.
+1. `anzen phone set-policy --monthly-limit SATS --output PROPOSAL.json` constructs the one-output rollover, deferred split, and monthly PSBTs, signs the phone side, and emits a portable JSON policy object.
+2. `anzen hww confirm-policy PROPOSAL.json --output APPROVED.json` presents the complete high-level policy once, obtains one approval, independently validates every PSBT against the manifest, and signs the complete batch without per-transaction prompts.
+3. `anzen phone activate-policy APPROVED.json` verifies both approvals, broadcasts only the one-output rollover, and stores the deferred split plus every authorization and revocation as individually encrypted phone artifacts. The first monthly action broadcasts the split before its selected child.
 
 The JSON interchange embeds PSBTs plus a versioned policy/batch manifest, so the simulated devices do not share an implicit signing workspace. Phone backup restoration, cooperative sweeping, and phone-key rotation use the same explicit JSON handoff model.
 
@@ -236,7 +236,7 @@ The demonstration should derive its schedule from the actual UTC date when the t
 - **Both devices lost**
   - Recovery depends on social recovery having been configured before the loss.
   - Any configured friend can use their OpenPGP private key to unwrap the symmetric backup key and authenticate/decrypt the phone mnemonic plus descriptor.
-  - The recovered phone key still cannot bypass the 61,200-block phone-recovery delay. After that path matures, `vault social emergency-access` can sweep directly to replacement keys without recreating either lost device.
+  - The recovered phone key still cannot bypass the 61,200-block phone-recovery delay. After that path matures, `anzen social emergency-access` can sweep directly to replacement keys without recreating either lost device.
   - Without social recovery, simultaneous permanent loss of both devices is unrecoverable.
 
 - **Cloud account compromised**

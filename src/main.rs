@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use anzen::{cold_wallet, core, hot_wallet};
 use bitcoin::Network;
 use clap::{Args, Parser, Subcommand};
 use serde::{Serialize, de::DeserializeOwned};
@@ -7,13 +8,12 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
-use vault_cli::{cold_wallet, core, hot_wallet};
 
 #[derive(Debug, Parser)]
-#[command(name = "vault", version, about)]
+#[command(name = "anzen", version, about)]
 struct Cli {
     /// Directory containing simulated device, cloud, and wallet state.
-    #[arg(long, default_value = ".vault-data", global = true)]
+    #[arg(long, default_value = ".anzen-data", global = true)]
     data_dir: PathBuf,
 
     /// Required on initialization and every later command for a mainnet vault.
@@ -186,17 +186,17 @@ enum SocialCommand {
 struct RpcArgs {
     #[arg(
         long,
-        env = "VAULT_RPC_URL",
+        env = "ANZEN_RPC_URL",
         default_value = "http://127.0.0.1:18443",
         global = true
     )]
     rpc_url: String,
-    #[arg(long, env = "VAULT_RPC_USER", default_value = "vault", global = true)]
+    #[arg(long, env = "ANZEN_RPC_USER", default_value = "anzen", global = true)]
     rpc_user: String,
     #[arg(
         long,
-        env = "VAULT_RPC_PASSWORD",
-        default_value = "vault",
+        env = "ANZEN_RPC_PASSWORD",
+        default_value = "anzen",
         global = true
     )]
     rpc_password: String,
@@ -417,7 +417,7 @@ fn run_hww(
             println!("Simulated HWW initialized ({})", network_label(network));
             println!("HWW mnemonic: {}", hww.mnemonic);
             println!("HWW vault key: {}", hww.vault_pubkey);
-            println!("HWW ready to wrap the descriptor-bound cloud backup at vault init");
+            println!("HWW ready to wrap the descriptor-bound cloud backup at anzen init");
         }
         HwwCommand::ConfirmPolicy {
             proposal,
@@ -1022,7 +1022,7 @@ fn command_network(
     dangerously_enable_mainnet: bool,
     _command: &Command,
 ) -> Result<Network> {
-    let configured = if data_dir.join(core::storage::CONFIG_FILE).exists() {
+    let configured = if core::storage::config_exists(data_dir) {
         Some(core::storage::load_config(data_dir)?.bitcoin_network()?)
     } else if data_dir.join(core::storage::PHONE_DEVICE_FILE).exists() {
         Some(

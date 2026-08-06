@@ -1,3 +1,5 @@
+name: anzen
+
 services:
   bitcoind:
     image: bitcoin/bitcoin:28.1
@@ -6,8 +8,8 @@ services:
       - -server=1
       - -rpcbind=0.0.0.0
       - -rpcallowip=0.0.0.0/0
-      - -rpcuser=vault
-      - -rpcpassword=vault
+      - -rpcuser=anzen
+      - -rpcpassword=anzen
       - -fallbackfee=0.00001
       - -printtoconsole=0
     healthcheck:
@@ -16,15 +18,15 @@ services:
         - bitcoin-cli
         - -regtest
         - -rpcconnect=127.0.0.1
-        - -rpcuser=vault
-        - -rpcpassword=vault
+        - -rpcuser=anzen
+        - -rpcpassword=anzen
         - getblockchaininfo
       interval: 1s
       timeout: 5s
       retries: 30
 
   demo:
-    image: vault-demo:local
+    image: anzen-demo:local
     build:
       context: .
       target: runtime
@@ -32,16 +34,16 @@ services:
       bitcoind:
         condition: service_healthy
     environment: &rpc-environment
-      VAULT_RPC_URL: http://bitcoind:18443
-      VAULT_RPC_USER: vault
-      VAULT_RPC_PASSWORD: vault
+      ANZEN_RPC_URL: http://bitcoind:18443
+      ANZEN_RPC_USER: anzen
+      ANZEN_RPC_PASSWORD: anzen
     tmpfs:
       - /demo
     working_dir: /demo
-    entrypoint: ["/opt/vault/scripts/e2e-demo.sh"]
+    entrypoint: ["/opt/anzen/scripts/e2e-demo.sh"]
 
   tests:
-    image: vault-tests:local
+    image: anzen-tests:local
     build:
       context: .
       target: test
@@ -59,8 +61,8 @@ services:
         condition: service_healthy
     environment: *rpc-environment
     volumes:
-      - vault-state:/data
+      - anzen-state:/data
     profiles: ["manual"]
 
 volumes:
-  vault-state:
+  anzen-state:

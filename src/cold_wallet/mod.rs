@@ -26,7 +26,7 @@ use bitcoin::{Address, Network, Transaction, key::Secp256k1};
 use std::path::Path;
 use std::str::FromStr;
 
-/// Initialize the simulated HWW. The descriptor-bound cloud backup is created after vault init.
+/// Initialize the simulated HWW. The descriptor-bound cloud backup is created after `anzen init`.
 pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice> {
     validate_supported_network(network)?;
     let hww_path = data_dir.join(HWW_DEVICE_FILE);

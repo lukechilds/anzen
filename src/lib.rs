@@ -1,4 +1,4 @@
-//! Reusable building blocks for the vault applications.
+//! Reusable building blocks for Anzen applications.
 //!
 //! The dependency direction is intentional:
 //!

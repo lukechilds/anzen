@@ -74,16 +74,16 @@ jobs:
           context: .
           target: test
           load: true
-          tags: vault-tests:local
+          tags: anzen-tests:local
           cache-from: |
-            type=gha,scope=vault-tests
-            type=gha,scope=vault-runtime
-          cache-to: type=gha,mode=max,scope=vault-tests,timeout=20m,ignore-error=true
+            type=gha,scope=anzen-tests
+            type=gha,scope=anzen-runtime
+          cache-to: type=gha,mode=max,scope=anzen-tests,timeout=20m,ignore-error=true
 
       - name: Run Dockerized integration suite
         run: ./scripts/run-tests.sh
         env:
-          VAULT_SKIP_DOCKER_BUILD: "1"
+          ANZEN_SKIP_DOCKER_BUILD: "1"
 
   prepare_e2e:
     name: Prepare end-to-end test matrix
@@ -123,18 +123,18 @@ jobs:
         with:
           context: .
           target: runtime
-          tags: vault-demo:local
-          outputs: type=docker,dest=${{ runner.temp }}/vault-demo.tar
+          tags: anzen-demo:local
+          outputs: type=docker,dest=${{ runner.temp }}/anzen-demo.tar
           cache-from: |
-            type=gha,scope=vault-runtime
-            type=gha,scope=vault-tests
-          cache-to: type=gha,mode=max,scope=vault-runtime,timeout=20m,ignore-error=true
+            type=gha,scope=anzen-runtime
+            type=gha,scope=anzen-tests
+          cache-to: type=gha,mode=max,scope=anzen-runtime,timeout=20m,ignore-error=true
 
       - name: Upload E2E image
         uses: actions/upload-artifact@v4
         with:
-          name: vault-demo-image
-          path: ${{ runner.temp }}/vault-demo.tar
+          name: anzen-demo-image
+          path: ${{ runner.temp }}/anzen-demo.tar
           compression-level: 1
           retention-days: 1
 
@@ -156,16 +156,16 @@ jobs:
       - name: Download E2E image
         uses: actions/download-artifact@v4
         with:
-          name: vault-demo-image
+          name: anzen-demo-image
           path: ${{ runner.temp }}
 
       - name: Load E2E image
-        run: docker load --input "${{ runner.temp }}/vault-demo.tar"
+        run: docker load --input "${{ runner.temp }}/anzen-demo.tar"
 
       - name: Run isolated end-to-end test
         env:
           E2E_TEST: ${{ matrix.test }}
-          VAULT_SKIP_DOCKER_BUILD: "1"
+          ANZEN_SKIP_DOCKER_BUILD: "1"
         run: ./scripts/run-e2e.sh "$E2E_TEST"
 
   e2e-tests:

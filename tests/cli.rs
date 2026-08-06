@@ -2,11 +2,21 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 #[test]
+fn binary_and_help_use_the_anzen_name() {
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: anzen"));
+}
+
+#[test]
 fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_str().unwrap();
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "phone", "init"])
         .assert()
@@ -16,7 +26,7 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
         .stdout(predicate::str::contains("Phone vault key:"))
         .stdout(predicate::str::contains("descriptor:").not());
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "hww", "init"])
         .assert()
@@ -25,7 +35,7 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
         .stdout(predicate::str::contains("HWW mnemonic:"))
         .stdout(predicate::str::contains("HWW vault key:"));
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "init"])
         .assert()
@@ -41,7 +51,7 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
         .stdout(predicate::str::contains("hot external descriptor").not())
         .stdout(predicate::str::contains("Hard limit").not());
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "policy"])
         .assert()
@@ -50,6 +60,32 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
         .stdout(predicate::str::contains("older(65535)"))
         .stdout(predicate::str::contains("Vault address: bcrt1p"))
         .stdout(predicate::str::contains("Monthly spending: disabled"));
+}
+
+#[test]
+fn legacy_config_filename_remains_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+
+    for args in [["phone", "init"], ["hww", "init"], ["init", ""]] {
+        let args = args.into_iter().filter(|arg| !arg.is_empty());
+        Command::cargo_bin("anzen")
+            .unwrap()
+            .arg("--data-dir")
+            .arg(data_dir)
+            .args(args)
+            .assert()
+            .success();
+    }
+
+    std::fs::rename(dir.path().join("anzen.json"), dir.path().join("vault.json")).unwrap();
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["--data-dir", data_dir, "policy"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Cold storage descriptor:"));
 }
 
 #[test]
@@ -63,7 +99,7 @@ fn legacy_bundled_device_commands_are_not_exposed() {
         "sweep",
         "rotate-phone",
     ] {
-        Command::cargo_bin("vault")
+        Command::cargo_bin("anzen")
             .unwrap()
             .arg(command)
             .assert()
@@ -78,14 +114,14 @@ fn mainnet_mode_is_persisted_and_requires_the_dangerous_flag_every_time() {
     let data_dir = dir.path().to_str().unwrap();
     let danger = "--dangerously-enable-mainnet";
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, danger, "phone", "init"])
         .assert()
         .success()
         .stdout(predicate::str::contains("MAINNET — REAL FUNDS"));
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "hww", "init"])
         .assert()
@@ -94,13 +130,13 @@ fn mainnet_mode_is_persisted_and_requires_the_dangerous_flag_every_time() {
             "pass --dangerously-enable-mainnet on every command",
         ));
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, danger, "hww", "init"])
         .assert()
         .success();
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "init"])
         .assert()
@@ -109,7 +145,7 @@ fn mainnet_mode_is_persisted_and_requires_the_dangerous_flag_every_time() {
             "pass --dangerously-enable-mainnet on every command",
         ));
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, danger, "init"])
         .assert()
@@ -118,17 +154,17 @@ fn mainnet_mode_is_persisted_and_requires_the_dangerous_flag_every_time() {
         .stdout(predicate::str::contains("fixed 1 sat/vB MVP fees"));
 
     let config: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.path().join("vault.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(dir.path().join("anzen.json")).unwrap()).unwrap();
     assert_eq!(config["network"], "mainnet");
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "policy"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("mainnet vault is locked"));
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, danger, "policy"])
         .assert()
@@ -141,13 +177,13 @@ fn dangerous_mainnet_flag_cannot_convert_an_existing_regtest_vault() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_str().unwrap();
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "phone", "init"])
         .assert()
         .success();
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args([
             "--data-dir",
@@ -166,7 +202,7 @@ fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_str().unwrap();
     for args in [vec!["phone", "init"], vec!["hww", "init"], vec!["init"]] {
-        Command::cargo_bin("vault")
+        Command::cargo_bin("anzen")
             .unwrap()
             .args(["--data-dir", data_dir])
             .args(args)
@@ -178,7 +214,7 @@ fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
     let private = dir.path().join("alice.sec.asc");
     let recovery = dir.path().join("friend-recovery.json");
     let backup = dir.path().join("cloud/phone-seed-backup.json");
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args([
             "--data-dir",
@@ -195,7 +231,7 @@ fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
         .assert()
         .success()
         .stdout(predicate::str::contains("OpenPGP key generated"));
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "hww", "add-recovery-friend"])
         .arg(&public)
@@ -205,13 +241,13 @@ fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
         .stdout(predicate::str::contains("Recovery friend added"));
 
     let config: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.path().join("vault.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(dir.path().join("anzen.json")).unwrap()).unwrap();
     let backup_text = std::fs::read_to_string(&backup).unwrap();
     let backup_json: serde_json::Value = serde_json::from_str(&backup_text).unwrap();
     assert_eq!(backup_json["friends"].as_array().unwrap().len(), 1);
     assert!(!backup_text.contains(config["vault_descriptor"].as_str().unwrap()));
 
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "social", "decrypt-backup"])
         .arg(&backup)
@@ -228,7 +264,7 @@ fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
     assert_eq!(recovered["vault_descriptor"], config["vault_descriptor"]);
 
     std::fs::remove_file(dir.path().join("phone/device.json")).unwrap();
-    Command::cargo_bin("vault")
+    Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "phone", "restore"])
         .arg(&recovery)

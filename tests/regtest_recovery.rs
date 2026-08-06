@@ -1,6 +1,4 @@
-use bitcoin::{Address, Network};
-use std::{env, fs, str::FromStr};
-use vault_cli::{
+use anzen::{
     cold_wallet,
     core::{
         HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
@@ -14,6 +12,8 @@ use vault_cli::{
     },
     hot_wallet::{self, HotWallet},
 };
+use bitcoin::{Address, Network};
+use std::{env, fs, str::FromStr};
 
 struct InitializedVault {
     config: VaultConfig,
@@ -33,9 +33,9 @@ fn initialize(data_dir: &std::path::Path) -> InitializedVault {
 
 fn rpc_from_env() -> RegtestRpc {
     RegtestRpc::connect(&RpcConfig {
-        url: env::var("VAULT_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
-        user: env::var("VAULT_RPC_USER").unwrap_or_else(|_| "vault".to_owned()),
-        password: env::var("VAULT_RPC_PASSWORD").unwrap_or_else(|_| "vault".to_owned()),
+        url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
+        user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
+        password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
     })
     .unwrap()
 }
@@ -176,7 +176,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
             .path()
             .join("history")
             .join(format!("rotation-{}", rotation.sweep.txid))
-            .join("vault.json")
+            .join("anzen.json")
             .exists()
     );
     rpc.mine(1, &destination).unwrap();

@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 # Compose scopes containers, networks, and volumes by project name. Give every
 # invocation its own project so another local test runner cannot tear it down.
-COMPOSE_PROJECT_NAME="vault-e2e-$$-$RANDOM"
+COMPOSE_PROJECT_NAME="anzen-e2e-$$-$RANDOM"
 export COMPOSE_PROJECT_NAME
 readonly COMPOSE_PROJECT_NAME
 
@@ -74,7 +74,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cleanup
-if [[ ${VAULT_SKIP_DOCKER_BUILD:-0} != 1 ]]; then
+if [[ ${ANZEN_SKIP_DOCKER_BUILD:-0} != 1 ]]; then
     printf 'Building the demo image once...\n'
     COMPOSE_PROGRESS=quiet docker compose build demo
 fi

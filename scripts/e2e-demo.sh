@@ -88,7 +88,7 @@ print_cli_output() {
 
 show_command() {
     shift
-    printf '$ vault'
+    printf '$ anzen'
     printf ' %q' "$@"
     printf '\n'
 }
@@ -99,27 +99,27 @@ show_file_command() {
     printf '\n'
 }
 
-vault() {
+anzen() {
     local data_dir=$1
     local output
-    local vault_exit
+    local anzen_exit
     shift
     show_command "$data_dir" "$@"
     set +e
-    output=$(command vault --data-dir "$data_dir" "$@" 2>&1)
-    vault_exit=$?
+    output=$(command anzen --data-dir "$data_dir" "$@" 2>&1)
+    anzen_exit=$?
     set -e
     print_cli_output "$output"
-    return "$vault_exit"
+    return "$anzen_exit"
 }
 
-vault_capture() {
+anzen_capture() {
     local variable_name=$1
     local data_dir=$2
     local output
     shift 2
     show_command "$data_dir" "$@"
-    if ! output=$(command vault --data-dir "$data_dir" "$@" 2>&1); then
+    if ! output=$(command anzen --data-dir "$data_dir" "$@" 2>&1); then
         print_cli_output "$output"
         return 1
     fi
@@ -127,13 +127,13 @@ vault_capture() {
     printf -v "$variable_name" '%s' "$output"
 }
 
-vault_silent() {
+anzen_silent() {
     local data_dir=$1
     local output
     local status
     shift
     set +e
-    output=$(command vault --data-dir "$data_dir" "$@" 2>&1)
+    output=$(command anzen --data-dir "$data_dir" "$@" 2>&1)
     status=$?
     set -e
     if [[ $status -ne 0 ]]; then
@@ -142,13 +142,13 @@ vault_silent() {
     fi
 }
 
-vault_filtered() {
+anzen_filtered() {
     local filter=$1
     local data_dir=$2
     local output
     shift 2
     show_command "$data_dir" "$@"
-    if ! output=$(command vault --data-dir "$data_dir" "$@" 2>&1); then
+    if ! output=$(command anzen --data-dir "$data_dir" "$@" 2>&1); then
         print_cli_output "$output" >&2
         return 1
     fi
@@ -166,7 +166,7 @@ expect_failure() {
     printf '\nExpected rejection: %s\n' "$explanation"
     show_command "$data_dir" "$@"
     set +e
-    output=$(command vault --data-dir "$data_dir" "$@" 2>&1)
+    output=$(command anzen --data-dir "$data_dir" "$@" 2>&1)
     status=$?
     set -e
     if [[ $status -eq 0 ]]; then
@@ -184,11 +184,11 @@ expect_failure() {
 }
 
 node_height() {
-    command vault --data-dir "$MAIN" node info | awk '/^Height:/ {print $2}'
+    command anzen --data-dir "$MAIN" node info | awk '/^Height:/ {print $2}'
 }
 
 node_mtp() {
-    command vault --data-dir "$MAIN" node info | awk '/^Median time past:/ {print $4}'
+    command anzen --data-dir "$MAIN" node info | awk '/^Median time past:/ {print $4}'
 }
 
 format_duration() {
@@ -232,7 +232,7 @@ mine_blocks() {
     local started_at
     show_command "$MAIN" node mine "$blocks" "$MINING_ADDRESS"
     if (( blocks <= 5000 )); then
-        vault_silent "$MAIN" node mine "$blocks" "$MINING_ADDRESS"
+        anzen_silent "$MAIN" node mine "$blocks" "$MINING_ADDRESS"
         printf '%s: mined %s block(s); height is now %s.\n' \
             "$label" "$blocks" "$(node_height)"
         return
@@ -246,9 +246,9 @@ mine_blocks() {
         fi
         if (( blocks > 5000 )); then
             mtp=$(node_mtp)
-            vault_silent "$MAIN" node set-time "$((mtp + batch + 60))"
+            anzen_silent "$MAIN" node set-time "$((mtp + batch + 60))"
         fi
-        vault_silent "$MAIN" node mine "$batch" "$MINING_ADDRESS"
+        anzen_silent "$MAIN" node mine "$batch" "$MINING_ADDRESS"
         completed=$((completed + batch))
         mining_progress "$completed" "$blocks" "$started_at"
     done
@@ -285,9 +285,9 @@ advance_calendar_to() {
     target_display=$(date -u -d "@$target" '+%Y-%m-%d %H:%M:%S UTC')
     step "$label"
     show_command "$MAIN" node set-time "$((target + 60))"
-    vault_silent "$MAIN" node set-time "$((target + 60))"
+    anzen_silent "$MAIN" node set-time "$((target + 60))"
     show_command "$MAIN" node mine 11 "$MINING_ADDRESS"
-    vault_silent "$MAIN" node mine 11 "$MINING_ADDRESS"
+    anzen_silent "$MAIN" node mine 11 "$MINING_ADDRESS"
     if (( $(node_mtp) <= target )); then
         printf 'ERROR: Median Time Past did not advance beyond %s\n' "$target_display" >&2
         exit 1
@@ -297,13 +297,13 @@ advance_calendar_to() {
 }
 
 init_vault() {
-    vault_filtered '
+    anzen_filtered '
         /^(Simulated phone initialized|Phone mnemonic:|Phone vault key:)/ { print }
     ' "$MAIN" phone init
-    vault_filtered '
+    anzen_filtered '
         /^(Simulated HWW initialized|HWW mnemonic:|HWW vault key:|HWW ready)/ { print }
     ' "$MAIN" hww init
-    vault_filtered '
+    anzen_filtered '
         /^(Vault initialized|Cold storage descriptor:|Vault address:|Phone recovery:|HWW recovery:|Monthly spending:|Cloud recovery backup:)/ { print }
     ' "$MAIN" init
 }
@@ -320,20 +320,20 @@ ceremony() {
     local monthly_limit=${2:-$DEFAULT_MONTHLY_LIMIT_SATS}
     local proposal="${E2E_TEST}-policy.json"
     local approved="${E2E_TEST}-approved-policy.json"
-    vault_filtered '
+    anzen_filtered '
         /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Deferred split txid:|Deferred split fee:|Exact monthly UTXO:|Split remainder:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
     ' "$MAIN" phone set-policy --monthly-limit "$monthly_limit" \
         --output "$proposal" --now "$now"
-    vault_filtered '
+    anzen_filtered '
         /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Monthly pairs:|Rollover txid:|Deferred split txid:|Exact monthly UTXO:|Split remainder:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
     ' "$MAIN" hww confirm-policy "$proposal" --output "$approved" --yes
-    vault_filtered '
+    anzen_filtered '
         /^(Rollover broadcast:|Deferred monthly split encrypted:|Active monthly limit:|Encrypted monthly transaction pairs:)/ { print }
     ' "$MAIN" phone activate-policy "$approved"
 }
 
 status_compact() {
-    vault_filtered '
+    anzen_filtered '
         /^(Network:|Height:|Vault UTXOs:|Vault balance:)/ { print }
     ' "$MAIN" status
 }
@@ -347,15 +347,15 @@ setup_vault() {
     step "Set up the simulated phone, HWW, hot wallet, and static vault"
     init_vault
     show_backup_metadata
-    vault_capture hot_output "$MAIN" phone receive-address
+    anzen_capture hot_output "$MAIN" phone receive-address
     MINING_ADDRESS=$(printf '%s\n' "$hot_output" | awk '/^Hot receive address:/ {print $4}')
-    vault "$MAIN" node set-time "$NOW"
+    anzen "$MAIN" node set-time "$NOW"
     success "Phone, HWW, hot wallet, and vault configured."
 
     step "Mine spendable regtest coins and fund the vault"
     mine_blocks 101 "Creating spendable regtest coins"
-    vault_address=$(jq -r .vault_address "$MAIN/vault.json")
-    vault "$MAIN" phone send "$vault_address" "$funding_sats"
+    vault_address=$(jq -r .vault_address "$MAIN/anzen.json")
+    anzen "$MAIN" phone send "$vault_address" "$funding_sats"
     mine_blocks 1 "Confirming the vault funding transaction"
     FUNDING_HEIGHT=$(node_height)
     status_compact
@@ -369,10 +369,10 @@ make_receiver() {
     local receiver_output
     step "$label creates a fresh receiving wallet"
     show_command "$receiver_dir" phone init
-    command vault --data-dir "$receiver_dir" phone init >/dev/null
-    command vault --data-dir "$receiver_dir" hww init >/dev/null
-    command vault --data-dir "$receiver_dir" init >/dev/null
-    vault_capture receiver_output "$receiver_dir" phone receive-address
+    command anzen --data-dir "$receiver_dir" phone init >/dev/null
+    command anzen --data-dir "$receiver_dir" hww init >/dev/null
+    command anzen --data-dir "$receiver_dir" init >/dev/null
+    anzen_capture receiver_output "$receiver_dir" phone receive-address
     printf -v "$variable_name" '%s' "$(printf '%s\n' "$receiver_output" | awk '/^Hot receive address:/ {print $4}')"
     success "$label receiving address ready."
 }
@@ -384,18 +384,18 @@ confirm_transaction() {
 restore_phone() {
     local data_dir=$1
     local recovery="${E2E_TEST}-phone-recovery.json"
-    vault "$data_dir" hww decrypt-phone-backup \
+    anzen "$data_dir" hww decrypt-phone-backup \
         "$data_dir/cloud/phone-seed-backup.json" --output "$recovery"
-    vault "$data_dir" phone restore "$recovery"
+    anzen "$data_dir" phone restore "$recovery"
 }
 
 rotate_phone_key() {
     local data_dir=$1
     local proposal="${E2E_TEST}-rotation.json"
     local approved="${E2E_TEST}-approved-rotation.json"
-    vault "$data_dir" phone rotate-key --output "$proposal"
-    vault "$data_dir" hww confirm-rotation "$proposal" --output "$approved" --yes
-    vault "$data_dir" phone activate-rotation "$approved"
+    anzen "$data_dir" phone rotate-key --output "$proposal"
+    anzen "$data_dir" hww confirm-rotation "$proposal" --output "$approved" --yes
+    anzen "$data_dir" phone activate-rotation "$approved"
 }
 
 cooperative_sweep() {
@@ -403,9 +403,9 @@ cooperative_sweep() {
     local destination=$2
     local proposal="${E2E_TEST}-sweep.json"
     local approved="${E2E_TEST}-approved-sweep.json"
-    vault "$data_dir" phone create-sweep "$destination" --output "$proposal"
-    vault "$data_dir" hww confirm-sweep "$proposal" --output "$approved" --yes
-    vault "$data_dir" phone broadcast-sweep "$approved"
+    anzen "$data_dir" phone create-sweep "$destination" --output "$proposal"
+    anzen "$data_dir" hww confirm-sweep "$proposal" --output "$approved" --yes
+    anzen "$data_dir" phone broadcast-sweep "$approved"
 }
 
 test_setup_policy() {
@@ -413,7 +413,7 @@ test_setup_policy() {
     step "Set up the simulated phone, HWW, hot wallet, and static vault"
     init_vault
     show_backup_metadata
-    vault "$MAIN" policy
+    anzen "$MAIN" policy
     printf 'Policy timestamps are derived from the current UTC date when a ceremony begins.\n'
     success "Vault policy configured and verified."
 }
@@ -440,8 +440,8 @@ test_monthly_spend() {
     advance_calendar_to "$first_unlock" "Fast-forward to the first monthly allowance"
 
     step "Execute the allowance with a lower soft limit"
-    vault "$MAIN" phone authorize "$first_month"
-    vault "$MAIN" phone apply-soft-limit "$first_month" --limit 1000000
+    anzen "$MAIN" phone authorize "$first_month"
+    anzen "$MAIN" phone apply-soft-limit "$first_month" --limit 1000000
     confirm_transaction "Confirming the authorization and soft-limit return"
     printf 'The 0.1 BTC monthly allowance retained 0.01 BTC hot and returned 0.09 BTC to cold storage (fees paid from hot funds).\n'
     status_compact
@@ -463,7 +463,7 @@ test_monthly_revoke() {
 
     advance_calendar_to "$revoke_time" "Fast-forward two weeks into the first allowance month"
     step "Revoke the next month's allowance from the phone before it unlocks"
-    vault "$MAIN" phone revoke "$second_month"
+    anzen "$MAIN" phone revoke "$second_month"
     confirm_transaction "Confirming the phone-only revocation"
     printf 'The %s chunk returned to the static vault before its allowance became spendable.\n' "$second_month"
     success "Future allowance revoked back to the vault."
@@ -494,7 +494,7 @@ test_lost_phone() {
     confirm_transaction "Confirming the annual rollover"
     success "Twelve monthly transaction pairs presigned."
 
-    old_address=$(jq -r .vault_address "$MAIN/vault.json")
+    old_address=$(jq -r .vault_address "$MAIN/anzen.json")
 
     step "Simulate losing the phone"
     show_file_command rm -- "$MAIN/phone/device.json"
@@ -506,14 +506,14 @@ test_lost_phone() {
     step "Use the HWW to decrypt the cloud backup, then rotate the phone key"
     restore_phone "$MAIN"
     rotate_phone_key "$MAIN"
-    new_address=$(jq -r .vault_address "$MAIN/vault.json")
+    new_address=$(jq -r .vault_address "$MAIN/anzen.json")
     if [[ $old_address == "$new_address" ]]; then
         printf 'ERROR: emergency key rotation reused the vault address\n' >&2
         exit 1
     fi
     confirm_transaction "Confirming emergency key rotation"
-    vault "$MAIN" status
-    if [[ $(jq -r '.monthly_limit_sats' "$MAIN/vault.json") != "$DEFAULT_MONTHLY_LIMIT_SATS" ]]; then
+    anzen "$MAIN" status
+    if [[ $(jq -r '.monthly_limit_sats' "$MAIN/anzen.json") != "$DEFAULT_MONTHLY_LIMIT_SATS" ]]; then
         printf 'ERROR: phone-key rotation did not preserve the monthly limit\n' >&2
         exit 1
     fi
@@ -527,7 +527,7 @@ test_lost_phone() {
     first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
     advance_calendar_to "$first_unlock" "Fast-forward to the replacement phone's first allowance"
     step "Use the monthly allowance preserved through rotation"
-    vault "$MAIN" phone authorize "$first_month"
+    anzen "$MAIN" phone authorize "$first_month"
     confirm_transaction "Confirming the replacement phone's monthly authorization"
     success "Replacement phone used the preserved monthly policy."
 }
@@ -543,8 +543,8 @@ test_stolen_phone() {
     cp -a "$MAIN" "$attacker_dir"
     show_file_command rm -- "$attacker_dir/hww/device.json"
     rm -- "$attacker_dir/hww/device.json"
-    vault "$attacker_dir" phone send "$attacker_address" 500000
-    vault "$attacker_dir" phone create-sweep "$attacker_address" \
+    anzen "$attacker_dir" phone send "$attacker_address" 500000
+    anzen "$attacker_dir" phone create-sweep "$attacker_address" \
         --output "${E2E_TEST}-attacker-sweep.json"
     expect_failure "the stolen phone lacks H for an immediate cold-vault sweep" \
         "$attacker_dir" hww confirm-sweep "${E2E_TEST}-attacker-sweep.json" \
@@ -559,7 +559,7 @@ test_stolen_phone() {
     restore_phone "$MAIN"
     rotate_phone_key "$MAIN"
     confirm_transaction "Confirming emergency key rotation"
-    vault "$MAIN" status
+    anzen "$MAIN" status
     success "Owner restored and rotated away from stolen key."
 }
 
@@ -579,9 +579,9 @@ test_lost_hww() {
     advance_calendar_to "$unlock" "Fast-forward to a presigned monthly allowance"
 
     step "Use the phone-held allowance without the HWW"
-    vault "$MAIN" phone authorize "$month"
+    anzen "$MAIN" phone authorize "$month"
     confirm_transaction "Confirming the phone-held monthly authorization"
-    vault_capture recovery_address "$MAIN" phone receive-address
+    anzen_capture recovery_address "$MAIN" phone receive-address
     recovery_address=$(printf '%s\n' "$recovery_address" | awk '/^Hot receive address:/ {print $4}')
     latest_height=$(node_height)
     target=$((latest_height + PHONE_RECOVERY_BLOCKS))
@@ -591,7 +591,7 @@ test_lost_hww() {
 
     step "Wait for phone-only recovery"
     mine_to_next_height "$target" "Mining the real 61,200-block phone recovery delay"
-    vault "$MAIN" phone recover "$recovery_address"
+    anzen "$MAIN" phone recover "$recovery_address"
     confirm_transaction "Confirming the phone-only recovery sweep"
     status_compact
     success "Phone recovered the full remaining vault balance."
@@ -602,7 +602,7 @@ test_stolen_hww() {
     local owner_address attacker_address phone_target hww_target
     setup_vault
     make_receiver attacker_address "Attacker"
-    vault_capture owner_address "$MAIN" phone receive-address
+    anzen_capture owner_address "$MAIN" phone receive-address
     owner_address=$(printf '%s\n' "$owner_address" | awk '/^Hot receive address:/ {print $4}')
 
     step "Simulate HWW theft: the attacker has H and the owner retains M"
@@ -619,7 +619,7 @@ test_stolen_hww() {
     phone_target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
     step "The legitimate phone reaches its earlier recovery window"
     mine_to_next_height "$phone_target" "Mining the real 61,200-block phone recovery delay"
-    vault "$MAIN" phone recover "$owner_address"
+    anzen "$MAIN" phone recover "$owner_address"
     confirm_transaction "Confirming the legitimate phone recovery sweep"
     success "Legitimate phone recovered funds first."
 
@@ -649,7 +649,7 @@ test_lost_phone_no_cloud() {
     target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
     step "Wait for HWW-only recovery"
     mine_to_next_height "$target" "Mining the real 65,535-block HWW recovery delay"
-    vault "$MAIN" hww recover "$recovery_address"
+    anzen "$MAIN" hww recover "$recovery_address"
     confirm_transaction "Confirming the HWW-only recovery sweep"
     status_compact
     success "Surviving HWW recovered the vault after maturity."
@@ -686,8 +686,8 @@ test_cloud_compromise() {
     step "Simulate theft of only the encrypted cloud backup"
     show_file_command mkdir -p "$attacker_dir/cloud"
     mkdir -p "$attacker_dir/cloud"
-    show_file_command cp "$MAIN/vault.json" "$attacker_dir/vault.json"
-    cp "$MAIN/vault.json" "$attacker_dir/vault.json"
+    show_file_command cp "$MAIN/anzen.json" "$attacker_dir/anzen.json"
+    cp "$MAIN/anzen.json" "$attacker_dir/anzen.json"
     show_file_command cp "$MAIN/cloud/phone-seed-backup.json" "$attacker_dir/cloud/phone-seed-backup.json"
     cp "$MAIN/cloud/phone-seed-backup.json" "$attacker_dir/cloud/phone-seed-backup.json"
     expect_failure "cloud ciphertext alone cannot restore the phone" \
@@ -709,9 +709,9 @@ test_social_recovery() {
     make_receiver recovery_address "Replacement owner"
 
     step "Create a recovery friend's OpenPGP key and add it with the HWW"
-    vault "$MAIN" social generate-friend-key --name "Alice <alice@example.test>" \
+    anzen "$MAIN" social generate-friend-key --name "Alice <alice@example.test>" \
         --public-key "$friend_public" --private-key "$friend_private"
-    vault "$MAIN" hww add-recovery-friend "$friend_public" --yes
+    anzen "$MAIN" hww add-recovery-friend "$friend_public" --yes
     printf 'Cloud backup contains one encrypted payload, one HWW key wrapper, and %s OpenPGP friend wrapper.\n' \
         "$(jq '.friends | length' "$MAIN/cloud/phone-seed-backup.json")"
     success "Phone key and descriptor protected for HWW and recovery friend."
@@ -719,7 +719,7 @@ test_social_recovery() {
     step "Lose both devices and decrypt the cloud backup with the friend key"
     show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
     rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
-    vault "$MAIN" social decrypt-backup "$MAIN/cloud/phone-seed-backup.json" \
+    anzen "$MAIN" social decrypt-backup "$MAIN/cloud/phone-seed-backup.json" \
         --private-key "$friend_private" --output "$recovery_package"
     expect_failure "social recovery reconstructs M but cannot bypass its on-chain delay" \
         "$MAIN" social emergency-access "$MAIN/cloud/phone-seed-backup.json" \
@@ -729,7 +729,7 @@ test_social_recovery() {
     target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
     step "Wait for delayed social emergency access"
     mine_to_next_height "$target" "Mining the real 61,200-block phone recovery delay"
-    vault "$MAIN" social emergency-access "$MAIN/cloud/phone-seed-backup.json" \
+    anzen "$MAIN" social emergency-access "$MAIN/cloud/phone-seed-backup.json" \
         --private-key "$friend_private" "$recovery_address"
     confirm_transaction "Confirming the social emergency-access sweep"
     status_compact
@@ -765,7 +765,7 @@ test_rollover_on_time() {
     old_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
     old_schedule="$DEMO_ROOT/rollover-on-time-old-schedule"
     cp -a "$MAIN" "$old_schedule"
-    vault "$MAIN" status
+    anzen "$MAIN" status
     success "Initial annual rollover confirmed with twelve monthly pairs."
 
     annual_next_height=$((initial_rollover_height + BLOCKS_PER_YEAR))
@@ -775,7 +775,7 @@ test_rollover_on_time() {
     mine_to_next_height "$pre_calendar_target" \
         "Mining one year of real block height for the scheduled rollover"
     advance_calendar_to "$anniversary" "Advance the calendar to the annual rollover date"
-    vault "$MAIN" status
+    anzen "$MAIN" status
     expect_failure "phone recovery is still locked at the scheduled rollover" \
         "$MAIN" phone recover "$MINING_ADDRESS"
     expect_failure "HWW recovery is still locked at the scheduled rollover" \
@@ -787,10 +787,10 @@ test_rollover_on_time() {
     ceremony "$current_mtp"
     confirm_transaction "Confirming the on-time annual rollover"
     renewed_rollover_height=$(node_height)
-    vault "$MAIN" status
-    renewed_oldest=$(command vault --data-dir "$MAIN" status | \
+    anzen "$MAIN" status
+    renewed_oldest=$(command anzen --data-dir "$MAIN" status | \
         awk '/^Oldest confirmation height:/ {print $4}')
-    renewed_phone_target=$(command vault --data-dir "$MAIN" status | \
+    renewed_phone_target=$(command anzen --data-dir "$MAIN" status | \
         awk '/^Phone recovery: valid next-block height/ {print $6}')
     if [[ $renewed_oldest != "$renewed_rollover_height" || \
         $renewed_phone_target != "$((renewed_rollover_height + PHONE_RECOVERY_BLOCKS))" ]]; then
@@ -807,7 +807,7 @@ test_rollover_on_time() {
     step "Reach the old phone-recovery deadline"
     mine_to_next_height "$old_phone_target" \
         "Mining until the previous schedule's phone-recovery deadline"
-    vault "$MAIN" status
+    anzen "$MAIN" status
     expect_failure "the renewed outputs have a fresh phone-recovery delay" \
         "$MAIN" phone recover "$MINING_ADDRESS"
     success "Old recovery deadline passed while renewed funds stayed locked."
@@ -818,22 +818,22 @@ test_rollover_forgotten() {
     setup_vault
 
     step "Forget the annual rollover and inspect the original vault output"
-    vault "$MAIN" status
+    anzen "$MAIN" status
 
     phone_target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
     mine_to_next_height "$phone_target" "Mining until phone-only recovery activates"
-    vault "$MAIN" status
+    anzen "$MAIN" status
 
     hww_target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
     mine_to_next_height "$hww_target" "Mining until HWW-only recovery also activates"
-    vault "$MAIN" status
+    anzen "$MAIN" status
     success "Forgotten rollover exposed both recovery paths."
 
     step "Perform a late cooperative rollover to renew both timers"
     current_mtp=$(node_mtp)
     ceremony "$current_mtp"
     confirm_transaction "Confirming the late annual rollover"
-    vault "$MAIN" status
+    anzen "$MAIN" status
     success "Late rollover renewed both recovery timers."
 }
 

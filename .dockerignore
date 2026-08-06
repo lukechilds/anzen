@@ -1,4 +1,5 @@
 .git
+.anzen-data
 .vault-data
 target
 **/*.swp

@@ -1,14 +1,14 @@
 [package]
-name = "vault-cli"
+name = "anzen"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-description = "Renewable Bitcoin vault CLI with a regtest MVP and danger-gated mainnet mode"
+description = "Anzen renewable Bitcoin vault CLI with a regtest MVP and danger-gated mainnet mode"
 autobins = false
 
 [[bin]]
-name = "vault"
+name = "anzen"
 path = "src/main.rs"
 
 [dependencies]

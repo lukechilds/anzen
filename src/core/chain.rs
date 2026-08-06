@@ -285,11 +285,11 @@ mod tests {
     fn rpc_config_keeps_explicit_connection_values() {
         let config = RpcConfig {
             url: "http://bitcoind:18443".to_owned(),
-            user: "vault".to_owned(),
+            user: "anzen".to_owned(),
             password: "secret".to_owned(),
         };
         assert_eq!(config.url, "http://bitcoind:18443");
-        assert_eq!(config.user, "vault");
+        assert_eq!(config.user, "anzen");
         assert_eq!(config.password, "secret");
     }
 

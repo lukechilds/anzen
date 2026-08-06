@@ -7,7 +7,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const CONFIG_FILE: &str = "vault.json";
+pub const CONFIG_FILE: &str = "anzen.json";
+const LEGACY_CONFIG_FILE: &str = "vault.json";
 pub const PHONE_DEVICE_FILE: &str = "phone/device.json";
 pub const HWW_DEVICE_FILE: &str = "hww/device.json";
 pub const PHONE_BACKUP_FILE: &str = "cloud/phone-seed-backup.json";
@@ -60,7 +61,7 @@ pub fn initialize_vault(data_dir: &Path) -> Result<VaultConfig> {
 
 pub fn initialize_vault_for_network(data_dir: &Path, network: Network) -> Result<VaultConfig> {
     validate_supported_network(network)?;
-    if data_dir.join(CONFIG_FILE).exists() {
+    if data_dir.join(CONFIG_FILE).exists() || data_dir.join(LEGACY_CONFIG_FILE).exists() {
         bail!("vault already initialized at {}", data_dir.display());
     }
     let secp = Secp256k1::new();
@@ -94,14 +95,32 @@ pub fn initialize_vault_for_network(data_dir: &Path, network: Network) -> Result
 }
 
 pub fn load_config(data_dir: &Path) -> Result<VaultConfig> {
-    read_json(&data_dir.join(CONFIG_FILE))
+    read_json(&config_path(data_dir))
+}
+
+pub fn config_exists(data_dir: &Path) -> bool {
+    data_dir.join(CONFIG_FILE).exists() || data_dir.join(LEGACY_CONFIG_FILE).exists()
 }
 
 pub fn set_monthly_limit(data_dir: &Path, monthly_limit_sats: u64) -> Result<VaultConfig> {
     let mut config = load_config(data_dir)?;
     config.monthly_limit_sats = monthly_limit_sats;
-    write_json(&data_dir.join(CONFIG_FILE), &config)?;
+    write_json(&config_path(data_dir), &config)?;
     Ok(config)
+}
+
+fn config_path(data_dir: &Path) -> PathBuf {
+    let current = data_dir.join(CONFIG_FILE);
+    if current.exists() {
+        return current;
+    }
+
+    let legacy = data_dir.join(LEGACY_CONFIG_FILE);
+    if legacy.exists() {
+        return legacy;
+    }
+
+    current
 }
 
 pub fn load_device(data_dir: &Path, relative_path: &str) -> Result<DeviceFile> {

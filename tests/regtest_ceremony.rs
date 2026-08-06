@@ -1,7 +1,4 @@
-use bitcoin::{Address, Network};
-use chrono::{DateTime, Utc};
-use std::{env, str::FromStr};
-use vault_cli::{
+use anzen::{
     cold_wallet,
     core::{
         ceremony::TransactionKind,
@@ -10,12 +7,15 @@ use vault_cli::{
     },
     hot_wallet::{self, HotWallet},
 };
+use bitcoin::{Address, Network};
+use chrono::{DateTime, Utc};
+use std::{env, str::FromStr};
 
 fn rpc_from_env() -> RegtestRpc {
     RegtestRpc::connect(&RpcConfig {
-        url: env::var("VAULT_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
-        user: env::var("VAULT_RPC_USER").unwrap_or_else(|_| "vault".to_owned()),
-        password: env::var("VAULT_RPC_PASSWORD").unwrap_or_else(|_| "vault".to_owned()),
+        url: env::var("ANZEN_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:18443".to_owned()),
+        user: env::var("ANZEN_RPC_USER").unwrap_or_else(|_| "anzen".to_owned()),
+        password: env::var("ANZEN_RPC_PASSWORD").unwrap_or_else(|_| "anzen".to_owned()),
     })
     .unwrap()
 }

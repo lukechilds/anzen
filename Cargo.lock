@@ -140,6 +140,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "anzen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "base64 0.22.1",
+ "bdk_bitcoind_rpc",
+ "bdk_electrum",
+ "bdk_wallet",
+ "bitcoin",
+ "bitcoincore-rpc",
+ "chacha20poly1305",
+ "chrono",
+ "clap",
+ "hkdf",
+ "miniscript",
+ "pgp",
+ "predicates",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2499,33 +2526,6 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
-
-[[package]]
-name = "vault-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "base64 0.22.1",
- "bdk_bitcoind_rpc",
- "bdk_electrum",
- "bdk_wallet",
- "bitcoin",
- "bitcoincore-rpc",
- "chacha20poly1305",
- "chrono",
- "clap",
- "hkdf",
- "miniscript",
- "pgp",
- "predicates",
- "rand",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "zeroize",
-]
 
 [[package]]
 name = "vcpkg"
