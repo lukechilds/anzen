@@ -4,6 +4,8 @@
 
 Anzen is a Bitcoin wallet that achieves the security of a 2-of-3 multisig with the simplicity of a mobile hot wallet. It pairs a mobile hot wallet with a cold wallet that acts as a programmable vault, keeping savings in cold storage while making everyday access simple.
 
+Anzen is an open protocol, and this repository is its reference wallet implementation. Any hardware wallet can implement the cold-wallet side to review and sign Anzen vault policies, while any mobile or desktop wallet can implement the hot-wallet side to propose and execute them. Compatible implementations can work together without depending on the Anzen reference app or any particular vendor.
+
 A core design philosophy is that the hardware wallet signs vault policies, not individual day-to-day transactions. In one approval ceremony, it authorizes the policy and presigns everything the hot wallet needs to execute that policy for the next year. The hardware wallet is then unnecessary until the policy changes or the vault timelocks are renewed on the same calendar date the following year.
 
 A vault policy can permit the hot wallet to withdraw up to a predefined amount from cold storage each month. The hot wallet alone can execute an approved withdrawal or revoke it before it becomes available. This behavior is enforced by Bitcoin—not an Anzen server, custodian, or online co-signer—using Bitcoin Script, signatures, and timelocks.
@@ -22,6 +24,7 @@ Anzen is designed to make permanent loss extraordinarily difficult. It has no si
 - **Cancellable emergency liquidity:** once per annual vault epoch, the phone can start a larger pre-approved withdrawal, cancel it during a one-week safety window, or complete it after the delay.
 - **Optional social recovery:** a configured recovery friend can decrypt the phone backup if both devices are lost.
 - **Trustless enforcement:** the 2-of-2 spend and both delayed single-key recovery paths live entirely in Taproot. Presigned policy transactions are enforced by ordinary Bitcoin signatures and absolute/relative locktimes.
+- **Open interoperability:** hardware-wallet, mobile-wallet, and desktop-wallet vendors can implement either side of the protocol without depending on Anzen software or infrastructure.
 - **No provider dependency:** Anzen does not rely on a company, server, or proprietary recovery service remaining available.
 
 ### Exact loss and theft behavior
