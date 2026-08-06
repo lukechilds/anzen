@@ -19,8 +19,9 @@ Anzen is designed to make permanent loss extraordinarily difficult. It has no si
 - **Hardware-wallet independence:** routine monthly spending uses the phone alone. With annual rollover maintained, the hardware wallet normally needs to be accessed only once per year.
 - **Programmable monthly liquidity:** the phone can withdraw a fixed, pre-approved amount from the vault each calendar month without another hardware-wallet prompt.
 - **Phone-controlled revocation:** the phone can cancel a future monthly allowance by broadcasting its presigned revocation before the allowance becomes spendable.
+- **Cancellable emergency liquidity:** once per annual vault epoch, the phone can start a larger pre-approved withdrawal, cancel it during a one-week safety window, or complete it after the delay.
 - **Optional social recovery:** a configured recovery friend can decrypt the phone backup if both devices are lost.
-- **Trustless enforcement:** the 2-of-2 spend and both delayed single-key recovery paths live entirely in Taproot. Presigned monthly transactions are enforced by ordinary Bitcoin signatures and locktimes.
+- **Trustless enforcement:** the 2-of-2 spend and both delayed single-key recovery paths live entirely in Taproot. Presigned policy transactions are enforced by ordinary Bitcoin signatures and absolute/relative locktimes.
 - **No provider dependency:** Anzen does not rely on a company, server, or proprietary recovery service remaining available.
 
 ### Exact loss and theft behavior
@@ -80,6 +81,7 @@ Vault address: bcrt1p0j6cwkqng7y7weum5sqln5573deqvu9ycxxf92k98mvzmd0k3zzq4skpuc
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
+Emergency access: disabled
 Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
 
 $ anzen policy
@@ -88,68 +90,85 @@ Vault address: bcrt1p0j6cwkqng7y7weum5sqln5573deqvu9ycxxf92k98mvzmd0k3zzq4skpuc
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
+Emergency access: disabled
 ```
 
-The new vault starts with monthly spending disabled. `anzen init` prints the static cold-storage descriptor, vault address, and recovery delays, but does not create or sign a monthly spending policy.
+The new vault starts with monthly spending and emergency access disabled. `anzen init` prints the static cold-storage descriptor, vault address, and recovery delays, but does not create or sign a spending policy.
 
-### Set or replace the monthly policy
+### Set or replace the vault policy
 
-The phone proposes the policy and signs its side of every PSBT. The HWW independently validates the high-level policy, asks for one approval, and signs the complete batch. The rollover consolidates the vault into one output. A separately presigned split creates twelve exact monthly UTXOs plus one remainder only when the first authorization or revocation is attempted. The phone stores the split, each authorization, and each revocation as individually encrypted artifacts:
+The phone proposes the policy and signs its side of every PSBT. The HWW independently validates the high-level policy, asks for one approval, and signs the complete batch. The rollover consolidates the vault into one output. A separately presigned split creates twelve exact monthly UTXOs plus one remainder only when the first monthly or emergency action is attempted. The phone stores every transaction as an individually encrypted artifact. This real regtest policy combines a 0.1 BTC monthly limit with one cancellable 0.5 BTC emergency withdrawal:
 
 ```console
-$ anzen phone set-policy --monthly-limit 10000000 --output policy.json
+$ anzen phone set-policy --monthly-limit 10000000 --emergency-access-limit 50000000 --output policy.json
 PHONE POLICY PROPOSAL
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,01bc17c31d0931d7730d59553de0da23c2da57eda526a1537a13972460fa5e01,7cb8562a4fa4170dea7c3d1dba74694d3cb141a72ebdad05b47a439ddd7e76ab),{and_v(v:older(61200),pk(01bc17c31d0931d7730d59553de0da23c2da57eda526a1537a13972460fa5e01)),and_v(v:older(65535),pk(7cb8562a4fa4170dea7c3d1dba74694d3cb141a72ebdad05b47a439ddd7e76ab))}})#e9yszxkt
-Vault address: bcrt1pe06tvdn32kn382e9f6yu8q2zdwks2mpy4hs8qhrcmhsr89ze8mgskeprwy
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,df683183fe3d3144e7289d2908c04f82bc31de6c01d8731107eb7a4ede3b076c,fbabc46938fb9f1e850a069af8a0f19f38ddf7bb6ccb358945d63a07e0c2c7a0),{and_v(v:older(61200),pk(df683183fe3d3144e7289d2908c04f82bc31de6c01d8731107eb7a4ede3b076c)),and_v(v:older(65535),pk(fbabc46938fb9f1e850a069af8a0f19f38ddf7bb6ccb358945d63a07e0c2c7a0))}})#rdqc457c
+Vault address: bcrt1ps65vzqe603qmwg8zt08yg2masmfk364kwtal95p2mycav5a0d4vsnn0sfa
 Monthly limit: 10000000 sats
+Emergency access limit: 50000000 sats
+Emergency access delay: 605184 seconds (~1 week)
 Fee rate: 1 sat/vB
 Total input: 200000000 sats
 Monthly pairs: 12
-Rollover txid: bdc9965ee5c49bb6fafa4094f7d19f247a200cbfea72377da70519c35a6079a9
+Rollover txid: b2584e7ecab0b93086ad3ac25d0833a9ade3087fec71b4dd94ad2a0e1bd1cd82
 Rollover fee: 162 sats
-Deferred split txid: 2128661cf631086f3b0fabe4ac1faee6f4100c78ddb5f194fd24c89b0a0cb7fd
+Deferred split txid: 5e2263e291fcfa3993ca1b8c64dc403281298db2be5085db5a8c6a7f58d02441
 Deferred split fee: 678 sats
 Exact monthly UTXO: 10000162 sats
 Split remainder: 79997216 sats
-Phone signed PSBTs: 26
+Emergency trigger txid: cdde7b48516a589a79d957fba3a6e61e63070fdad9be6480ec140f7ea8897077
+Emergency withdrawal txid: 298cf2f53385751f360c9f43a4c99bfa1b0d8fffdb3ad15b9aeb59781e14e4f7
+Emergency cancellation txid: 50052101814005c646b60085ed5ac8cf23973f52ddd360ab2e26b685b81ffd8e
+Emergency hot address: bcrt1px5h2y90mmen77z7qhkk3ksmufe0gpq6tkdulm67fy59z4g745tlsekzk0g
+Phone signed PSBTs: 29
 Phone-signed policy proposal: policy.json
 
 $ anzen hww confirm-policy policy.json --output approved-policy.json
 SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL
 PHONE POLICY PROPOSAL
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,01bc17c31d0931d7730d59553de0da23c2da57eda526a1537a13972460fa5e01,7cb8562a4fa4170dea7c3d1dba74694d3cb141a72ebdad05b47a439ddd7e76ab),{and_v(v:older(61200),pk(01bc17c31d0931d7730d59553de0da23c2da57eda526a1537a13972460fa5e01)),and_v(v:older(65535),pk(7cb8562a4fa4170dea7c3d1dba74694d3cb141a72ebdad05b47a439ddd7e76ab))}})#e9yszxkt
-Vault address: bcrt1pe06tvdn32kn382e9f6yu8q2zdwks2mpy4hs8qhrcmhsr89ze8mgskeprwy
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,df683183fe3d3144e7289d2908c04f82bc31de6c01d8731107eb7a4ede3b076c,fbabc46938fb9f1e850a069af8a0f19f38ddf7bb6ccb358945d63a07e0c2c7a0),{and_v(v:older(61200),pk(df683183fe3d3144e7289d2908c04f82bc31de6c01d8731107eb7a4ede3b076c)),and_v(v:older(65535),pk(fbabc46938fb9f1e850a069af8a0f19f38ddf7bb6ccb358945d63a07e0c2c7a0))}})#rdqc457c
+Vault address: bcrt1ps65vzqe603qmwg8zt08yg2masmfk364kwtal95p2mycav5a0d4vsnn0sfa
 Monthly limit: 10000000 sats
+Emergency access limit: 50000000 sats
+Emergency access delay: 605184 seconds (~1 week)
 Fee rate: 1 sat/vB
 Total input: 200000000 sats
 Monthly pairs: 12
-Rollover txid: bdc9965ee5c49bb6fafa4094f7d19f247a200cbfea72377da70519c35a6079a9
+Rollover txid: b2584e7ecab0b93086ad3ac25d0833a9ade3087fec71b4dd94ad2a0e1bd1cd82
 Rollover fee: 162 sats
-Deferred split txid: 2128661cf631086f3b0fabe4ac1faee6f4100c78ddb5f194fd24c89b0a0cb7fd
+Deferred split txid: 5e2263e291fcfa3993ca1b8c64dc403281298db2be5085db5a8c6a7f58d02441
 Deferred split fee: 678 sats
 Exact monthly UTXO: 10000162 sats
 Split remainder: 79997216 sats
-Phone signed PSBTs: 26
-Type `approve` to confirm the complete monthly policy: approve
-HWW validated and signed all 26 PSBTs after one approval
+Emergency trigger txid: cdde7b48516a589a79d957fba3a6e61e63070fdad9be6480ec140f7ea8897077
+Emergency withdrawal txid: 298cf2f53385751f360c9f43a4c99bfa1b0d8fffdb3ad15b9aeb59781e14e4f7
+Emergency cancellation txid: 50052101814005c646b60085ed5ac8cf23973f52ddd360ab2e26b685b81ffd8e
+Emergency hot address: bcrt1px5h2y90mmen77z7qhkk3ksmufe0gpq6tkdulm67fy59z4g745tlsekzk0g
+Phone signed PSBTs: 29
+Type `approve` to confirm the complete vault policy: approve
+HWW validated and signed all 29 PSBTs after one approval
 HWW-approved policy: approved-policy.json
 
 $ anzen phone activate-policy approved-policy.json
-Rollover broadcast: bdc9965ee5c49bb6fafa4094f7d19f247a200cbfea72377da70519c35a6079a9
-Deferred monthly split encrypted: 2128661cf631086f3b0fabe4ac1faee6f4100c78ddb5f194fd24c89b0a0cb7fd
+Rollover broadcast: b2584e7ecab0b93086ad3ac25d0833a9ade3087fec71b4dd94ad2a0e1bd1cd82
+Deferred monthly split encrypted: 5e2263e291fcfa3993ca1b8c64dc403281298db2be5085db5a8c6a7f58d02441
 Active monthly limit: 10000000 sats
 Encrypted monthly transaction pairs: 12
+Active emergency access: 50000000 sats
+Encrypted emergency transaction set: trigger, withdrawal, cancellation
 
 $ anzen policy
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,01bc17c31d0931d7730d59553de0da23c2da57eda526a1537a13972460fa5e01,7cb8562a4fa4170dea7c3d1dba74694d3cb141a72ebdad05b47a439ddd7e76ab),{and_v(v:older(61200),pk(01bc17c31d0931d7730d59553de0da23c2da57eda526a1537a13972460fa5e01)),and_v(v:older(65535),pk(7cb8562a4fa4170dea7c3d1dba74694d3cb141a72ebdad05b47a439ddd7e76ab))}})#e9yszxkt
-Vault address: bcrt1pe06tvdn32kn382e9f6yu8q2zdwks2mpy4hs8qhrcmhsr89ze8mgskeprwy
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,df683183fe3d3144e7289d2908c04f82bc31de6c01d8731107eb7a4ede3b076c,fbabc46938fb9f1e850a069af8a0f19f38ddf7bb6ccb358945d63a07e0c2c7a0),{and_v(v:older(61200),pk(df683183fe3d3144e7289d2908c04f82bc31de6c01d8731107eb7a4ede3b076c)),and_v(v:older(65535),pk(fbabc46938fb9f1e850a069af8a0f19f38ddf7bb6ccb358945d63a07e0c2c7a0))}})#rdqc457c
+Vault address: bcrt1ps65vzqe603qmwg8zt08yg2masmfk364kwtal95p2mycav5a0d4vsnn0sfa
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly limit: 10000000 sats
 Presigned monthly transaction pairs: 12
+Emergency access limit: 50000000 sats
+Emergency access delay: 605184 seconds (~1 week)
 ```
 
-`10000000` sats is 0.1 BTC. At the fixed MVP fee rate shown above, each monthly UTXO is exactly `10000000 + 162` sats. Set `--monthly-limit 0` through the same three-step protocol to disable monthly authorizations while still rolling all funds into one cold output. Policy JSON may also be piped with `--output -`; file handoff is clearer for the interactive HWW approval.
+`10000000` sats is 0.1 BTC and `50000000` sats is 0.5 BTC. At the fixed MVP fee rate shown above, each monthly UTXO is exactly `10000000 + 162` sats. Set either limit to zero through the same three-step protocol to disable that feature. Policy JSON may also be piped with `--output -`; file handoff is clearer for the interactive HWW approval.
 
 ### Execute a monthly spend
 
@@ -182,6 +201,46 @@ Broadcast Revocation for 2026-10: acc9f3ff0f3ef4316c82e61379f64c07dd0370cb326019
 ```
 
 Once the revocation confirms, the corresponding authorization can no longer spend that monthly chunk.
+
+### Use or cancel emergency access
+
+The policy authorizes one emergency trigger per vault epoch. Starting it broadcasts the deferred split when monthly spending is also active, then begins the Bitcoin-enforced cancellation window:
+
+```console
+$ anzen phone emergency initiate
+Deferred monthly split broadcast: 5e2263e291fcfa3993ca1b8c64dc403281298db2be5085db5a8c6a7f58d02441
+Emergency access initiated: cdde7b48516a589a79d957fba3a6e61e63070fdad9be6480ec140f7ea8897077
+Amount after delay: 50000000 sats
+Cancellation window: 605184 seconds
+
+$ anzen phone emergency withdraw
+Error: failed to broadcast emergency access Withdrawal
+```
+
+After the trigger confirms and the one-week BIP68 delay elapses, the same command releases exactly the approved amount to the fresh hot-wallet address committed by the policy:
+
+```console
+$ anzen phone emergency withdraw
+Emergency access withdrawal broadcast: 298cf2f53385751f360c9f43a4c99bfa1b0d8fffdb3ad15b9aeb59781e14e4f7
+```
+
+Alternatively, the phone can cancel before maturity. These outputs are from the isolated cancellation test's own vault epoch:
+
+```console
+$ anzen phone emergency initiate
+Deferred monthly split broadcast: b0bd856954c169b822a91a7df4f49fe11945b17cc322edd64965bc30c67056f5
+Emergency access initiated: eb194ef49e2f0007b1b070796ae0a73036f47c864b7d7ad47479b6f5b38bdca8
+Amount after delay: 50000000 sats
+Cancellation window: 605184 seconds
+
+$ anzen phone emergency cancel
+Emergency access cancelled: cda23e380ea8513979d3d15ccd2531f79e9e638bcaa921ba7aabb5c09642c775
+
+$ anzen phone emergency withdraw
+Error: failed to broadcast emergency access Withdrawal
+```
+
+Once cancellation confirms, the delayed withdrawal remains invalid even after its timelock expires because the two transactions spend the same staging output. BIP68 uses 512-second units, so the enforced minimum is 605,184 seconds—seven days plus 6 minutes 24 seconds.
 
 ### Replace a lost phone
 
@@ -236,9 +295,9 @@ Policy rollover broadcast: 6dfc083670f67cdde7e08804d6019dd349470c4130d68905550dc
 Encrypted monthly transaction pairs: 12
 ```
 
-The rotation preserves the HWW key, every configured recovery friend, and the active monthly limit. It creates a new phone seed and descriptor-bound cloud envelope, then sweeps the old vault cooperatively. The same proposal chains a fresh 12-month rollover and deferred split to that sweep; one HWW prompt approves both, and the replacement monthly artifacts are encrypted to the new phone key. A vault whose monthly policy was disabled remains disabled after rotation.
+The rotation preserves the HWW key, every configured recovery friend, and the active monthly and emergency-access limits. It creates a new phone seed and descriptor-bound cloud envelope, then sweeps the old vault cooperatively. The same proposal chains a fresh annual policy to that sweep; one HWW prompt approves both, and all replacement artifacts are encrypted to the new phone key. A disabled feature remains disabled after rotation.
 
-### Configure social recovery and emergency access
+### Configure social recovery
 
 The backup payload contains the phone mnemonic and cold-storage descriptor, authenticated-encrypted under one random symmetric key. The HWW holds one encrypted copy of that key. Each recovery friend can hold another copy encrypted to their OpenPGP public key; the complete friend list is also authenticated by the symmetric key so cloud tampering cannot silently change who survives a later rotation. Friends are independent 1-of-N recipients, not threshold shares.
 
@@ -304,6 +363,7 @@ Vault address: bcrt1p9nfuddc7xj2ruerl9u476pue3tw2nl5ceztt7zekn72ew444s8nqnnwkjt
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
+Emergency access: disabled
 Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
 
 $ anzen --data-dir .replacement-vault policy
@@ -312,6 +372,7 @@ Vault address: bcrt1p9nfuddc7xj2ruerl9u476pue3tw2nl5ceztt7zekn72ew444s8nqnnwkjt
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
+Emergency access: disabled
 
 $ anzen hww recover bcrt1p9nfuddc7xj2ruerl9u476pue3tw2nl5ceztt7zekn72ew444s8nqnnwkjt
 HWW recovery sweep broadcast: 157bdcb335fea687c1896042d5d4ee304b41933f1f140a1d55835b2ed82379d2
@@ -345,6 +406,7 @@ Vault address: bcrt1p9nfuddc7xj2ruerl9u476pue3tw2nl5ceztt7zekn72ew444s8nqnnwkjt
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
+Emergency access: disabled
 Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
 
 $ anzen --data-dir .replacement-vault policy
@@ -353,6 +415,7 @@ Vault address: bcrt1p9nfuddc7xj2ruerl9u476pue3tw2nl5ceztt7zekn72ew444s8nqnnwkjt
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
+Emergency access: disabled
 
 $ anzen phone recover bcrt1p9nfuddc7xj2ruerl9u476pue3tw2nl5ceztt7zekn72ew444s8nqnnwkjt
 Phone recovery sweep broadcast: f9ee29feea85f607042a9338ea38e1eb4ae2854751d5b1f9c3823653fb58c340
@@ -408,7 +471,7 @@ Docker is the only host dependency:
 
 With no arguments, the runner behaves like `all`. Selected tests run serially, and each gets a fresh regtest chain and vault state so it can be read and reproduced independently. Separate runner invocations also use isolated Compose projects, so concurrent local tests cannot stop or erase one another. Output is limited to user actions, the corresponding CLI commands, essential policy/transaction results, expected safety rejections, and compact mining progress. Displayed commands omit the internal `--data-dir` argument, retain the terminal's default color, and show their results in muted grey. Every completed step starts a new paragraph with a short `✅` outcome so the test can be understood by skimming those lines.
 
-The named tests cover setup/policy, monthly spend, monthly revoke, partial funding, lost or stolen phone, lost or stolen HWW, missing cloud backup, both devices lost, OpenPGP social recovery with delayed emergency access, cloud compromise, both keys compromised, and both on-time and forgotten annual rollover. The spend demonstrations fund exactly 2 BTC and build twelve exact 0.1 BTC-plus-fee monthly UTXOs behind a deferred split.
+The named tests cover setup/policy, monthly spend, monthly revoke, successful and cancelled one-week emergency access, partial funding, lost or stolen phone, lost or stolen HWW, missing cloud backup, both devices lost, OpenPGP social recovery, cloud compromise, both keys compromised, and both on-time and forgotten annual rollover. The spend demonstrations fund exactly 2 BTC and build twelve exact 0.1 BTC-plus-fee monthly UTXOs behind a deferred split.
 
 Recovery tests mine the real 61,200/65,535-block CSV delays, and the on-time rollover test mines a 52,560-block year before continuing to the old recovery deadline. Running one is intentionally slow; running `all` is substantially slower because every long-delay test proves its behavior on an independent chain.
 

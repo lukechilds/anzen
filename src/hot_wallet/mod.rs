@@ -15,10 +15,19 @@ pub struct MonthlyBroadcastResult {
     pub transaction_txid: Txid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmergencyBroadcastResult {
+    pub split_txid: Option<Txid>,
+    pub split_was_broadcast: bool,
+    pub transaction_txid: Txid,
+}
+
 use crate::core::{
     ceremony::{
-        self, BatchManifest, EncryptedSplitTransaction, EncryptedTransaction, HotAddressProvider,
-        PolicyPackage, SCHEDULE_FILE, Schedule, ScheduleEntry, TransactionKind,
+        self, BatchManifest, EmergencyAccessSchedule, EmergencyTransactionKind,
+        EncryptedEmergencyTransaction, EncryptedSplitTransaction, EncryptedTransaction,
+        HotAddressProvider, PolicyLimits, PolicyPackage, SCHEDULE_FILE, Schedule, ScheduleEntry,
+        TransactionKind,
     },
     chain::{BitcoinCoreBackend, Blockchain, ElectrumBackend},
     policy::VaultAddressTemplate,
@@ -287,6 +296,7 @@ pub fn propose_policy(
     backend: &dyn HotWalletBackend,
     now: DateTime<Utc>,
     monthly_limit_sats: u64,
+    emergency_access_limit_sats: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
     let config = load_config(data_dir)?;
@@ -298,7 +308,10 @@ pub fn propose_policy(
         &config,
         &utxos,
         now,
-        monthly_limit_sats,
+        PolicyLimits {
+            monthly_limit_sats,
+            emergency_access_limit_sats,
+        },
         batch_dir,
         &phone,
         &mut wallet,
@@ -366,19 +379,178 @@ pub fn activate_policy(
             revocation_txid: revocation.compute_txid().to_string(),
         });
     }
+    let emergency_access = manifest
+        .emergency_access
+        .as_ref()
+        .map(|emergency| {
+            let trigger =
+                finalize_vault_psbt(read_psbt(&batch_dir.join(&emergency.trigger.psbt_file))?)?;
+            let withdrawal =
+                finalize_vault_psbt(read_psbt(&batch_dir.join(&emergency.withdrawal.psbt_file))?)?;
+            let cancellation = finalize_vault_psbt(read_psbt(
+                &batch_dir.join(&emergency.cancellation.psbt_file),
+            )?)?;
+            let trigger_path = emergency_transaction_path(
+                data_dir,
+                EmergencyTransactionKind::Trigger,
+                trigger.compute_txid(),
+            );
+            let withdrawal_path = emergency_transaction_path(
+                data_dir,
+                EmergencyTransactionKind::Withdrawal,
+                withdrawal.compute_txid(),
+            );
+            let cancellation_path = emergency_transaction_path(
+                data_dir,
+                EmergencyTransactionKind::Cancellation,
+                cancellation.compute_txid(),
+            );
+            write_encrypted_emergency_transaction(
+                &trigger_path,
+                &phone.seed,
+                EmergencyTransactionKind::Trigger,
+                &trigger,
+            )?;
+            write_encrypted_emergency_transaction(
+                &withdrawal_path,
+                &phone.seed,
+                EmergencyTransactionKind::Withdrawal,
+                &withdrawal,
+            )?;
+            write_encrypted_emergency_transaction(
+                &cancellation_path,
+                &phone.seed,
+                EmergencyTransactionKind::Cancellation,
+                &cancellation,
+            )?;
+            Ok::<EmergencyAccessSchedule, anyhow::Error>(EmergencyAccessSchedule {
+                amount_sats: emergency.amount_sats,
+                delay_seconds: emergency.delay_seconds,
+                hot_address: emergency.hot_address.clone(),
+                trigger_file: relative_to(data_dir, &trigger_path)?,
+                trigger_txid: trigger.compute_txid().to_string(),
+                withdrawal_file: relative_to(data_dir, &withdrawal_path)?,
+                withdrawal_txid: withdrawal.compute_txid().to_string(),
+                cancellation_file: relative_to(data_dir, &cancellation_path)?,
+                cancellation_txid: cancellation.compute_txid().to_string(),
+            })
+        })
+        .transpose()?;
     let schedule = Schedule {
         version: 2,
         rollover_txid: rollover.compute_txid().to_string(),
         split_file,
         split_txid,
         monthly_limit_sats: manifest.monthly_limit_sats,
+        emergency_access_limit_sats: manifest.emergency_access_limit_sats,
         entries,
+        emergency_access,
     };
     write_json(&data_dir.join(SCHEDULE_FILE), &schedule)?;
     backend
         .broadcast(&rollover)
         .context("failed to broadcast rollover transaction")?;
     Ok(schedule)
+}
+
+pub fn initiate_emergency_access(
+    data_dir: &Path,
+    backend: &dyn HotWalletBackend,
+) -> Result<EmergencyBroadcastResult> {
+    let schedule = load_schedule(data_dir)?;
+    schedule
+        .emergency_access
+        .as_ref()
+        .context("emergency access is disabled for the active vault epoch")?;
+    let config = load_config(data_dir)?;
+    ensure_backend_network(backend, &config)?;
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    let (split_txid, split_was_broadcast) =
+        broadcast_split_if_needed(data_dir, backend, &schedule, &phone.seed)?;
+    let transaction_txid = broadcast_emergency_transaction(
+        data_dir,
+        backend,
+        &schedule,
+        &phone.seed,
+        EmergencyTransactionKind::Trigger,
+    )?;
+    Ok(EmergencyBroadcastResult {
+        split_txid,
+        split_was_broadcast,
+        transaction_txid,
+    })
+}
+
+pub fn withdraw_emergency_access(data_dir: &Path, backend: &dyn HotWalletBackend) -> Result<Txid> {
+    let schedule = load_schedule(data_dir)?;
+    let config = load_config(data_dir)?;
+    ensure_backend_network(backend, &config)?;
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    broadcast_emergency_transaction(
+        data_dir,
+        backend,
+        &schedule,
+        &phone.seed,
+        EmergencyTransactionKind::Withdrawal,
+    )
+}
+
+pub fn cancel_emergency_access(data_dir: &Path, backend: &dyn HotWalletBackend) -> Result<Txid> {
+    let schedule = load_schedule(data_dir)?;
+    let config = load_config(data_dir)?;
+    ensure_backend_network(backend, &config)?;
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    // TODO(production): emergency cancellations need a phone-available fee-bump path so they can
+    // confirm reliably before the delayed withdrawal matures.
+    broadcast_emergency_transaction(
+        data_dir,
+        backend,
+        &schedule,
+        &phone.seed,
+        EmergencyTransactionKind::Cancellation,
+    )
+}
+
+fn broadcast_emergency_transaction(
+    data_dir: &Path,
+    backend: &dyn HotWalletBackend,
+    schedule: &Schedule,
+    phone_seed: &[u8],
+    kind: EmergencyTransactionKind,
+) -> Result<Txid> {
+    let emergency = schedule
+        .emergency_access
+        .as_ref()
+        .context("emergency access is disabled for the active vault epoch")?;
+    let (file, expected_txid) = match kind {
+        EmergencyTransactionKind::Trigger => (&emergency.trigger_file, &emergency.trigger_txid),
+        EmergencyTransactionKind::Withdrawal => {
+            (&emergency.withdrawal_file, &emergency.withdrawal_txid)
+        }
+        EmergencyTransactionKind::Cancellation => {
+            (&emergency.cancellation_file, &emergency.cancellation_txid)
+        }
+    };
+    let artifact: EncryptedEmergencyTransaction = read_json(&data_dir.join(file))?;
+    if artifact.version != 1 || artifact.kind != kind || artifact.txid != *expected_txid {
+        bail!("encrypted emergency transaction metadata does not match the requested action");
+    }
+    let purpose = emergency_transaction_purpose(kind, &artifact.txid);
+    let plaintext =
+        crate::core::crypto::decrypt(phone_seed, &purpose, &artifact.encrypted_transaction)?;
+    let transaction: Transaction = consensus::deserialize(&plaintext)
+        .context("decrypted emergency transaction was invalid")?;
+    let txid = transaction.compute_txid();
+    if txid.to_string() != artifact.txid {
+        bail!("decrypted emergency transaction ID does not match its metadata");
+    }
+    let broadcast_txid = backend
+        .broadcast(&transaction)
+        .with_context(|| format!("failed to broadcast emergency access {kind:?}"))?;
+    if broadcast_txid != txid {
+        bail!("chain backend returned an unexpected emergency transaction ID");
+    }
+    Ok(txid)
 }
 
 pub fn broadcast_monthly(
@@ -606,7 +778,7 @@ fn broadcast_cooperative_sweep_for_config(
 }
 
 pub fn validate_policy_package(package: &PolicyPackage) -> Result<()> {
-    if package.version != 2 || package.kind != "monthly-policy" {
+    if !ceremony::is_supported_policy_package(package) {
         bail!("unsupported policy package");
     }
     Ok(())
@@ -667,6 +839,17 @@ fn encrypted_transaction_path(
     ))
 }
 
+fn emergency_transaction_path(
+    data_dir: &Path,
+    kind: EmergencyTransactionKind,
+    txid: Txid,
+) -> std::path::PathBuf {
+    data_dir.join(format!(
+        "phone/transactions/emergency-{}-{txid}.json",
+        emergency_transaction_kind_name(kind)
+    ))
+}
+
 fn write_encrypted_transaction(
     path: &Path,
     phone_seed: &[u8],
@@ -707,8 +890,41 @@ fn write_encrypted_split(path: &Path, phone_seed: &[u8], transaction: &Transacti
     )
 }
 
+fn write_encrypted_emergency_transaction(
+    path: &Path,
+    phone_seed: &[u8],
+    kind: EmergencyTransactionKind,
+    transaction: &Transaction,
+) -> Result<()> {
+    let txid = transaction.compute_txid().to_string();
+    let purpose = emergency_transaction_purpose(kind, &txid);
+    let encrypted_transaction =
+        crate::core::crypto::encrypt(phone_seed, &purpose, &consensus::serialize(transaction))?;
+    write_json(
+        path,
+        &EncryptedEmergencyTransaction {
+            version: 1,
+            kind,
+            txid,
+            encrypted_transaction,
+        },
+    )
+}
+
 fn split_purpose(txid: &str) -> String {
     format!("monthly/split/{txid}")
+}
+
+fn emergency_transaction_purpose(kind: EmergencyTransactionKind, txid: &str) -> String {
+    format!("emergency/{}/{txid}", emergency_transaction_kind_name(kind))
+}
+
+fn emergency_transaction_kind_name(kind: EmergencyTransactionKind) -> &'static str {
+    match kind {
+        EmergencyTransactionKind::Trigger => "trigger",
+        EmergencyTransactionKind::Withdrawal => "withdrawal",
+        EmergencyTransactionKind::Cancellation => "cancellation",
+    }
 }
 
 fn transaction_purpose(month: &str, kind: TransactionKind, txid: &str) -> String {

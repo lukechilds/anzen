@@ -1,6 +1,6 @@
 use super::{
     DEFAULT_FEE_RATE_SAT_VB, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
-    ceremony::{PolicyPackage, Schedule},
+    ceremony::{PolicyPackage, Schedule, is_supported_policy_package},
     keys::DeviceKeys,
     policy::{SpendPath, VaultPolicy},
     social::CloudRecoveryBackup,
@@ -107,6 +107,8 @@ pub struct PhoneRotationPackage {
     pub new_vault_descriptor: String,
     pub new_vault_address: String,
     pub monthly_limit_sats: u64,
+    #[serde(default)]
+    pub emergency_access_limit_sats: u64,
     pub sweep: CooperativeSweepPackage,
     pub renewed_policy: Option<PolicyPackage>,
     pub cloud_recovery_backup: Option<CloudRecoveryBackup>,
@@ -309,6 +311,7 @@ pub fn validate_phone_rotation(
         || package.sweep.vault_descriptor != old_config.vault_descriptor
         || package.sweep.destination != package.new_vault_address
         || package.monthly_limit_sats != old_config.monthly_limit_sats
+        || package.emergency_access_limit_sats != old_config.emergency_access_limit_sats
     {
         bail!("phone rotation package does not match the current vault");
     }
@@ -336,11 +339,13 @@ pub fn validate_phone_rotation(
     }
     validate_cooperative_sweep(&old_config, &package.sweep)?;
     let new_config = rotated_config(&old_config, &new_phone, &policy)?;
-    match (old_config.monthly_limit_sats, &package.renewed_policy) {
-        (0, None) => {}
-        (0, Some(_)) => bail!("disabled monthly policy must not create renewed transactions"),
-        (_, None) => bail!("phone rotation is missing the renewed monthly policy"),
-        (_, Some(renewed)) => {
+    let programmable_policy_enabled =
+        old_config.monthly_limit_sats > 0 || old_config.emergency_access_limit_sats > 0;
+    match (programmable_policy_enabled, &package.renewed_policy) {
+        (false, None) => {}
+        (false, Some(_)) => bail!("disabled vault policy must not create renewed transactions"),
+        (true, None) => bail!("phone rotation is missing the renewed vault policy"),
+        (true, Some(renewed)) => {
             validate_rotation_policy_binding(&old_config, &new_config, &package.sweep, renewed)?
         }
     }
@@ -365,6 +370,7 @@ pub fn rotated_config(
         phone_recovery_blocks: old_config.phone_recovery_blocks,
         hww_recovery_blocks: old_config.hww_recovery_blocks,
         monthly_limit_sats: old_config.monthly_limit_sats,
+        emergency_access_limit_sats: old_config.emergency_access_limit_sats,
     })
 }
 
@@ -374,14 +380,14 @@ pub fn validate_rotation_policy_binding(
     sweep: &CooperativeSweepPackage,
     renewed: &PolicyPackage,
 ) -> Result<()> {
-    if renewed.version != 2
-        || renewed.kind != "monthly-policy"
+    if !is_supported_policy_package(renewed)
         || !renewed.manifest.phone_approved
         || renewed.manifest.vault_descriptor != new_config.vault_descriptor
         || renewed.manifest.vault_address != new_config.vault_address
         || renewed.manifest.monthly_limit_sats != old_config.monthly_limit_sats
+        || renewed.manifest.emergency_access_limit_sats != old_config.emergency_access_limit_sats
     {
-        bail!("renewed monthly policy does not preserve the active policy");
+        bail!("renewed vault policy does not preserve the active policy");
     }
     let sweep_psbt = Psbt::from_str(&sweep.psbt).context("invalid rotation sweep PSBT")?;
     let sweep_tx = &sweep_psbt.unsigned_tx;
@@ -392,7 +398,7 @@ pub fn validate_rotation_policy_binding(
     let rollover_text = renewed
         .psbts
         .get(&renewed.manifest.rollover.psbt_file)
-        .context("renewed monthly policy is missing its rollover PSBT")?;
+        .context("renewed vault policy is missing its rollover PSBT")?;
     let rollover = Psbt::from_str(rollover_text).context("invalid renewed policy rollover PSBT")?;
     if rollover.unsigned_tx.input.len() != 1
         || rollover.inputs.len() != 1
@@ -400,7 +406,7 @@ pub fn validate_rotation_policy_binding(
             != bitcoin::OutPoint::new(sweep_tx.compute_txid(), 0)
         || rollover.inputs[0].witness_utxo.as_ref() != Some(sweep_output)
     {
-        bail!("renewed monthly policy is not chained to the rotation sweep");
+        bail!("renewed vault policy is not chained to the rotation sweep");
     }
     Ok(())
 }

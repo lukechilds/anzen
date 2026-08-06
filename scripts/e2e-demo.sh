@@ -7,6 +7,7 @@ readonly DEFAULT_FUNDING_SATS=200000000
 readonly PHONE_RECOVERY_BLOCKS=61200
 readonly HWW_RECOVERY_BLOCKS=65535
 readonly BLOCKS_PER_YEAR=52560
+readonly EMERGENCY_ACCESS_DELAY_SECONDS=605184
 
 CLI_OUTPUT_COLOR=$'\033[90m'
 COLOR_RESET=$'\033[0m'
@@ -20,6 +21,8 @@ readonly TESTS=(
     setup-policy
     monthly-spend
     monthly-revoke
+    emergency-access
+    emergency-cancel
     partial-funding
     lost-phone
     stolen-phone
@@ -304,7 +307,7 @@ init_vault() {
         /^(Simulated HWW initialized|HWW mnemonic:|HWW vault key:|HWW ready)/ { print }
     ' "$MAIN" hww init
     anzen_filtered '
-        /^(Vault initialized|Cold storage descriptor:|Vault address:|Phone recovery:|HWW recovery:|Monthly spending:|Cloud recovery backup:)/ { print }
+        /^(Vault initialized|Cold storage descriptor:|Vault address:|Phone recovery:|HWW recovery:|Monthly spending:|Emergency access:|Cloud recovery backup:)/ { print }
     ' "$MAIN" init
 }
 
@@ -318,17 +321,19 @@ show_backup_metadata() {
 ceremony() {
     local now=$1
     local monthly_limit=${2:-$DEFAULT_MONTHLY_LIMIT_SATS}
+    local emergency_access_limit=${3:-0}
     local proposal="${E2E_TEST}-policy.json"
     local approved="${E2E_TEST}-approved-policy.json"
     anzen_filtered '
-        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Deferred split txid:|Deferred split fee:|Exact monthly UTXO:|Split remainder:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
+        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Deferred split txid:|Deferred split fee:|Exact monthly UTXO:|Split remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
     ' "$MAIN" phone set-policy --monthly-limit "$monthly_limit" \
+        --emergency-access-limit "$emergency_access_limit" \
         --output "$proposal" --now "$now"
     anzen_filtered '
-        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Monthly pairs:|Rollover txid:|Deferred split txid:|Exact monthly UTXO:|Split remainder:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
+        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Monthly pairs:|Rollover txid:|Deferred split txid:|Exact monthly UTXO:|Split remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
     ' "$MAIN" hww confirm-policy "$proposal" --output "$approved" --yes
     anzen_filtered '
-        /^(Rollover broadcast:|Deferred monthly split encrypted:|Active monthly limit:|Encrypted monthly transaction pairs:)/ { print }
+        /^(Rollover broadcast:|Deferred monthly split encrypted:|Active monthly limit:|Encrypted monthly transaction pairs:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
     ' "$MAIN" phone activate-policy "$approved"
 }
 
@@ -476,6 +481,65 @@ test_monthly_revoke() {
     success "Revoked allowance remained unspendable."
 }
 
+test_emergency_access() {
+    local relative_lock_base unlock_time
+    setup_vault
+
+    step "Approve monthly spending and one emergency withdrawal for this vault epoch"
+    ceremony "$NOW" "$DEFAULT_MONTHLY_LIMIT_SATS" 50000000
+    confirm_transaction "Confirming the annual rollover"
+    success "Monthly policy and 0.5 BTC emergency access presigned."
+
+    step "Start emergency access from the phone"
+    relative_lock_base=$(node_mtp)
+    anzen "$MAIN" phone emergency initiate
+    confirm_transaction "Confirming the emergency trigger"
+    expect_failure "the emergency withdrawal is locked during its cancellation window" \
+        "$MAIN" phone emergency withdraw
+    success "Emergency access started; withdrawal stayed locked."
+
+    unlock_time=$((relative_lock_base + EMERGENCY_ACCESS_DELAY_SECONDS))
+    advance_calendar_to "$unlock_time" "Fast-forward through the one-week cancellation window"
+
+    step "Withdraw the preconfigured emergency amount to the hot wallet"
+    anzen "$MAIN" phone emergency withdraw
+    confirm_transaction "Confirming the delayed emergency withdrawal"
+    status_compact
+    success "0.5 BTC emergency access reached the hot wallet."
+}
+
+test_emergency_cancel() {
+    local relative_lock_base unlock_time
+    setup_vault
+
+    step "Approve one cancellable emergency withdrawal for this vault epoch"
+    ceremony "$NOW" "$DEFAULT_MONTHLY_LIMIT_SATS" 50000000
+    confirm_transaction "Confirming the annual rollover"
+    success "One-week delayed emergency access presigned."
+
+    step "Start emergency access from the phone"
+    relative_lock_base=$(node_mtp)
+    anzen "$MAIN" phone emergency initiate
+    confirm_transaction "Confirming the emergency trigger"
+    expect_failure "the emergency withdrawal is still inside its cancellation window" \
+        "$MAIN" phone emergency withdraw
+    success "Emergency access started with withdrawal still locked."
+
+    step "Cancel emergency access from the phone before it unlocks"
+    anzen "$MAIN" phone emergency cancel
+    confirm_transaction "Confirming the emergency cancellation"
+    success "Staged emergency funds returned to the vault."
+
+    unlock_time=$((relative_lock_base + EMERGENCY_ACCESS_DELAY_SECONDS))
+    advance_calendar_to "$unlock_time" "Fast-forward beyond the cancelled withdrawal's delay"
+
+    step "Attempt the cancelled emergency withdrawal"
+    expect_failure "the cancellation already spent the staged vault output" \
+        "$MAIN" phone emergency withdraw
+    status_compact
+    success "Cancelled emergency access remained unspendable."
+}
+
 test_partial_funding() {
     setup_vault 350000
     step "Run rollover with only enough funds for the earliest allowances"
@@ -489,10 +553,10 @@ test_lost_phone() {
     local old_address new_address first_month first_unlock
     setup_vault
 
-    step "Approve the annual monthly-spending policy before the phone is lost"
-    ceremony "$NOW"
+    step "Approve the annual vault policy before the phone is lost"
+    ceremony "$NOW" "$DEFAULT_MONTHLY_LIMIT_SATS" 50000000
     confirm_transaction "Confirming the annual rollover"
-    success "Twelve monthly transaction pairs presigned."
+    success "Monthly and emergency policy transactions presigned."
 
     old_address=$(jq -r .vault_address "$MAIN/anzen.json")
 
@@ -517,11 +581,16 @@ test_lost_phone() {
         printf 'ERROR: phone-key rotation did not preserve the monthly limit\n' >&2
         exit 1
     fi
+    if [[ $(jq -r '.emergency_access_limit_sats' "$MAIN/anzen.json") != 50000000 || \
+        $(jq -r '.emergency_access.amount_sats' "$MAIN/phone/schedule.json") != 50000000 ]]; then
+        printf 'ERROR: phone-key rotation did not preserve emergency access\n' >&2
+        exit 1
+    fi
     if [[ $(jq '.entries | length' "$MAIN/phone/schedule.json") -ne 12 ]]; then
         printf 'ERROR: phone-key rotation did not create a replacement annual schedule\n' >&2
         exit 1
     fi
-    success "Phone restored, key rotated, and monthly policy preserved."
+    success "Phone restored, key rotated, and vault policy preserved."
 
     first_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
     first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
@@ -850,6 +919,8 @@ case "$E2E_TEST" in
     setup-policy) test_setup_policy ;;
     monthly-spend) test_monthly_spend ;;
     monthly-revoke) test_monthly_revoke ;;
+    emergency-access) test_emergency_access ;;
+    emergency-cancel) test_emergency_cancel ;;
     partial-funding) test_partial_funding ;;
     lost-phone) test_lost_phone ;;
     stolen-phone) test_stolen_phone ;;

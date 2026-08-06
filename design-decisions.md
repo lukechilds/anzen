@@ -13,7 +13,7 @@ CLI / future apps
 └── core ────────┘
 ```
 
-- `hot_wallet` owns phone keys, the BDK hot wallet, encrypted monthly transactions, phone recovery, and phone-key rotation. Future iOS and Android apps should build on this API.
+- `hot_wallet` owns phone keys, the BDK hot wallet, encrypted monthly/emergency policy transactions, phone recovery, and phone-key rotation. Future iOS and Android apps should build on this API.
 - `cold_wallet` owns the deliberately small HWW surface: backup encryption/decryption, complete policy review and signing, cooperative-sweep approval, offline HWW recovery signing, and rotation approval. It imports only `core` and has no BDK wallet, Electrum, Bitcoin Core, or `hot_wallet` dependency.
 - `core` contains shared serialized protocol objects, key derivation, Miniscript policy construction, PSBT construction and validation, authenticated encryption/OpenPGP recovery envelopes, storage formats, and chain backend interfaces. It has no dependency on either device implementation.
 

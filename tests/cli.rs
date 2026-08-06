@@ -51,6 +51,7 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
             "HWW recovery:   65,535 blocks (~15 months)",
         ))
         .stdout(predicate::str::contains("Monthly spending: disabled"))
+        .stdout(predicate::str::contains("Emergency access: disabled"))
         .stdout(predicate::str::contains("hot external descriptor").not())
         .stdout(predicate::str::contains("Hard limit").not());
 
@@ -62,7 +63,27 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
         .stdout(predicate::str::contains("older(61200)"))
         .stdout(predicate::str::contains("older(65535)"))
         .stdout(predicate::str::contains("Vault address: bcrt1p"))
-        .stdout(predicate::str::contains("Monthly spending: disabled"));
+        .stdout(predicate::str::contains("Monthly spending: disabled"))
+        .stdout(predicate::str::contains("Emergency access: disabled"));
+}
+
+#[test]
+fn phone_cli_exposes_the_complete_emergency_access_lifecycle() {
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["phone", "set-policy", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--emergency-access-limit"));
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["phone", "emergency", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("initiate"))
+        .stdout(predicate::str::contains("withdraw"))
+        .stdout(predicate::str::contains("cancel"));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::{
-    DEFAULT_FEE_RATE_SAT_VB, MONTHS_PER_ROLLOVER,
+    DEFAULT_FEE_RATE_SAT_VB, EMERGENCY_ACCESS_DELAY_SECONDS, MONTHS_PER_ROLLOVER,
     crypto::EncryptedBlob,
     keys::DeviceKeys,
     policy::{SpendPath, VaultPolicy},
@@ -23,6 +23,14 @@ use std::{
 
 pub const DEFAULT_BATCH_DIR: &str = "ceremony/active";
 pub const SCHEDULE_FILE: &str = "phone/schedule.json";
+pub const POLICY_PACKAGE_KIND: &str = "vault-policy";
+const LEGACY_POLICY_PACKAGE_KIND: &str = "monthly-policy";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolicyLimits {
+    pub monthly_limit_sats: u64,
+    pub emergency_access_limit_sats: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchTransaction {
@@ -43,6 +51,21 @@ pub struct MonthPair {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmergencyAccessPolicy {
+    pub amount_sats: u64,
+    pub delay_seconds: u32,
+    pub delay_sequence: u32,
+    pub hot_address: String,
+    pub staging_vout: u32,
+    pub staging_value_sats: u64,
+    pub vault_change_vout: u32,
+    pub vault_change_value_sats: u64,
+    pub trigger: BatchTransaction,
+    pub withdrawal: BatchTransaction,
+    pub cancellation: BatchTransaction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchManifest {
     pub version: u8,
     pub created_at: i64,
@@ -51,6 +74,8 @@ pub struct BatchManifest {
     pub vault_address: String,
     #[serde(alias = "hard_limit_sats")]
     pub monthly_limit_sats: u64,
+    #[serde(default)]
+    pub emergency_access_limit_sats: u64,
     pub fee_rate_sat_vb: u64,
     pub total_input_sats: u64,
     pub chunk_count: usize,
@@ -59,6 +84,8 @@ pub struct BatchManifest {
     pub remainder_vout: Option<u32>,
     pub remainder_value_sats: u64,
     pub months: Vec<MonthPair>,
+    #[serde(default)]
+    pub emergency_access: Option<EmergencyAccessPolicy>,
     pub phone_approved: bool,
     pub hww_approved: bool,
 }
@@ -82,6 +109,22 @@ pub struct EncryptedSplitTransaction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum EmergencyTransactionKind {
+    Trigger,
+    Withdrawal,
+    Cancellation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptedEmergencyTransaction {
+    pub version: u8,
+    pub kind: EmergencyTransactionKind,
+    pub txid: String,
+    pub encrypted_transaction: EncryptedBlob,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TransactionKind {
     Authorization,
     Revocation,
@@ -99,13 +142,30 @@ pub struct ScheduleEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmergencyAccessSchedule {
+    pub amount_sats: u64,
+    pub delay_seconds: u32,
+    pub hot_address: String,
+    pub trigger_file: String,
+    pub trigger_txid: String,
+    pub withdrawal_file: String,
+    pub withdrawal_txid: String,
+    pub cancellation_file: String,
+    pub cancellation_txid: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schedule {
     pub version: u8,
     pub rollover_txid: String,
     pub split_file: Option<String>,
     pub split_txid: Option<String>,
     pub monthly_limit_sats: u64,
+    #[serde(default)]
+    pub emergency_access_limit_sats: u64,
     pub entries: Vec<ScheduleEntry>,
+    #[serde(default)]
+    pub emergency_access: Option<EmergencyAccessSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,14 +195,22 @@ pub fn package_from_batch(batch_dir: &Path) -> Result<PolicyPackage> {
     }
     Ok(PolicyPackage {
         version: 2,
-        kind: "monthly-policy".to_owned(),
+        kind: POLICY_PACKAGE_KIND.to_owned(),
         manifest,
         psbts,
     })
 }
 
+pub fn is_supported_policy_package(package: &PolicyPackage) -> bool {
+    package.version == 2
+        && matches!(
+            package.kind.as_str(),
+            POLICY_PACKAGE_KIND | LEGACY_POLICY_PACKAGE_KIND
+        )
+}
+
 pub fn materialize_policy_package(package: &PolicyPackage, batch_dir: &Path) -> Result<()> {
-    if package.version != 2 || package.kind != "monthly-policy" {
+    if !is_supported_policy_package(package) {
         bail!("unsupported policy package");
     }
     if batch_dir.exists() && batch_dir.read_dir()?.next().is_some() {
@@ -179,11 +247,15 @@ pub fn build_policy_proposal(
     config: &VaultConfig,
     utxos: &[VaultUtxo],
     now: DateTime<Utc>,
-    monthly_limit_sats: u64,
+    limits: PolicyLimits,
     batch_dir: &Path,
     phone: &DeviceKeys,
     hot: &mut impl HotAddressProvider,
 ) -> Result<BatchManifest> {
+    let PolicyLimits {
+        monthly_limit_sats,
+        emergency_access_limit_sats,
+    } = limits;
     if utxos.is_empty() {
         bail!("vault has no confirmed UTXOs to roll over");
     }
@@ -251,6 +323,45 @@ pub fn build_policy_proposal(
     let rollover_file = "rollover.psbt".to_owned();
     write_psbt(&batch_dir.join(&rollover_file), &rollover_psbt)?;
 
+    let emergency_hot_address = (emergency_access_limit_sats > 0)
+        .then(|| hot.next_receive_address())
+        .transpose()?;
+    let emergency_delay_sequence = emergency_delay_sequence()?;
+    let emergency_staging_value_sats = match &emergency_hot_address {
+        Some(address) => {
+            if emergency_access_limit_sats < address.script_pubkey().minimal_non_dust().to_sat() {
+                bail!("emergency access amount would create a dust hot-wallet output");
+            }
+            let withdrawal_fee = emergency_withdrawal_fee(
+                &policy,
+                OutPoint::null(),
+                emergency_access_limit_sats,
+                emergency_delay_sequence,
+                address.script_pubkey(),
+            )?;
+            emergency_access_limit_sats
+                .checked_add(withdrawal_fee)
+                .context("emergency access amount plus withdrawal fee overflowed")?
+        }
+        None => 0,
+    };
+    let minimum_remainder_value = if emergency_access_limit_sats == 0 {
+        vault_script.minimal_non_dust().to_sat()
+    } else {
+        let minimum_vault_change = vault_script.minimal_non_dust().to_sat();
+        let trigger_fee = emergency_trigger_fee(
+            &policy,
+            OutPoint::null(),
+            emergency_staging_value_sats,
+            minimum_vault_change,
+            vault_script.clone(),
+        )?;
+        emergency_staging_value_sats
+            .checked_add(trigger_fee)
+            .and_then(|value| value.checked_add(minimum_vault_change))
+            .context("emergency access reserve overflowed")?
+    };
+
     let (chunk_count, split, split_tx, chunk_value, remainder_value_sats) =
         if monthly_limit_sats == 0 {
             (0, None, None, 0, 0)
@@ -265,7 +376,6 @@ pub fn build_policy_proposal(
             let chunk_value = monthly_limit_sats
                 .checked_add(authorization_fee)
                 .context("monthly limit plus fee overflowed")?;
-            let minimum_remainder = vault_script.minimal_non_dust().to_sat();
             let mut selected = None;
             for count in (1..=MONTHS_PER_ROLLOVER).rev() {
                 let template = split_template(
@@ -283,7 +393,7 @@ pub fn build_policy_proposal(
                             .checked_mul(count as u64)
                             .context("monthly chunk total overflowed")?,
                     )
-                    .and_then(|value| value.checked_add(minimum_remainder))
+                    .and_then(|value| value.checked_add(minimum_remainder_value))
                     .context("monthly split requirement overflowed")?;
                 if rollover_value >= required {
                     let remainder = rollover_value - split_fee - chunk_value * count as u64;
@@ -291,40 +401,42 @@ pub fn build_policy_proposal(
                     break;
                 }
             }
-            let (count, split_fee, remainder) = selected.context(
-                "vault balance cannot fund even one exact monthly chunk, split fee, and remainder",
-            )?;
-            let split_tx = split_template(
-                OutPoint::new(rollover_txid, 0),
-                count,
-                chunk_value,
-                remainder,
-                vault_script.clone(),
-            );
-            let mut split_psbt = create_vault_psbt(
-                split_tx.clone(),
-                std::slice::from_ref(&rollover_tx.output[0]),
-                &policy,
-            )?;
-            sign_vault_psbt(
-                &mut split_psbt,
-                &policy,
-                SpendPath::Cooperative,
-                &phone.vault_keypair,
-            )?;
-            let split_file = "split.psbt".to_owned();
-            write_psbt(&batch_dir.join(&split_file), &split_psbt)?;
-            (
-                count,
-                Some(BatchTransaction {
-                    psbt_file: split_file,
-                    unsigned_txid: split_tx.compute_txid().to_string(),
-                    fee_sats: split_fee,
-                }),
-                Some(split_tx),
-                chunk_value,
-                remainder,
-            )
+            match selected {
+                None => (0, None, None, 0, 0),
+                Some((count, split_fee, remainder)) => {
+                    let split_tx = split_template(
+                        OutPoint::new(rollover_txid, 0),
+                        count,
+                        chunk_value,
+                        remainder,
+                        vault_script.clone(),
+                    );
+                    let mut split_psbt = create_vault_psbt(
+                        split_tx.clone(),
+                        std::slice::from_ref(&rollover_tx.output[0]),
+                        &policy,
+                    )?;
+                    sign_vault_psbt(
+                        &mut split_psbt,
+                        &policy,
+                        SpendPath::Cooperative,
+                        &phone.vault_keypair,
+                    )?;
+                    let split_file = "split.psbt".to_owned();
+                    write_psbt(&batch_dir.join(&split_file), &split_psbt)?;
+                    (
+                        count,
+                        Some(BatchTransaction {
+                            psbt_file: split_file,
+                            unsigned_txid: split_tx.compute_txid().to_string(),
+                            fee_sats: split_fee,
+                        }),
+                        Some(split_tx),
+                        chunk_value,
+                        remainder,
+                    )
+                }
+            }
         };
 
     let month_starts = next_month_starts(now, chunk_count)?;
@@ -407,6 +519,33 @@ pub fn build_policy_proposal(
         });
     }
 
+    let emergency_access = match emergency_hot_address {
+        Some(hot_address) => {
+            let (source_outpoint, source_txout) = match &split_tx {
+                Some(split_tx) => (
+                    OutPoint::new(split_tx.compute_txid(), chunk_count as u32),
+                    split_tx.output[chunk_count].clone(),
+                ),
+                None => (
+                    OutPoint::new(rollover_txid, 0),
+                    rollover_tx.output[0].clone(),
+                ),
+            };
+            Some(build_emergency_access(
+                &policy,
+                source_outpoint,
+                &source_txout,
+                emergency_access_limit_sats,
+                emergency_delay_sequence,
+                &hot_address,
+                vault_script.clone(),
+                batch_dir,
+                phone,
+            )?)
+        }
+        None => None,
+    };
+
     let manifest = BatchManifest {
         version: 2,
         created_at: now.timestamp(),
@@ -414,6 +553,7 @@ pub fn build_policy_proposal(
         vault_descriptor: config.vault_descriptor.clone(),
         vault_address: config.vault_address.clone(),
         monthly_limit_sats,
+        emergency_access_limit_sats,
         fee_rate_sat_vb: DEFAULT_FEE_RATE_SAT_VB,
         total_input_sats,
         chunk_count,
@@ -426,6 +566,7 @@ pub fn build_policy_proposal(
         remainder_vout: (chunk_count > 0).then_some(chunk_count as u32),
         remainder_value_sats,
         months,
+        emergency_access,
         phone_approved: true,
         hww_approved: false,
     };
@@ -450,12 +591,10 @@ pub fn validate_batch(
     {
         bail!("ceremony policy does not match configured vault policy");
     }
-    let disabled = manifest.monthly_limit_sats == 0;
-    if (disabled && (manifest.chunk_count != 0 || !manifest.months.is_empty()))
-        || (!disabled
-            && (manifest.chunk_count == 0
-                || manifest.chunk_count > MONTHS_PER_ROLLOVER
-                || manifest.months.len() != manifest.chunk_count))
+    let monthly_disabled = manifest.monthly_limit_sats == 0;
+    if (monthly_disabled && (manifest.chunk_count != 0 || !manifest.months.is_empty()))
+        || manifest.chunk_count > MONTHS_PER_ROLLOVER
+        || manifest.months.len() != manifest.chunk_count
     {
         bail!("invalid ceremony chunk count");
     }
@@ -495,15 +634,15 @@ pub fn validate_batch(
         bail!("rollover does not pay the approved fixed fee rate");
     }
 
-    let split = match (&manifest.split, disabled) {
+    let split = match (&manifest.split, manifest.chunk_count == 0) {
         (None, true) => {
             if manifest.remainder_vout.is_some() || manifest.remainder_value_sats != 0 {
-                bail!("disabled monthly policy contains split remainder metadata");
+                bail!("unfunded monthly policy contains split remainder metadata");
             }
             None
         }
-        (Some(_), true) => bail!("disabled monthly policy must not contain a split transaction"),
-        (None, false) => bail!("active monthly policy is missing its split transaction"),
+        (Some(_), true) => bail!("unfunded monthly policy must not contain a split transaction"),
+        (None, false) => bail!("funded monthly policy is missing its split transaction"),
         (Some(split_manifest), false) => {
             let split = read_psbt(&batch_dir.join(&split_manifest.psbt_file))?;
             let split_tx = &split.unsigned_tx;
@@ -610,7 +749,142 @@ pub fn validate_batch(
             bail!("monthly transaction does not pay the approved fixed fee rate");
         }
     }
+    validate_emergency_access(
+        config,
+        manifest,
+        batch_dir,
+        &policy,
+        &rollover,
+        split.as_ref(),
+    )?;
     Ok(policy)
+}
+
+fn validate_emergency_access(
+    config: &VaultConfig,
+    manifest: &BatchManifest,
+    batch_dir: &Path,
+    policy: &VaultPolicy,
+    rollover: &Psbt,
+    split: Option<&Psbt>,
+) -> Result<()> {
+    let emergency = match (
+        manifest.emergency_access_limit_sats,
+        &manifest.emergency_access,
+    ) {
+        (0, None) => return Ok(()),
+        (0, Some(_)) => bail!("disabled emergency access contains presigned transactions"),
+        (_, None) => bail!("configured emergency access is missing its presigned transactions"),
+        (_, Some(emergency)) => emergency,
+    };
+    let expected_delay = emergency_delay_sequence()?;
+    if emergency.amount_sats != manifest.emergency_access_limit_sats
+        || emergency.delay_seconds != EMERGENCY_ACCESS_DELAY_SECONDS
+        || emergency.delay_sequence != expected_delay.to_consensus_u32()
+        || emergency.staging_vout != 0
+        || emergency.vault_change_vout != 1
+    {
+        bail!("emergency access metadata violates the approved policy");
+    }
+    let hot_script = Address::from_str(&emergency.hot_address)?
+        .require_network(config.bitcoin_network()?)?
+        .script_pubkey();
+    let vault_script = policy.address.script_pubkey();
+    let (source_outpoint, source_txout) = match split {
+        Some(split) => {
+            let index = manifest.chunk_count;
+            (
+                OutPoint::new(split.unsigned_tx.compute_txid(), index as u32),
+                &split.unsigned_tx.output[index],
+            )
+        }
+        None => (
+            OutPoint::new(rollover.unsigned_tx.compute_txid(), 0),
+            &rollover.unsigned_tx.output[0],
+        ),
+    };
+    let trigger = read_psbt(&batch_dir.join(&emergency.trigger.psbt_file))?;
+    validate_child_common(&trigger, source_txout, source_outpoint, &emergency.trigger)?;
+    let trigger_tx = &trigger.unsigned_tx;
+    if trigger_tx.version != Version::TWO
+        || trigger_tx.lock_time != absolute::LockTime::ZERO
+        || trigger_tx.input[0].sequence != Sequence::MAX
+        || trigger_tx.output.len() != 2
+        || trigger_tx
+            .output
+            .iter()
+            .any(|output| output.script_pubkey != vault_script)
+        || trigger_tx.output[0].value.to_sat() != emergency.staging_value_sats
+        || trigger_tx.output[1].value.to_sat() != emergency.vault_change_value_sats
+        || emergency.vault_change_value_sats < vault_script.minimal_non_dust().to_sat()
+    {
+        bail!("emergency access trigger violates the approved policy");
+    }
+    let expected_trigger_fee =
+        estimate_vault_vsize(trigger_tx, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB;
+    if emergency.trigger.fee_sats != expected_trigger_fee {
+        bail!("emergency access trigger does not pay the approved fixed fee rate");
+    }
+
+    let staging_outpoint = OutPoint::new(trigger_tx.compute_txid(), emergency.staging_vout);
+    let staging_txout = &trigger_tx.output[emergency.staging_vout as usize];
+    let withdrawal = read_psbt(&batch_dir.join(&emergency.withdrawal.psbt_file))?;
+    validate_child_common(
+        &withdrawal,
+        staging_txout,
+        staging_outpoint,
+        &emergency.withdrawal,
+    )?;
+    let withdrawal_tx = &withdrawal.unsigned_tx;
+    if withdrawal_tx.version != Version::TWO
+        || withdrawal_tx.lock_time != absolute::LockTime::ZERO
+        || withdrawal_tx.input[0].sequence != expected_delay
+        || withdrawal_tx.output.len() != 1
+        || withdrawal_tx.output[0].value.to_sat() != manifest.emergency_access_limit_sats
+        || withdrawal_tx.output[0].script_pubkey != hot_script
+        || Some(emergency.staging_value_sats)
+            != manifest
+                .emergency_access_limit_sats
+                .checked_add(emergency.withdrawal.fee_sats)
+    {
+        bail!("emergency access withdrawal violates the approved policy");
+    }
+    let expected_withdrawal_fee =
+        estimate_vault_vsize(withdrawal_tx, policy, SpendPath::Cooperative)?
+            * DEFAULT_FEE_RATE_SAT_VB;
+    if emergency.withdrawal.fee_sats != expected_withdrawal_fee {
+        bail!("emergency access withdrawal does not pay the approved fixed fee rate");
+    }
+
+    let cancellation = read_psbt(&batch_dir.join(&emergency.cancellation.psbt_file))?;
+    validate_child_common(
+        &cancellation,
+        staging_txout,
+        staging_outpoint,
+        &emergency.cancellation,
+    )?;
+    let cancellation_tx = &cancellation.unsigned_tx;
+    if cancellation_tx.version != Version::TWO
+        || cancellation_tx.lock_time != absolute::LockTime::ZERO
+        || cancellation_tx.input[0].sequence != Sequence::MAX
+        || cancellation_tx.output.len() != 1
+        || cancellation_tx.output[0].script_pubkey != vault_script
+        || cancellation_tx.output[0].value.to_sat() < vault_script.minimal_non_dust().to_sat()
+        || cancellation_tx.output[0].value.to_sat()
+            != emergency
+                .staging_value_sats
+                .checked_sub(emergency.cancellation.fee_sats)
+                .context("emergency cancellation fee exceeds its input")?
+    {
+        bail!("emergency access cancellation violates the approved policy");
+    }
+    let expected_cancellation_fee =
+        estimate_vault_vsize(cancellation_tx, policy, SpendPath::Cooperative)?
+            * DEFAULT_FEE_RATE_SAT_VB;
+    if emergency.cancellation.fee_sats != expected_cancellation_fee {
+        bail!("emergency access cancellation does not pay the approved fixed fee rate");
+    }
+    Ok(())
 }
 
 fn validate_child_common(
@@ -625,17 +899,235 @@ fn validate_child_common(
         || psbt.unsigned_tx.input[0].previous_output != expected_outpoint
         || psbt.inputs[0].witness_utxo.as_ref() != Some(expected_prevout)
     {
-        bail!("monthly PSBT does not spend its assigned split chunk");
+        bail!("policy PSBT does not spend its assigned vault output");
     }
     let fee = expected_prevout
         .value
         .to_sat()
         .checked_sub(output_sum(&psbt.unsigned_tx)?)
-        .context("monthly transaction outputs exceed its input")?;
+        .context("policy transaction outputs exceed its input")?;
     if fee != manifest_tx.fee_sats {
-        bail!("monthly transaction fee does not match its manifest");
+        bail!("policy transaction fee does not match its manifest");
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_emergency_access(
+    policy: &VaultPolicy,
+    source_outpoint: OutPoint,
+    source_txout: &TxOut,
+    amount_sats: u64,
+    delay_sequence: Sequence,
+    hot_address: &Address,
+    vault_script: ScriptBuf,
+    batch_dir: &Path,
+    phone: &DeviceKeys,
+) -> Result<EmergencyAccessPolicy> {
+    let withdrawal_fee = emergency_withdrawal_fee(
+        policy,
+        OutPoint::null(),
+        amount_sats,
+        delay_sequence,
+        hot_address.script_pubkey(),
+    )?;
+    let staging_value_sats = amount_sats
+        .checked_add(withdrawal_fee)
+        .context("emergency access amount plus withdrawal fee overflowed")?;
+    let trigger_fee = emergency_trigger_fee(
+        policy,
+        source_outpoint,
+        staging_value_sats,
+        vault_script.minimal_non_dust().to_sat(),
+        vault_script.clone(),
+    )?;
+    let vault_change_value_sats = source_txout
+        .value
+        .to_sat()
+        .checked_sub(staging_value_sats)
+        .and_then(|value| value.checked_sub(trigger_fee))
+        .context("vault remainder cannot fund the configured emergency access amount and fees")?;
+    if vault_change_value_sats < vault_script.minimal_non_dust().to_sat() {
+        bail!("emergency access trigger would create dust vault change");
+    }
+    let trigger_tx = emergency_trigger_template(
+        source_outpoint,
+        staging_value_sats,
+        vault_change_value_sats,
+        vault_script.clone(),
+    );
+    let mut trigger_psbt = create_vault_psbt(
+        trigger_tx.clone(),
+        std::slice::from_ref(source_txout),
+        policy,
+    )?;
+    sign_vault_psbt(
+        &mut trigger_psbt,
+        policy,
+        SpendPath::Cooperative,
+        &phone.vault_keypair,
+    )?;
+
+    let staging_outpoint = OutPoint::new(trigger_tx.compute_txid(), 0);
+    let staging_txout = &trigger_tx.output[0];
+    let withdrawal_tx = emergency_withdrawal_template(
+        staging_outpoint,
+        amount_sats,
+        delay_sequence,
+        hot_address.script_pubkey(),
+    );
+    let mut withdrawal_psbt = create_vault_psbt(
+        withdrawal_tx.clone(),
+        std::slice::from_ref(staging_txout),
+        policy,
+    )?;
+    sign_vault_psbt(
+        &mut withdrawal_psbt,
+        policy,
+        SpendPath::Cooperative,
+        &phone.vault_keypair,
+    )?;
+
+    let cancellation_fee = emergency_cancellation_fee(
+        policy,
+        staging_outpoint,
+        staging_value_sats,
+        vault_script.clone(),
+    )?;
+    let cancellation_tx = revocation_template(
+        staging_outpoint,
+        staging_value_sats,
+        vault_script.clone(),
+        cancellation_fee,
+    )?;
+    if cancellation_tx.output[0].value.to_sat() < vault_script.minimal_non_dust().to_sat() {
+        bail!("emergency access cancellation would create a dust vault output");
+    }
+    let mut cancellation_psbt = create_vault_psbt(
+        cancellation_tx.clone(),
+        std::slice::from_ref(staging_txout),
+        policy,
+    )?;
+    sign_vault_psbt(
+        &mut cancellation_psbt,
+        policy,
+        SpendPath::Cooperative,
+        &phone.vault_keypair,
+    )?;
+
+    let trigger_file = "emergency/trigger.psbt".to_owned();
+    let withdrawal_file = "emergency/withdrawal.psbt".to_owned();
+    let cancellation_file = "emergency/cancellation.psbt".to_owned();
+    write_psbt(&batch_dir.join(&trigger_file), &trigger_psbt)?;
+    write_psbt(&batch_dir.join(&withdrawal_file), &withdrawal_psbt)?;
+    write_psbt(&batch_dir.join(&cancellation_file), &cancellation_psbt)?;
+
+    Ok(EmergencyAccessPolicy {
+        amount_sats,
+        delay_seconds: EMERGENCY_ACCESS_DELAY_SECONDS,
+        delay_sequence: delay_sequence.to_consensus_u32(),
+        hot_address: hot_address.to_string(),
+        staging_vout: 0,
+        staging_value_sats,
+        vault_change_vout: 1,
+        vault_change_value_sats,
+        trigger: BatchTransaction {
+            psbt_file: trigger_file,
+            unsigned_txid: trigger_tx.compute_txid().to_string(),
+            fee_sats: trigger_fee,
+        },
+        withdrawal: BatchTransaction {
+            psbt_file: withdrawal_file,
+            unsigned_txid: withdrawal_tx.compute_txid().to_string(),
+            fee_sats: withdrawal_fee,
+        },
+        cancellation: BatchTransaction {
+            psbt_file: cancellation_file,
+            unsigned_txid: cancellation_tx.compute_txid().to_string(),
+            fee_sats: cancellation_fee,
+        },
+    })
+}
+
+fn emergency_delay_sequence() -> Result<Sequence> {
+    Sequence::from_seconds_ceil(EMERGENCY_ACCESS_DELAY_SECONDS)
+        .context("emergency access delay cannot be represented by BIP68")
+}
+
+fn emergency_trigger_fee(
+    policy: &VaultPolicy,
+    outpoint: OutPoint,
+    staging_value_sats: u64,
+    vault_change_value_sats: u64,
+    vault_script: ScriptBuf,
+) -> Result<u64> {
+    let template = emergency_trigger_template(
+        outpoint,
+        staging_value_sats,
+        vault_change_value_sats,
+        vault_script,
+    );
+    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB)
+}
+
+fn emergency_trigger_template(
+    outpoint: OutPoint,
+    staging_value_sats: u64,
+    vault_change_value_sats: u64,
+    vault_script: ScriptBuf,
+) -> Transaction {
+    Transaction {
+        version: Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![vault_input(outpoint, Sequence::MAX)],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(staging_value_sats),
+                script_pubkey: vault_script.clone(),
+            },
+            TxOut {
+                value: Amount::from_sat(vault_change_value_sats),
+                script_pubkey: vault_script,
+            },
+        ],
+    }
+}
+
+fn emergency_withdrawal_fee(
+    policy: &VaultPolicy,
+    outpoint: OutPoint,
+    amount_sats: u64,
+    delay_sequence: Sequence,
+    hot_script: ScriptBuf,
+) -> Result<u64> {
+    let template = emergency_withdrawal_template(outpoint, amount_sats, delay_sequence, hot_script);
+    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB)
+}
+
+fn emergency_withdrawal_template(
+    outpoint: OutPoint,
+    amount_sats: u64,
+    delay_sequence: Sequence,
+    hot_script: ScriptBuf,
+) -> Transaction {
+    Transaction {
+        version: Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![vault_input(outpoint, delay_sequence)],
+        output: vec![TxOut {
+            value: Amount::from_sat(amount_sats),
+            script_pubkey: hot_script,
+        }],
+    }
+}
+
+fn emergency_cancellation_fee(
+    policy: &VaultPolicy,
+    outpoint: OutPoint,
+    staging_value_sats: u64,
+    vault_script: ScriptBuf,
+) -> Result<u64> {
+    revocation_fee(policy, outpoint, staging_value_sats, vault_script)
 }
 
 fn authorization_fee(
@@ -791,7 +1283,7 @@ pub fn read_psbt(path: &Path) -> Result<Psbt> {
 }
 
 pub fn manifest_transactions(manifest: &BatchManifest) -> Vec<&BatchTransaction> {
-    let mut transactions = Vec::with_capacity(2 + manifest.months.len() * 2);
+    let mut transactions = Vec::with_capacity(5 + manifest.months.len() * 2);
     transactions.push(&manifest.rollover);
     if let Some(split) = &manifest.split {
         transactions.push(split);
@@ -799,6 +1291,11 @@ pub fn manifest_transactions(manifest: &BatchManifest) -> Vec<&BatchTransaction>
     for month in &manifest.months {
         transactions.push(&month.authorization);
         transactions.push(&month.revocation);
+    }
+    if let Some(emergency) = &manifest.emergency_access {
+        transactions.push(&emergency.trigger);
+        transactions.push(&emergency.withdrawal);
+        transactions.push(&emergency.cancellation);
     }
     transactions
 }
@@ -825,13 +1322,37 @@ mod tests {
         monthly_limit_sats: u64,
         batch_dir: &Path,
     ) -> Result<BatchManifest> {
+        prepare_policy_from_utxos(
+            data_dir,
+            config,
+            utxos,
+            now,
+            monthly_limit_sats,
+            0,
+            batch_dir,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_policy_from_utxos(
+        data_dir: &Path,
+        config: &VaultConfig,
+        utxos: &[VaultUtxo],
+        now: DateTime<Utc>,
+        monthly_limit_sats: u64,
+        emergency_access_limit_sats: u64,
+        batch_dir: &Path,
+    ) -> Result<BatchManifest> {
         let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
         let mut hot = HotWallet::open_or_create(data_dir)?;
         build_policy_proposal(
             config,
             utxos,
             now,
-            monthly_limit_sats,
+            PolicyLimits {
+                monthly_limit_sats,
+                emergency_access_limit_sats,
+            },
             batch_dir,
             &phone,
             &mut hot,
@@ -902,6 +1423,171 @@ mod tests {
         .unwrap();
         assert_eq!(manifest.chunk_count, 3);
         assert_eq!(manifest.months.len(), 3);
+    }
+
+    #[test]
+    fn emergency_access_uses_three_presigned_vault_transactions() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        let manifest = prepare_policy_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 200_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
+            50_000_000,
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(manifest.chunk_count, 12);
+        assert_eq!(manifest_transactions(&manifest).len(), 29);
+        let emergency = manifest.emergency_access.as_ref().unwrap();
+        assert_eq!(emergency.amount_sats, 50_000_000);
+        assert_eq!(emergency.delay_seconds, EMERGENCY_ACCESS_DELAY_SECONDS);
+
+        let split = read_psbt(&batch.join(&manifest.split.as_ref().unwrap().psbt_file)).unwrap();
+        let trigger = read_psbt(&batch.join(&emergency.trigger.psbt_file)).unwrap();
+        assert_eq!(
+            trigger.unsigned_tx.input[0].previous_output,
+            OutPoint::new(
+                split.unsigned_tx.compute_txid(),
+                manifest.chunk_count as u32
+            )
+        );
+        assert_eq!(trigger.unsigned_tx.output.len(), 2);
+        assert!(trigger.unsigned_tx.output.iter().all(|output| {
+            output.script_pubkey
+                == Address::from_str(&manifest.vault_address)
+                    .unwrap()
+                    .require_network(Network::Regtest)
+                    .unwrap()
+                    .script_pubkey()
+        }));
+
+        let staged = OutPoint::new(trigger.unsigned_tx.compute_txid(), 0);
+        let withdrawal = read_psbt(&batch.join(&emergency.withdrawal.psbt_file)).unwrap();
+        let cancellation = read_psbt(&batch.join(&emergency.cancellation.psbt_file)).unwrap();
+        assert_eq!(withdrawal.unsigned_tx.input[0].previous_output, staged);
+        assert_eq!(cancellation.unsigned_tx.input[0].previous_output, staged);
+        assert_eq!(
+            withdrawal.unsigned_tx.input[0].sequence,
+            emergency_delay_sequence().unwrap()
+        );
+        assert_eq!(cancellation.unsigned_tx.input[0].sequence, Sequence::MAX);
+        assert_eq!(withdrawal.unsigned_tx.output[0].value.to_sat(), 50_000_000);
+        validate_batch(&initialized.config, &manifest, &batch).unwrap();
+
+        let approved = cold_wallet::approve_policy(dir.path(), &batch).unwrap();
+        for transaction in manifest_transactions(&approved) {
+            assert!(
+                finalize_vault_psbt(read_psbt(&batch.join(&transaction.psbt_file)).unwrap())
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn emergency_access_can_be_enabled_without_monthly_spending() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        let manifest = prepare_policy_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 200_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            0,
+            50_000_000,
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(manifest.chunk_count, 0);
+        assert!(manifest.split.is_none());
+        assert_eq!(manifest_transactions(&manifest).len(), 4);
+        let emergency = manifest.emergency_access.as_ref().unwrap();
+        let trigger = read_psbt(&batch.join(&emergency.trigger.psbt_file)).unwrap();
+        assert_eq!(
+            trigger.unsigned_tx.input[0].previous_output,
+            OutPoint::new(Txid::from_str(&manifest.rollover.unsigned_txid).unwrap(), 0)
+        );
+        validate_batch(&initialized.config, &manifest, &batch).unwrap();
+    }
+
+    #[test]
+    fn emergency_reserve_reduces_monthly_chunks_before_reducing_its_amount() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let manifest = prepare_policy_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 130_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
+            20_000_000,
+            &dir.path().join("batch"),
+        )
+        .unwrap();
+        assert!(manifest.chunk_count < MONTHS_PER_ROLLOVER);
+        assert_eq!(
+            manifest.emergency_access.as_ref().unwrap().amount_sats,
+            20_000_000
+        );
+    }
+
+    #[test]
+    fn policy_rollover_continues_when_no_monthly_chunk_can_be_funded() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        let manifest = prepare_policy_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 25_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
+            20_000_000,
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(manifest.monthly_limit_sats, 10_000_000);
+        assert_eq!(manifest.chunk_count, 0);
+        assert!(manifest.split.is_none());
+        assert!(manifest.months.is_empty());
+        assert_eq!(
+            manifest.emergency_access.as_ref().unwrap().amount_sats,
+            20_000_000
+        );
+        validate_batch(&initialized.config, &manifest, &batch).unwrap();
+    }
+
+    #[test]
+    fn hww_rejects_a_tampered_emergency_delay() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        let manifest = prepare_policy_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 200_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
+            20_000_000,
+            &batch,
+        )
+        .unwrap();
+        let path = batch.join(
+            &manifest
+                .emergency_access
+                .as_ref()
+                .unwrap()
+                .withdrawal
+                .psbt_file,
+        );
+        let mut psbt = read_psbt(&path).unwrap();
+        psbt.unsigned_tx.input[0].sequence = Sequence::from_height(1);
+        write_psbt(&path, &psbt).unwrap();
+        assert!(cold_wallet::approve_policy(dir.path(), &batch).is_err());
     }
 
     #[test]
@@ -1011,9 +1697,16 @@ mod tests {
         )
         .unwrap();
         let package = package_from_batch(&batch).unwrap();
+        assert_eq!(package.kind, POLICY_PACKAGE_KIND);
         let imported = dir.path().join("imported");
         materialize_policy_package(&package, &imported).unwrap();
         validate_batch(&initialized.config, &package.manifest, &imported).unwrap();
         assert_eq!(package.psbts.len(), 26);
+
+        let mut legacy = package.clone();
+        legacy.kind = LEGACY_POLICY_PACKAGE_KIND.to_owned();
+        let legacy_imported = dir.path().join("legacy-imported");
+        materialize_policy_package(&legacy, &legacy_imported).unwrap();
+        validate_batch(&initialized.config, &legacy.manifest, &legacy_imported).unwrap();
     }
 }

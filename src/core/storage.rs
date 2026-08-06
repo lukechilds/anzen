@@ -29,6 +29,8 @@ pub struct VaultConfig {
     pub hww_recovery_blocks: u16,
     #[serde(default, alias = "hard_limit_sats")]
     pub monthly_limit_sats: u64,
+    #[serde(default)]
+    pub emergency_access_limit_sats: u64,
 }
 
 impl VaultConfig {
@@ -129,6 +131,7 @@ pub fn initialize_vault_for_network(data_dir: &Path, network: Network) -> Result
         phone_recovery_blocks: PHONE_RECOVERY_BLOCKS,
         hww_recovery_blocks: HWW_RECOVERY_BLOCKS,
         monthly_limit_sats: 0,
+        emergency_access_limit_sats: 0,
     };
     write_json(&data_dir.join(CONFIG_FILE), &config)?;
 
@@ -144,8 +147,18 @@ pub fn config_exists(data_dir: &Path) -> bool {
 }
 
 pub fn set_monthly_limit(data_dir: &Path, monthly_limit_sats: u64) -> Result<VaultConfig> {
+    let emergency_access_limit_sats = load_config(data_dir)?.emergency_access_limit_sats;
+    set_policy_limits(data_dir, monthly_limit_sats, emergency_access_limit_sats)
+}
+
+pub fn set_policy_limits(
+    data_dir: &Path,
+    monthly_limit_sats: u64,
+    emergency_access_limit_sats: u64,
+) -> Result<VaultConfig> {
     let mut config = load_config(data_dir)?;
     config.monthly_limit_sats = monthly_limit_sats;
+    config.emergency_access_limit_sats = emergency_access_limit_sats;
     write_json(&config_path(data_dir), &config)?;
     Ok(config)
 }

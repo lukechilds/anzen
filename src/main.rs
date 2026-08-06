@@ -31,7 +31,7 @@ struct Cli {
 enum Command {
     /// Create the static cold-storage policy from initialized device keys.
     Init,
-    /// Print the configured cold-storage and active monthly policy.
+    /// Print the configured cold-storage and active programmable policy.
     Policy,
     /// Print vault and chain balances from the configured chain backend.
     Status,
@@ -69,10 +69,13 @@ enum PhoneCommand {
     ReceiveAddress,
     /// Send an exact amount from the phone hot wallet.
     Send { address: String, amount_sats: u64 },
-    /// Propose a monthly policy and add all phone signatures.
+    /// Propose a vault policy and add all phone signatures.
     SetPolicy {
         #[arg(long)]
         monthly_limit: u64,
+        /// One delayed emergency withdrawal available during this vault epoch; zero disables it.
+        #[arg(long, default_value_t = 0)]
+        emergency_access_limit: u64,
         #[arg(long)]
         output: PathBuf,
         /// Override the captured current Unix time (regtest-only).
@@ -91,6 +94,11 @@ enum PhoneCommand {
     },
     /// Broadcast a presigned monthly revocation.
     Revoke { month: String },
+    /// Execute or cancel the epoch's presigned emergency-access package.
+    Emergency {
+        #[command(subcommand)]
+        command: EmergencyCommand,
+    },
     /// Restore the phone key from an HWW-created recovery package.
     Restore { recovery: PathBuf },
     /// Sweep mature vault outputs using the phone-only recovery path.
@@ -103,13 +111,23 @@ enum PhoneCommand {
     },
     /// Verify and broadcast an HWW-approved cooperative sweep.
     BroadcastSweep { approved_sweep: PathBuf },
-    /// Propose a new phone key while preserving any active monthly policy.
+    /// Propose a new phone key while preserving the active vault policy.
     RotateKey {
         #[arg(long)]
         output: PathBuf,
     },
     /// Activate an HWW-approved key rotation and replacement monthly schedule.
     ActivateRotation { approved_rotation: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+enum EmergencyCommand {
+    /// Start the one-week emergency-access cancellation window.
+    Initiate,
+    /// Withdraw the configured amount after the one-week delay.
+    Withdraw,
+    /// Cancel an initiated emergency withdrawal and return it to the vault.
+    Cancel,
 }
 
 #[derive(Debug, Subcommand)]
@@ -312,6 +330,7 @@ fn initialize_vault(data_dir: &Path, network: Network) -> Result<()> {
         format_number(u64::from(config.hww_recovery_blocks))
     );
     println!("Monthly spending: disabled");
+    println!("Emergency access: disabled");
     println!(
         "Cloud recovery backup: phone key + descriptor encrypted; {} recovery friends",
         backup.friends.len()
@@ -367,9 +386,17 @@ fn run_phone(
         } => phone_send(data_dir, rpc_args, &address, amount_sats)?,
         PhoneCommand::SetPolicy {
             monthly_limit,
+            emergency_access_limit,
             output,
             now,
-        } => phone_set_policy(data_dir, rpc_args, monthly_limit, now, &output)?,
+        } => phone_set_policy(
+            data_dir,
+            rpc_args,
+            monthly_limit,
+            emergency_access_limit,
+            now,
+            &output,
+        )?,
         PhoneCommand::ActivatePolicy { approved_policy } => {
             phone_activate_policy(data_dir, rpc_args, &approved_policy)?
         }
@@ -399,6 +426,34 @@ fn run_phone(
                 &month,
                 core::ceremony::TransactionKind::Revocation,
             )?;
+        }
+        PhoneCommand::Emergency { command } => {
+            let backend = rpc_args.connect_hot(data_dir)?;
+            match command {
+                EmergencyCommand::Initiate => {
+                    let result = hot_wallet::initiate_emergency_access(data_dir, backend.as_ref())?;
+                    if let (true, Some(split_txid)) =
+                        (result.split_was_broadcast, result.split_txid)
+                    {
+                        println!("Deferred monthly split broadcast: {split_txid}");
+                    }
+                    println!("Emergency access initiated: {}", result.transaction_txid);
+                    let schedule = hot_wallet::load_schedule(data_dir)?;
+                    let emergency = schedule
+                        .emergency_access
+                        .context("active schedule omitted emergency access metadata")?;
+                    println!("Amount after delay: {} sats", emergency.amount_sats);
+                    println!("Cancellation window: {} seconds", emergency.delay_seconds);
+                }
+                EmergencyCommand::Withdraw => {
+                    let txid = hot_wallet::withdraw_emergency_access(data_dir, backend.as_ref())?;
+                    println!("Emergency access withdrawal broadcast: {txid}");
+                }
+                EmergencyCommand::Cancel => {
+                    let txid = hot_wallet::cancel_emergency_access(data_dir, backend.as_ref())?;
+                    println!("Emergency access cancelled: {txid}");
+                }
+            }
         }
         PhoneCommand::Restore { recovery } => {
             let package: core::recovery::PhoneRecoveryPackage = read_artifact(&recovery)?;
@@ -460,8 +515,11 @@ fn run_phone(
                         "Encrypted monthly transaction pairs: {}",
                         schedule.entries.len()
                     );
+                    if let Some(emergency) = &schedule.emergency_access {
+                        println!("Emergency access preserved: {} sats", emergency.amount_sats);
+                    }
                 }
-                None => println!("Monthly spending remains disabled"),
+                None => println!("Programmable vault policy remains disabled"),
             }
         }
     }
@@ -546,8 +604,7 @@ fn run_hww(
             if let Some(policy) = &approved.renewed_policy {
                 eprintln!(
                     "HWW validated and signed the phone-key rotation plus {} renewed-policy PSBTs",
-                    1 + usize::from(policy.manifest.split.is_some())
-                        + policy.manifest.chunk_count * 2
+                    core::ceremony::manifest_transactions(&policy.manifest).len()
                 );
             } else {
                 eprintln!("HWW validated and signed the phone-key rotation");
@@ -665,6 +722,7 @@ fn phone_set_policy(
     data_dir: &Path,
     rpc_args: &ChainArgs,
     monthly_limit: u64,
+    emergency_access_limit: u64,
     now: Option<i64>,
     output: &Path,
 ) -> Result<()> {
@@ -677,8 +735,14 @@ fn phone_set_policy(
         .with_context(|| format!("invalid policy timestamp {timestamp}"))?;
     let workspace = data_dir.join("phone/policy-proposal");
     reset_workspace(&workspace)?;
-    let manifest =
-        hot_wallet::propose_policy(data_dir, backend.as_ref(), now, monthly_limit, &workspace)?;
+    let manifest = hot_wallet::propose_policy(
+        data_dir,
+        backend.as_ref(),
+        now,
+        monthly_limit,
+        emergency_access_limit,
+        &workspace,
+    )?;
     let package = core::ceremony::package_from_batch(&workspace)?;
     print_manifest(&manifest, artifact_reports_to_stderr(output))?;
     write_artifact(output, &package)?;
@@ -690,14 +754,14 @@ fn hww_confirm_policy(data_dir: &Path, proposal: &Path, output: &Path, yes: bool
     let package: core::ceremony::PolicyPackage = read_artifact(proposal)?;
     eprintln!("SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL");
     print_manifest(&package.manifest, true)?;
-    require_hww_approval(yes, proposal, "complete monthly policy")?;
+    require_hww_approval(yes, proposal, "complete vault policy")?;
     let workspace = data_dir.join("hww/policy-review");
     reset_workspace(&workspace)?;
     core::ceremony::materialize_policy_package(&package, &workspace)?;
     let approved_manifest = cold_wallet::approve_policy(data_dir, &workspace)?;
     eprintln!(
         "HWW validated and signed all {} PSBTs after one approval",
-        1 + usize::from(approved_manifest.split.is_some()) + approved_manifest.chunk_count * 2
+        core::ceremony::manifest_transactions(&approved_manifest).len()
     );
     let approved = core::ceremony::package_from_batch(&workspace)?;
     write_artifact(output, &approved)?;
@@ -715,7 +779,11 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path)
     core::ceremony::materialize_policy_package(&package, &workspace)?;
     let backend = rpc_args.connect_hot(data_dir)?;
     let schedule = hot_wallet::activate_policy(data_dir, backend.as_ref(), &workspace)?;
-    core::storage::set_monthly_limit(data_dir, package.manifest.monthly_limit_sats)?;
+    core::storage::set_policy_limits(
+        data_dir,
+        package.manifest.monthly_limit_sats,
+        package.manifest.emergency_access_limit_sats,
+    )?;
     println!("Rollover broadcast: {}", schedule.rollover_txid);
     if let Some(split_txid) = &schedule.split_txid {
         println!("Deferred monthly split encrypted: {split_txid}");
@@ -725,6 +793,13 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path)
         "Encrypted monthly transaction pairs: {}",
         schedule.entries.len()
     );
+    match &schedule.emergency_access {
+        Some(emergency) => {
+            println!("Active emergency access: {} sats", emergency.amount_sats);
+            println!("Encrypted emergency transaction set: trigger, withdrawal, cancellation");
+        }
+        None => println!("Emergency access: disabled"),
+    }
     Ok(())
 }
 
@@ -821,6 +896,18 @@ fn print_active_policy(data_dir: &Path) -> Result<()> {
             );
         }
     }
+    if config.emergency_access_limit_sats == 0 {
+        println!("Emergency access: disabled");
+    } else {
+        println!(
+            "Emergency access limit: {} sats",
+            config.emergency_access_limit_sats
+        );
+        println!(
+            "Emergency access delay: {} seconds (~1 week)",
+            core::EMERGENCY_ACCESS_DELAY_SECONDS
+        );
+    }
     Ok(())
 }
 
@@ -847,6 +934,14 @@ fn print_status(data_dir: &Path, rpc_args: &ChainArgs) -> Result<()> {
             "disabled".to_owned()
         } else {
             format!("{} sats", config.monthly_limit_sats)
+        }
+    );
+    println!(
+        "Emergency access: {}",
+        if config.emergency_access_limit_sats == 0 {
+            "disabled".to_owned()
+        } else {
+            format!("{} sats", config.emergency_access_limit_sats)
         }
     );
     if let Some(oldest) = utxos.first() {
@@ -920,6 +1015,20 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
             manifest.monthly_limit_sats
         )?;
     }
+    if manifest.emergency_access_limit_sats == 0 {
+        writeln!(output, "Emergency access: disabled")?;
+    } else {
+        writeln!(
+            output,
+            "Emergency access limit: {} sats",
+            manifest.emergency_access_limit_sats
+        )?;
+        writeln!(
+            output,
+            "Emergency access delay: {} seconds (~1 week)",
+            core::EMERGENCY_ACCESS_DELAY_SECONDS
+        )?;
+    }
     writeln!(output, "Fee rate: {} sat/vB", manifest.fee_rate_sat_vb)?;
     writeln!(output, "Total input: {} sats", manifest.total_input_sats)?;
     writeln!(output, "Monthly pairs: {}", manifest.chunk_count)?;
@@ -947,10 +1056,28 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
             manifest.remainder_value_sats
         )?;
     }
+    if let Some(emergency) = &manifest.emergency_access {
+        writeln!(
+            output,
+            "Emergency trigger txid: {}",
+            emergency.trigger.unsigned_txid
+        )?;
+        writeln!(
+            output,
+            "Emergency withdrawal txid: {}",
+            emergency.withdrawal.unsigned_txid
+        )?;
+        writeln!(
+            output,
+            "Emergency cancellation txid: {}",
+            emergency.cancellation.unsigned_txid
+        )?;
+        writeln!(output, "Emergency hot address: {}", emergency.hot_address)?;
+    }
     writeln!(
         output,
         "Phone signed PSBTs: {}",
-        1 + usize::from(manifest.split.is_some()) + manifest.chunk_count * 2
+        core::ceremony::manifest_transactions(manifest).len()
     )?;
     Ok(())
 }
@@ -1008,10 +1135,17 @@ fn report_rotation(package: &core::recovery::PhoneRotationPackage, stderr: bool)
         writeln!(
             output,
             "Renewed policy PSBTs: {}",
-            1 + usize::from(policy.manifest.split.is_some()) + policy.manifest.chunk_count * 2
+            core::ceremony::manifest_transactions(&policy.manifest).len()
         )?;
+        if policy.manifest.emergency_access_limit_sats > 0 {
+            writeln!(
+                output,
+                "Emergency access preserved: {} sats",
+                policy.manifest.emergency_access_limit_sats
+            )?;
+        }
     } else {
-        writeln!(output, "Monthly spending remains disabled")?;
+        writeln!(output, "Programmable vault policy remains disabled")?;
     }
     Ok(())
 }

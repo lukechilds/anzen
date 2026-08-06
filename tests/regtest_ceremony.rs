@@ -1,11 +1,12 @@
 use anzen::{
     cold_wallet,
     core::{
+        EMERGENCY_ACCESS_DELAY_SECONDS,
         ceremony::TransactionKind,
         chain::{BitcoinCoreBackend, RpcConfig},
-        storage::initialize_vault,
+        storage::{initialize_vault, set_policy_limits},
     },
-    hot_wallet::{self, HotWallet},
+    hot_wallet::{self, HotWallet, HotWalletBackend},
 };
 use bitcoin::{Address, Network};
 use chrono::{DateTime, Utc};
@@ -47,7 +48,7 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     let now = DateTime::from_timestamp(captured_now, 0).unwrap();
     let batch_dir = dir.path().join("batch");
     let prepared =
-        hot_wallet::propose_policy(dir.path(), &rpc, now, 10_000_000, &batch_dir).unwrap();
+        hot_wallet::propose_policy(dir.path(), &rpc, now, 10_000_000, 0, &batch_dir).unwrap();
     assert_eq!(prepared.chunk_count, 12);
     let approved = cold_wallet::approve_policy(dir.path(), &batch_dir).unwrap();
     assert!(approved.hww_approved);
@@ -94,6 +95,92 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     )
     .unwrap_err();
     assert!(format!("{revoked:#}").contains("missingorspent"));
+}
+
+#[test]
+#[ignore = "requires a disposable Bitcoin Core regtest node"]
+fn real_regtest_enforces_emergency_delay_and_cancellation() {
+    let dir = tempfile::tempdir().unwrap();
+    hot_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    cold_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    let config = initialize_vault(dir.path()).unwrap();
+    let rpc = rpc_from_env();
+    let vault_address = Address::from_str(&config.vault_address)
+        .unwrap()
+        .require_network(Network::Regtest)
+        .unwrap();
+    let mut hot = HotWallet::open_or_create(dir.path()).unwrap();
+    let mining_address = hot.next_receive_address().unwrap();
+
+    rpc.mine(1, &vault_address).unwrap();
+    rpc.mine(100, &mining_address).unwrap();
+
+    let chain_time = rpc.chain_info().unwrap().median_time as i64;
+    let captured_now = Utc::now().timestamp().max(chain_time);
+    let now = DateTime::from_timestamp(captured_now, 0).unwrap();
+    let batch_dir = dir.path().join("emergency-cancel-batch");
+    hot_wallet::propose_policy(dir.path(), &rpc, now, 10_000_000, 50_000_000, &batch_dir).unwrap();
+    cold_wallet::approve_policy(dir.path(), &batch_dir).unwrap();
+    hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
+    set_policy_limits(dir.path(), 10_000_000, 50_000_000).unwrap();
+    rpc.mine(1, &mining_address).unwrap();
+
+    let initiated = hot_wallet::initiate_emergency_access(dir.path(), &rpc).unwrap();
+    assert!(initiated.split_was_broadcast);
+    rpc.mine(1, &mining_address).unwrap();
+
+    let premature = hot_wallet::withdraw_emergency_access(dir.path(), &rpc).unwrap_err();
+    let premature = format!("{premature:#}");
+    assert!(premature.contains("non-BIP68-final") || premature.contains("non-final"));
+
+    hot_wallet::cancel_emergency_access(dir.path(), &rpc).unwrap();
+    rpc.mine(1, &mining_address).unwrap();
+    let cancelled = hot_wallet::withdraw_emergency_access(dir.path(), &rpc).unwrap_err();
+    assert!(format!("{cancelled:#}").contains("missingorspent"));
+}
+
+#[test]
+#[ignore = "requires a disposable Bitcoin Core regtest node"]
+fn real_regtest_releases_emergency_access_after_one_week() {
+    let dir = tempfile::tempdir().unwrap();
+    hot_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    cold_wallet::initialize(dir.path(), Network::Regtest).unwrap();
+    let config = initialize_vault(dir.path()).unwrap();
+    let rpc = rpc_from_env();
+    let vault_address = Address::from_str(&config.vault_address)
+        .unwrap()
+        .require_network(Network::Regtest)
+        .unwrap();
+    let mut hot = HotWallet::open_or_create(dir.path()).unwrap();
+    let mining_address = hot.next_receive_address().unwrap();
+
+    rpc.mine(1, &vault_address).unwrap();
+    rpc.mine(100, &mining_address).unwrap();
+    let chain_time = rpc.chain_info().unwrap().median_time as i64;
+    let captured_now = Utc::now().timestamp().max(chain_time);
+    let now = DateTime::from_timestamp(captured_now, 0).unwrap();
+    let batch_dir = dir.path().join("emergency-withdraw-batch");
+    hot_wallet::propose_policy(dir.path(), &rpc, now, 10_000_000, 50_000_000, &batch_dir).unwrap();
+    cold_wallet::approve_policy(dir.path(), &batch_dir).unwrap();
+    hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
+    set_policy_limits(dir.path(), 10_000_000, 50_000_000).unwrap();
+    rpc.mine(1, &mining_address).unwrap();
+
+    let relative_lock_base = rpc.chain_info().unwrap().median_time;
+    hot_wallet::initiate_emergency_access(dir.path(), &rpc).unwrap();
+    rpc.mine(1, &mining_address).unwrap();
+    let premature = hot_wallet::withdraw_emergency_access(dir.path(), &rpc).unwrap_err();
+    let premature = format!("{premature:#}");
+    assert!(premature.contains("non-BIP68-final") || premature.contains("non-final"));
+
+    let unlock_time = u32::try_from(relative_lock_base).unwrap() + EMERGENCY_ACCESS_DELAY_SECONDS;
+    advance_mtp(&rpc, unlock_time, &mining_address);
+    hot_wallet::withdraw_emergency_access(dir.path(), &rpc).unwrap();
+    rpc.mine(1, &mining_address).unwrap();
+
+    let mut hot = HotWallet::open_or_create(dir.path()).unwrap();
+    rpc.sync_hot_wallet(&mut hot).unwrap();
+    assert!(hot.wallet.balance().total().to_sat() >= 50_000_000);
 }
 
 fn advance_mtp(rpc: &BitcoinCoreBackend, timestamp: u32, mining_address: &Address) {

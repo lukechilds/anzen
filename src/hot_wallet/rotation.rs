@@ -9,7 +9,7 @@ use super::{
 };
 use crate::core::{
     ceremony::{
-        DEFAULT_BATCH_DIR, PolicyPackage, SCHEDULE_FILE, build_policy_proposal,
+        DEFAULT_BATCH_DIR, PolicyLimits, PolicyPackage, SCHEDULE_FILE, build_policy_proposal,
         materialize_policy_package, package_from_batch, validate_batch,
     },
     keys::DeviceKeys,
@@ -24,7 +24,7 @@ use crate::core::{
     },
     types::VaultUtxo,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use bitcoin::{Psbt, key::Secp256k1, secp256k1::XOnlyPublicKey};
 use chrono::Utc;
 use std::{
@@ -58,17 +58,18 @@ pub fn create_phone_rotation(
     let old_phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     let sweep =
         recovery::create_cooperative_sweep(&old_config, &utxos, &new_policy.address, &old_phone)?;
-    let renewed_policy = if old_config.monthly_limit_sats == 0 {
-        None
-    } else {
-        Some(build_renewed_policy(
-            data_dir,
-            &old_config,
-            &new_config,
-            &new_phone,
-            &sweep,
-        )?)
-    };
+    let renewed_policy =
+        if old_config.monthly_limit_sats == 0 && old_config.emergency_access_limit_sats == 0 {
+            None
+        } else {
+            Some(build_renewed_policy(
+                data_dir,
+                &old_config,
+                &new_config,
+                &new_phone,
+                &sweep,
+            )?)
+        };
     Ok(PhoneRotationPackage {
         version: 1,
         kind: "phone-key-rotation".to_owned(),
@@ -77,6 +78,7 @@ pub fn create_phone_rotation(
         new_vault_descriptor: new_policy.descriptor_string(),
         new_vault_address: new_policy.address.to_string(),
         monthly_limit_sats: old_config.monthly_limit_sats,
+        emergency_access_limit_sats: old_config.emergency_access_limit_sats,
         sweep,
         renewed_policy,
         cloud_recovery_backup: None,
@@ -101,7 +103,7 @@ pub fn activate_phone_rotation(
     let policy_workspace = data_dir.join("phone/rotation-policy-activation");
     if let Some(policy) = &package.renewed_policy {
         if !policy.manifest.hww_approved {
-            bail!("HWW approval is missing from the renewed monthly policy");
+            bail!("HWW approval is missing from the renewed vault policy");
         }
         reset_workspace(&policy_workspace)?;
         materialize_policy_package(policy, &policy_workspace)?;
@@ -126,6 +128,12 @@ pub fn activate_phone_rotation(
 
     let mut hot = HotWallet::open_or_create(data_dir)?;
     if let Some(policy) = &package.renewed_policy {
+        if let Some(emergency) = &policy.manifest.emergency_access {
+            ensure!(
+                hot.next_receive_address()?.to_string() == emergency.hot_address,
+                "renewed emergency access does not match the new phone address sequence"
+            );
+        }
         for month in &policy.manifest.months {
             if hot.next_receive_address()?.to_string() != month.hot_address {
                 bail!("renewed monthly policy does not match the new phone address sequence");
@@ -177,7 +185,10 @@ fn build_renewed_policy(
         new_config,
         &[virtual_utxo],
         Utc::now(),
-        old_config.monthly_limit_sats,
+        PolicyLimits {
+            monthly_limit_sats: old_config.monthly_limit_sats,
+            emergency_access_limit_sats: old_config.emergency_access_limit_sats,
+        },
         &workspace,
         new_phone,
         &mut addresses,
@@ -189,6 +200,12 @@ fn build_renewed_policy(
 
 fn validate_rotation_hot_addresses(new_phone: &DeviceKeys, renewed: &PolicyPackage) -> Result<()> {
     let mut addresses = HotWallet::ephemeral(new_phone)?;
+    if let Some(emergency) = &renewed.manifest.emergency_access {
+        ensure!(
+            addresses.next_receive_address()?.to_string() == emergency.hot_address,
+            "renewed emergency access does not use the new phone's address sequence"
+        );
+    }
     for month in &renewed.manifest.months {
         if addresses.next_receive_address()?.to_string() != month.hot_address {
             bail!("renewed monthly policy does not use the new phone's address sequence");

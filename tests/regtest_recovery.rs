@@ -7,7 +7,7 @@ use anzen::{
         social::{self, CloudRecoveryBackup},
         storage::{
             HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, VaultConfig, initialize_vault,
-            load_config, read_json, set_monthly_limit,
+            load_config, read_json, set_policy_limits,
         },
     },
     hot_wallet::{self, HotWallet},
@@ -147,7 +147,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     .unwrap();
     let restored = hot_wallet::restore_phone(rotation_dir.path(), &recovery).unwrap();
     assert_eq!(restored, rotation_vault.phone_mnemonic);
-    set_monthly_limit(rotation_dir.path(), 10_000_000).unwrap();
+    set_policy_limits(rotation_dir.path(), 10_000_000, 20_000_000).unwrap();
     let old_config = load_config(rotation_dir.path()).unwrap();
     let proposal = hot_wallet::create_phone_rotation(rotation_dir.path(), &rpc).unwrap();
     let approved = cold_wallet::approve_phone_rotation(rotation_dir.path(), &proposal).unwrap();
@@ -174,6 +174,15 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     let renewed_schedule = rotation.renewed_schedule.as_ref().unwrap();
     assert_eq!(renewed_schedule.monthly_limit_sats, 10_000_000);
     assert_eq!(renewed_schedule.entries.len(), 12);
+    assert_eq!(renewed_schedule.emergency_access_limit_sats, 20_000_000);
+    assert_eq!(
+        renewed_schedule
+            .emergency_access
+            .as_ref()
+            .unwrap()
+            .amount_sats,
+        20_000_000
+    );
     assert!(
         rotation_dir
             .path()
@@ -185,6 +194,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     rpc.mine(1, &destination).unwrap();
     let new_config = load_config(rotation_dir.path()).unwrap();
     assert_eq!(new_config.monthly_limit_sats, 10_000_000);
+    assert_eq!(new_config.emergency_access_limit_sats, 20_000_000);
     assert_eq!(rpc.scan_vault(&old_config).unwrap().len(), 0);
     assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 1);
 }

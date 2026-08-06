@@ -8,11 +8,12 @@ Anzen combines:
 - a **hardware-wallet key** `H`;
 - renewable **2-of-2 cold storage**;
 - delayed single-device recovery;
-- exact calendar-based monthly spending authorizations.
+- exact calendar-based monthly spending authorizations;
+- one cancellable, one-week-delayed emergency withdrawal per vault epoch.
 
 The main balance normally requires both devices. The user performs an expected rollover roughly once per year, moving all funds into fresh vault outputs and resetting the relative recovery timers.
 
-The phone can also access a policy-defined monthly spending limit without carrying the HWW. A lower soft limit controls how much of an unlocked allowance the phone keeps hot. A new vault starts with monthly spending disabled; the limit is introduced later through an explicit phone proposal and HWW approval. No server, custodian, or online co-signer is required.
+The phone can also access a policy-defined monthly spending limit without carrying the HWW. A lower soft limit controls how much of an unlocked allowance the phone keeps hot. The same annual policy may include one larger emergency withdrawal that the phone can initiate immediately, cancel during a one-week safety window, and complete only after that delay. A new vault starts with both features disabled; their limits are introduced later through an explicit phone proposal and HWW approval. No server, custodian, or online co-signer is required.
 
 ## Designed to be hard to misuse
 
@@ -70,7 +71,7 @@ With the delays above, a 12-month expected rollover gives roughly:
 - **two months of grace** before the phone-only path activates;
 - **three months of grace** before the HWW-only path activates.
 
-The rollover should consume every current vault UTXO and every unused monthly-spending chunk, then recreate the balance as one output to the same vault address with a newly reset relative timer. A separately presigned split transaction creates the next set of monthly outputs only if one of them is actually used or revoked.
+The rollover should consume every current vault UTXO, every unused monthly-spending chunk, and any live emergency staging or change output, then recreate the balance as one output to the same vault address with a newly reset relative timer. A separately presigned split transaction creates the next set of monthly outputs only if one of them or the epoch's emergency withdrawal is actually used or revoked.
 
 The expected calendar date is a UX reminder. The actual deadlines are based on the confirmation height of each UTXO, so the wallet must track the oldest live vault output and show an estimated recovery date.
 
@@ -117,7 +118,7 @@ Vault initialization creates only the static cold-storage policy. Its monthly li
 
 When a positive monthly policy is activated, the wallet presigns two transaction layers. The rollover consumes every live vault UTXO and creates exactly one consolidated vault output. A child split transaction spends that output into up to twelve exact monthly UTXOs plus one remainder UTXO. The split remains encrypted and unbroadcast until the phone first attempts an authorization or revocation for that policy epoch; the phone broadcasts the split parent before the selected child.
 
-Each monthly UTXO has the exact value `monthly limit + authorization fee`, calculated at the fixed 1 sat/vB MVP fee rate. Its authorization therefore has one hot-wallet output of exactly the monthly limit and no per-month cold-change output. The separate remainder UTXO receives every satoshi not needed for monthly chunks or the split fee. If the balance cannot fund twelve exact chunks plus a non-dust remainder and fees, the wallet warns the user, chooses the largest fundable count below twelve, and creates only those earliest consecutive months. Activating a zero-limit policy creates one cold rollover output, no split, and no monthly pairs.
+Each monthly UTXO has the exact value `monthly limit + authorization fee`, calculated at the fixed 1 sat/vB MVP fee rate. Its authorization therefore has one hot-wallet output of exactly the monthly limit and no per-month cold-change output. The separate remainder UTXO receives every satoshi not needed for monthly chunks or the split fee. If the balance cannot fund twelve exact chunks plus a non-dust remainder and fees, the wallet warns the user, chooses the largest fundable count below twelve, and creates only those earliest consecutive months. If zero chunks fit, the rollover and any fundable emergency package still proceed with a warning rather than failing. Activating a zero-limit policy creates one cold rollover output, no split, and no monthly pairs.
 
 Conceptually:
 
@@ -163,6 +164,37 @@ Loss of the presigned transactions does **not** lose bitcoin. It only removes th
 
 Presigned transactions need a reliable CPFP fee-bumping path because their original fee is chosen in advance. The MVP uses a fixed fee rate of 1 sat/vB; that is deterministic on regtest and explicitly unsafe in the danger-gated mainnet mode. A production design must also ensure that a phone-broadcast revocation has a phone-available fee-bumping path; returning every spendable output directly to the 2-of-2 vault would otherwise prevent immediate phone-only CPFP. The MVP implementation should carry an explicit code `TODO` at the revocation construction/broadcast boundary so this is not mistaken for a production-safe fee strategy.
 
+## Emergency access
+
+An annual policy may also reserve a fixed amount for one emergency withdrawal during that vault epoch. Zero disables emergency access. A positive limit adds exactly three presigned 2-of-2 transactions to the normal policy batch:
+
+1. **Trigger:** spends the epoch's unique remainder output and creates a staging output plus cold change, both at the unchanged vault address.
+2. **Withdrawal:** spends the staging output to a fresh mobile hot-wallet address with a time-based BIP68 relative lock of at least one week.
+3. **Cancellation:** conflicts with the withdrawal and immediately returns the staged value, less its fee, to the vault address.
+
+Conceptually:
+
+```text
+Epoch remainder
+    └─ emergency trigger
+         ├─ staged amount → unchanged vault script
+         │    ├─ withdrawal after ~1 week → fresh mobile hot-wallet address
+         │    └─ immediate cancellation   → unchanged vault script
+         └─ all remaining cold change     → unchanged vault script
+```
+
+The staging output deliberately uses the existing vault script rather than adding a dedicated emergency leaf or descriptor. The one-week rule is committed into the presigned withdrawal's version-2 transaction and time-based `nSequence`; Bitcoin's BIP68 transaction-finality rules reject it until the delay has elapsed. BIP68 encodes time in 512-second units, so the smallest representable delay of at least seven days is 605,184 seconds: seven days plus 6 minutes 24 seconds. The cancellation has no relative delay.
+
+The trigger, withdrawal, and cancellation are all signed by `M` and `H` during the same single-prompt HWW policy ceremony, finalized by the phone, encrypted separately to the phone key, and stored alongside the monthly artifacts. The HWW independently validates the source outpoint, exact amount, destination, delay, change, fees, and conflicting cancellation before signing.
+
+Only one trigger exists per epoch. It spends the unique remainder committed by that policy, so after it is mined there is no second authorized trigger. Cancelling returns an ordinary vault UTXO, not another emergency-enabled remainder. A fresh emergency package is created only by a later policy rollover.
+
+The emergency reserve is funded before monthly chunks. If the balance can fund the emergency amount but fewer than twelve monthly chunks, Anzen preserves the exact emergency amount and creates only the earliest fundable months. If it cannot fund the emergency amount, its fees, and non-dust cold change, policy construction fails rather than silently weakening or resizing the approved emergency limit.
+
+The phone should cancel and confirm before the withdrawal matures. After maturity, cancellation and withdrawal are conflicting transactions in a confirmation race. As with monthly revocations, the MVP's fixed 1 sat/vB fee is suitable only for deterministic regtest coverage; production cancellation requires a phone-available fee-bump design.
+
+Using a dedicated staging script could reduce the HWW-required presigned set because that script could grant the phone native delayed-withdrawal and immediate-cancellation branches. The vault-only construction instead uses three presigned transactions, trading two extra signatures per annual epoch for an unchanged, smaller vault descriptor and no additional script recovery surface.
+
 ### Monthly and soft spending limits
 
 The monthly limit is fixed during policy activation. Both signatures on each monthly authorization commit to a transaction that releases exactly that amount to the mobile hot wallet. It is the effective hard limit and is enforced by Bitcoin signature validation of the fixed presigned transaction, not by a covenant opcode in the vault script.
@@ -178,10 +210,11 @@ The child can also provide CPFP fee bumping for the presigned parent. The soft l
 
 - **Phone only:** can access up to one newly authorized monthly-limit chunk per month without carrying the HWW.
 - **Phone-only revocation:** can invalidate a future monthly authorization by broadcasting its presigned revocation transaction before the authorization matures.
+- **Phone-only emergency access:** can start one fixed emergency withdrawal per epoch, cancel it during the one-week window, or complete it after the delay without carrying the HWW.
 - **Phone + HWW:** can spend the entire balance immediately.
 - **Unused monthly allowance:** remains under full vault protection; before first use it exists only as an encrypted presigned split branch, and afterward as its exact vault UTXO.
-- **Annual rollover:** resets the recovery timers and invalidates all unused old monthly authorizations.
-- **No essential transaction state:** keys plus the static descriptor are sufficient to recover the vault; presigned monthly transactions are convenience authorizations only.
+- **Annual rollover:** resets the recovery timers and invalidates all unused old monthly and emergency authorizations.
+- **No essential transaction state:** keys plus the static descriptor are sufficient to recover the vault; presigned policy transactions are convenience authorizations only.
 - **No provider dependency:** spending limits and recovery paths require no server co-signer.
 - **Safe long-lived receive policy:** relative timelocks start when each UTXO confirms, so payments to an old address do not enter an already-expired absolute policy.
 
@@ -199,9 +232,9 @@ For the MVP:
 - hot-wallet receiving and change use normal external and internal address derivation;
 - the phone mnemonic and cold-storage descriptor are encrypted together with a random symmetric key and stored locally as a stand-in for cloud storage;
 - the symmetric key is authenticated-encrypted to an HWW-derived key and may also be independently OpenPGP-encrypted to each configured recovery friend's public key; the complete friend-wrapper manifest is authenticated with that symmetric key before it can be reused during rotation, and every friend is a 1-of-N recovery recipient rather than part of a threshold scheme;
-- every finalized authorization and revocation transaction is separately encrypted to a phone-derived encryption key and stored as an independent local ciphertext;
+- every finalized monthly and emergency transaction is separately encrypted to a phone-derived encryption key and stored as an independent local ciphertext;
 - all ordinary transactions use a fixed fee rate of 1 sat/vB;
-- policy setup, rollover, signing, revocation, allowance use, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
+- policy setup, rollover, signing, revocation, allowance use, emergency initiation/withdrawal/cancellation, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
 
 Device operations are separated in the CLI. Phone actions live under `anzen phone *`; HWW actions live under `anzen hww *`. Vault initialization is likewise explicit: initialize both devices in either order, then run `anzen init`. The final command prints only the cold-storage descriptor and public policy details; hot-wallet descriptors remain internal.
 
@@ -209,15 +242,15 @@ An optional `anzen phone init --vanity` mode requires the HWW to be initialized 
 
 The implementation library is split into three public modules. `core` contains shared policy, PSBT, cryptographic, protocol, storage-format, and chain primitives and does not depend on a device implementation. `hot_wallet` contains phone/BDK behavior and depends only on `core`. `cold_wallet` contains the minimal HWW validation, backup, and signing surface and likewise depends only on `core`; it has no hot-wallet or network-client dependency. The CLI performs chain scanning/broadcast and composes these APIs into commands. This boundary is intended to let mobile apps reuse `hot_wallet`, hardware signing apps or firmware reuse the smaller `cold_wallet` surface, and reviewers audit the cold path without BDK/mobile implementation details.
 
-The monthly-policy protocol has three stages:
+The vault-policy protocol has three stages:
 
-1. `anzen phone set-policy --monthly-limit SATS --output PROPOSAL.json` constructs the one-output rollover, deferred split, and monthly PSBTs, signs the phone side, and emits a portable JSON policy object.
+1. `anzen phone set-policy --monthly-limit SATS --emergency-access-limit SATS --output PROPOSAL.json` constructs the one-output rollover, deferred split, monthly PSBTs, and optional three-transaction emergency package, signs the phone side, and emits a portable JSON policy object.
 2. `anzen hww confirm-policy PROPOSAL.json --output APPROVED.json` presents the complete high-level policy once, obtains one approval, independently validates every PSBT against the manifest, and signs the complete batch without per-transaction prompts.
-3. `anzen phone activate-policy APPROVED.json` verifies both approvals, broadcasts only the one-output rollover, and stores the deferred split plus every authorization and revocation as individually encrypted phone artifacts. The first monthly action broadcasts the split before its selected child.
+3. `anzen phone activate-policy APPROVED.json` verifies both approvals, broadcasts only the one-output rollover, and stores the deferred split plus every monthly and emergency transaction as individually encrypted phone artifacts. The first monthly or emergency action broadcasts the split before its selected child.
 
 The JSON interchange embeds PSBTs plus a versioned policy/batch manifest, so the simulated devices do not share an implicit signing workspace. Phone backup restoration, cooperative sweeping, and phone-key rotation use the same explicit JSON handoff model.
 
-In addition to focused automated tests, the repository should provide a serial end-to-end terminal demonstration funded with 2 BTC and configured with a 0.1 BTC monthly limit. It should print human-readable seeds and public keys (regtest only), policies, timelocks, Miniscript, addresses, transaction IDs, balances, presigned transaction details, simulated calendar and block advancement, successful and revoked allowances, on-time and forgotten annual rollover, recovery actions, and the loss/theft scenarios described below.
+In addition to focused automated tests, the repository should provide isolated end-to-end terminal tests funded with 2 BTC and configured with a 0.1 BTC monthly limit. They should print human-readable seeds and public keys (regtest only), policies, timelocks, Miniscript, addresses, transaction IDs, balances, presigned transaction details, simulated calendar and block advancement, successful and revoked allowances, successful and cancelled emergency access, on-time and forgotten annual rollover, recovery actions, and the loss/theft scenarios described below.
 
 The demonstration should derive its schedule from the actual UTC date when the test starts, with the first authorization on the next first day of a calendar month. It should still use a real Bitcoin Core regtest node. The test harness may use regtest mock time and on-demand block generation to advance the chain monotonically, mining until median-time-past is strictly later than the authorization locktime before testing a successful broadcast. Block-based recovery paths must be exercised by mining their required block counts rather than by changing mock time.
 
@@ -225,7 +258,7 @@ The demonstration should derive its schedule from the actual UTC date when the t
 
 - **Lost phone**
   - Recover the encrypted mobile-key backup from cloud storage using HWW decryption.
-  - Rotate to a fresh mobile key while preserving the active monthly limit. The rotation proposal chains a replacement annual rollover and authorization/revocation schedule to the emergency sweep, and the HWW signs both under one high-level rotation approval.
+  - Rotate to a fresh mobile key while preserving the active monthly and emergency-access limits. The rotation proposal chains a replacement annual rollover and policy schedule to the emergency sweep, and the HWW signs both under one high-level rotation approval.
 
 - **Stolen phone or extracted mobile key**
   - The attacker can steal the current hot balance and use any matured monthly authorizations.
