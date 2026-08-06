@@ -2,9 +2,13 @@
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
-Anzen is a Bitcoin wallet with the resilience people want from 2-of-3 multisig and the everyday simplicity of a hot wallet. Savings stay protected in a renewable 2-of-2 Taproot vault, while the phone can withdraw a pre-approved monthly allowance without the hardware wallet.
+Anzen is a hot wallet and a cold wallet designed to work together. It combines the resilience people want from 2-of-3 multisig with the everyday simplicity of a hot wallet. Savings remain in cold storage, where the cold wallet acts as a programmable 2-of-2 Taproot vault, while the hot wallet handles everyday access.
 
-Anzen is designed to make permanent loss extraordinarily difficult. It has no single point of failure: no one lost device or unavailable service can strand a correctly configured vault forever, and no single stolen key can immediately drain it. There is no custodian, recovery company, or online co-signer: every on-chain spending and recovery path is encoded in Bitcoin Script and enforced by Bitcoin’s consensus rules.
+A core design philosophy is that the hardware wallet signs vault policies, not individual day-to-day transactions. In one approval ceremony, it authorizes the policy and presigns everything the hot wallet needs to execute that policy for the next year. The hardware wallet is then unnecessary until the policy changes or the vault timelocks are renewed on the same calendar date the following year.
+
+A vault policy can permit the hot wallet to withdraw up to a predefined amount from cold storage each month. The hot wallet alone can execute an approved withdrawal or revoke it before it becomes available. This behavior is enforced by Bitcoin—not an Anzen server, custodian, or online co-signer—using Bitcoin Script, signatures, and timelocks.
+
+Anzen is designed to make permanent loss extraordinarily difficult. It has no single point of failure: no single lost device or unavailable service can strand a correctly configured vault forever, and no single stolen key can immediately drain it. Every on-chain spending and recovery path is encoded in Bitcoin Script and enforced by Bitcoin’s consensus rules.
 
 ### What Anzen guarantees
 
@@ -21,7 +25,7 @@ Anzen is designed to make permanent loss extraordinarily difficult. It has no si
 
 | Scenario | What happens |
 | --- | --- |
-| Phone lost | The hardware wallet immediately decrypts the cloud backup of the phone key, allowing the phone key to be restored and rotated. If that backup is unavailable, the hardware-wallet-only path activates after 65,535 blocks—about 15 months from the vault output’s confirmation. |
+| Phone lost | The hardware wallet immediately decrypts the cloud backup of the phone key, allowing the phone key to be restored and rotated. |
 | Hardware wallet lost | Existing monthly allowances continue to work from the phone. The phone-only recovery path activates after 61,200 blocks—about 14 months from confirmation, and potentially much sooner after the device is lost. |
 | Phone stolen | The attacker may take the hot balance or matured allowances, but cannot immediately spend the main vault. The honest hardware-wallet holder can restore the backed-up phone key and rotate the vault before the delayed phone path activates. |
 | Hardware wallet stolen | The attacker cannot immediately spend the vault. The honest phone’s recovery path activates first, leaving roughly a one-month priority window before the hardware-wallet-only path matures. |
