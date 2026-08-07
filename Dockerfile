@@ -30,6 +30,7 @@ FROM test-dependencies AS test
 
 COPY src ./src
 COPY tests ./tests
+COPY test-vectors ./test-vectors
 RUN touch src/*.rs tests/*.rs
 RUN cargo test --all-targets --locked --no-run
 COPY scripts ./scripts
