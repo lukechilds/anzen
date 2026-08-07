@@ -24,24 +24,16 @@ The [protocol design](anzen-design.md) specifies the exact wallet properties, tr
 Anzen's cold storage is a Taproot address controlled by two keys: the mobile key (`phone`) and the hardware-wallet key (`hww`). Every cold output uses the same vault script. Bitcoin accepts a spend through any one of these paths:
 
 ```text
-Phone + hardware wallet                      → spend immediately
-Phone + 61,200 blocks since UTXO confirmation → phone-only recovery
-HWW   + 65,535 blocks since UTXO confirmation → HWW-only recovery
+phone + hww immediately
+phone only after 14 months
+hww only after 15 months
 ```
 
 The delays belong to each individual UTXO and begin when that output confirms. They are not controlled by Anzen, a server, or a calendar. The earlier phone path gives an honest phone holder a priority window to rotate the vault if the HWW key is stolen.
 
 ### Miniscript policy
 
-In human-readable logic, the policy is:
-
-```text
-phone + hww immediately
-phone only after 14 months
-hww only after 15 months
-```
-
-The same policy in minimal Taproot Miniscript descriptor notation is:
+The policy in minimal Taproot Miniscript descriptor notation is:
 
 ```text
 tr(
