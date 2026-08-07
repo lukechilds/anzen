@@ -1,0 +1,276 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1380" viewBox="0 0 1600 1380" role="img" aria-labelledby="title description">
+  <title id="title">Anzen annual vault policy and presigned transaction graph</title>
+  <desc id="description">A 2.1 bitcoin vault split into twelve confirmed monthly UTXOs and one confirmed remainder UTXO. Each monthly UTXO has conflicting green execute and red revoke transactions. The remainder has a presigned emergency initiation transaction followed by conflicting green withdrawal and red cancellation transactions.</desc>
+
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2376a8"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#15804a"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c23d4b"/>
+    </marker>
+    <style>
+      text { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #172033; }
+      .heading { font-size: 31px; font-weight: 750; }
+      .section-heading { font-size: 23px; font-weight: 750; letter-spacing: 0.3px; }
+      .subheading { font-size: 20px; font-weight: 700; }
+      .body { font-size: 18px; }
+      .small { font-size: 15px; fill: #526173; }
+      .tiny { font-size: 13px; fill: #667488; }
+      .amount { font-size: 19px; font-weight: 750; }
+      .white { fill: #ffffff; }
+      .muted-white { fill: #cbd5e1; }
+      .blue { fill: #176b9d; }
+      .green { fill: #116b3d; }
+      .red { fill: #a92e3b; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1380" fill="#f7f9fc"/>
+
+  <!-- Policy summary -->
+  <rect x="40" y="32" width="1520" height="118" rx="14" fill="#172033"/>
+  <text x="74" y="76" class="heading" fill="#ffffff">Illustrative annual vault policy</text>
+  <text x="74" y="112" class="body" fill="#cbd5e1">One HWW approval presigns a year of phone-controlled actions</text>
+
+  <g transform="translate(690 52)">
+    <rect width="194" height="76" rx="10" fill="#26344b"/>
+    <text x="97" y="29" text-anchor="middle" class="small" fill="#cbd5e1">VAULT BALANCE</text>
+    <text x="97" y="58" text-anchor="middle" class="amount" fill="#ffffff">2.1 BTC</text>
+  </g>
+  <g transform="translate(900 52)">
+    <rect width="194" height="76" rx="10" fill="#26344b"/>
+    <text x="97" y="29" text-anchor="middle" class="small" fill="#cbd5e1">MONTHLY LIMIT</text>
+    <text x="97" y="58" text-anchor="middle" class="amount" fill="#ffffff">0.1 BTC × 12</text>
+  </g>
+  <g transform="translate(1110 52)">
+    <rect width="194" height="76" rx="10" fill="#26344b"/>
+    <text x="97" y="29" text-anchor="middle" class="small" fill="#cbd5e1">EMERGENCY LIMIT</text>
+    <text x="97" y="58" text-anchor="middle" class="amount" fill="#ffffff">0.5 BTC</text>
+  </g>
+  <g transform="translate(1320 52)">
+    <rect width="206" height="76" rx="10" fill="#26344b"/>
+    <text x="103" y="29" text-anchor="middle" class="small" fill="#cbd5e1">SAFETY DELAY</text>
+    <text x="103" y="58" text-anchor="middle" class="amount" fill="#ffffff">1 week</text>
+  </g>
+
+  <!-- Confirmed on-chain outputs -->
+  <rect x="40" y="180" width="1520" height="410" rx="14" fill="#ffffff" stroke="#2376a8" stroke-width="3"/>
+  <rect x="40" y="180" width="1520" height="54" rx="14" fill="#e9f4fb"/>
+  <path d="M40 220 V234 H1560 V220" fill="#e9f4fb"/>
+  <circle cx="72" cy="207" r="8" fill="#2376a8"/>
+  <text x="92" y="215" class="section-heading blue">CONFIRMED ON CHAIN</text>
+  <text x="446" y="214" class="body">The annual rollover creates 13 independent vault UTXOs</text>
+
+  <text x="72" y="270" class="subheading">12 monthly UTXOs</text>
+  <text x="300" y="270" class="small">Each holds the 0.1 BTC limit plus its 162 sat transaction fee</text>
+
+  <!-- Months 1–6 -->
+  <g transform="translate(72 292)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 1</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(242 292)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 2</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(412 292)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 3</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(582 292)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 4</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(752 292)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 5</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(922 292)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 6</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+
+  <!-- Months 7–12 -->
+  <g transform="translate(72 398)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 7</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(242 398)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 8</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(412 398)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 9</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(582 398)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 10</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(752 398)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 11</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+  <g transform="translate(922 398)">
+    <rect width="158" height="92" rx="8" fill="#eef7fd" stroke="#78aecd" stroke-width="2"/>
+    <text x="79" y="27" text-anchor="middle" class="small">MONTH 12</text>
+    <text x="79" y="54" text-anchor="middle" class="amount">0.10000162</text>
+    <text x="79" y="76" text-anchor="middle" class="tiny">BTC · vault script</text>
+  </g>
+
+  <!-- Remainder -->
+  <g transform="translate(1120 292)">
+    <rect width="400" height="198" rx="10" fill="#e3f1fa" stroke="#2376a8" stroke-width="3"/>
+    <text x="200" y="38" text-anchor="middle" class="subheading blue">REMAINDER UTXO</text>
+    <text x="200" y="83" text-anchor="middle" style="font-size:32px;font-weight:780">0.89997378 BTC</text>
+    <line x1="45" y1="105" x2="355" y2="105" stroke="#aac9dc" stroke-width="2"/>
+    <text x="200" y="136" text-anchor="middle" class="body">Cold funds not assigned to a month</text>
+    <text x="200" y="165" text-anchor="middle" class="small">Funds the one emergency path</text>
+  </g>
+
+  <text x="72" y="548" class="small">Rollover input: 2.1 BTC</text>
+  <text x="280" y="548" class="small">Monthly UTXOs: 1.20001944 BTC total</text>
+  <text x="638" y="548" class="small">Remainder: 0.89997378 BTC</text>
+  <text x="934" y="548" class="small">Rollover fee: 678 sats</text>
+  <text x="1170" y="548" class="small">Fee rate: 1 sat/vB</text>
+
+  <!-- Presigned transaction package -->
+  <rect x="40" y="626" width="1520" height="706" fill="#ffffff" stroke="#667488" stroke-width="3" stroke-dasharray="14 10"/>
+  <rect x="64" y="608" width="635" height="40" fill="#f7f9fc"/>
+  <text x="76" y="637" class="section-heading">OFF CHAIN · PRESIGNED TRANSACTION PACKAGE</text>
+  <text x="1518" y="637" text-anchor="end" class="small">Dashed square borders = signed transactions stored by the phone</text>
+
+  <line x1="800" y1="668" x2="800" y2="1294" stroke="#d4dbe4" stroke-width="2"/>
+
+  <!-- Monthly conflict pairs -->
+  <text x="76" y="694" class="section-heading">MONTHLY PATH · 12 CONFLICTING PAIRS</text>
+  <text x="76" y="723" class="small">Every confirmed monthly UTXO has its own execute/revoke pair</text>
+
+  <rect x="76" y="746" width="688" height="58" rx="8" fill="#e9f4fb" stroke="#78aecd" stroke-width="2"/>
+  <text x="420" y="782" text-anchor="middle" class="subheading">Any monthly UTXO · 0.10000162 BTC</text>
+
+  <!-- Monthly fork arrows -->
+  <path d="M420 804 V837 H231 V866" fill="none" stroke="#15804a" stroke-width="3" marker-end="url(#arrow-green)"/>
+  <path d="M420 837 H609 V866" fill="none" stroke="#c23d4b" stroke-width="3" marker-end="url(#arrow-red)"/>
+
+  <rect x="76" y="874" width="310" height="248" fill="#edf9f2" stroke="#15804a" stroke-width="3" stroke-dasharray="10 7"/>
+  <rect x="91" y="889" width="116" height="30" fill="#15804a"/>
+  <text x="149" y="910" text-anchor="middle" class="small" fill="#ffffff" style="font-weight:750">EXECUTE</text>
+  <text x="231" y="953" text-anchor="middle" class="subheading green">AUTHORIZE</text>
+  <text x="231" y="988" text-anchor="middle" style="font-size:25px;font-weight:780;fill:#116b3d">0.1 BTC → HOT</text>
+  <line x1="110" y1="1008" x2="352" y2="1008" stroke="#a8d8bc" stroke-width="2"/>
+  <text x="105" y="1041" class="body">Valid:</text>
+  <text x="167" y="1041" class="body" style="font-weight:700">1st at 00:00 UTC</text>
+  <text x="105" y="1072" class="small">Input: 0.10000162 BTC</text>
+  <text x="105" y="1097" class="small">Output: 0.10000000 BTC · fee 162 sats</text>
+
+  <rect x="454" y="874" width="310" height="248" fill="#fff0f2" stroke="#c23d4b" stroke-width="3" stroke-dasharray="10 7"/>
+  <rect x="469" y="889" width="110" height="30" fill="#c23d4b"/>
+  <text x="524" y="910" text-anchor="middle" class="small" fill="#ffffff" style="font-weight:750">REVOKE</text>
+  <text x="609" y="953" text-anchor="middle" class="subheading red">CANCEL ALLOWANCE</text>
+  <text x="609" y="988" text-anchor="middle" style="font-size:25px;font-weight:780;fill:#a92e3b">0.1 BTC → VAULT</text>
+  <line x1="488" y1="1008" x2="730" y2="1008" stroke="#e5b2b8" stroke-width="2"/>
+  <text x="483" y="1041" class="body">Valid:</text>
+  <text x="545" y="1041" class="body" style="font-weight:700">immediately</text>
+  <text x="483" y="1072" class="small">Input: the same monthly UTXO</text>
+  <text x="483" y="1097" class="small">Output: 0.10000000 BTC · fee 162 sats</text>
+
+  <g transform="translate(361 1147)">
+    <rect width="118" height="42" rx="21" fill="#172033"/>
+    <text x="59" y="28" text-anchor="middle" class="small" fill="#ffffff" style="font-weight:750">CONFLICT</text>
+  </g>
+  <path d="M361 1168 H300" stroke="#172033" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <path d="M479 1168 H540" stroke="#172033" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="420" y="1222" text-anchor="middle" class="body" style="font-weight:700">Both spend the same UTXO</text>
+  <text x="420" y="1250" text-anchor="middle" class="small">Whichever confirms first permanently invalidates the other</text>
+  <text x="420" y="1283" text-anchor="middle" class="small">×12 — one independent pair for every calendar month</text>
+
+  <!-- Emergency path -->
+  <text x="836" y="694" class="section-heading">EMERGENCY PATH · ONCE PER EPOCH</text>
+  <text x="836" y="723" class="small">Initiation spends the remainder, then starts the one-week safety window</text>
+
+  <rect x="836" y="746" width="688" height="58" rx="8" fill="#e9f4fb" stroke="#78aecd" stroke-width="2"/>
+  <text x="1180" y="782" text-anchor="middle" class="subheading">Remainder UTXO · 0.89997378 BTC</text>
+
+  <path d="M1180 804 V836" fill="none" stroke="#15804a" stroke-width="3" marker-end="url(#arrow-green)"/>
+  <rect x="972" y="844" width="416" height="124" fill="#edf9f2" stroke="#15804a" stroke-width="3" stroke-dasharray="10 7"/>
+  <rect x="987" y="859" width="90" height="30" fill="#15804a"/>
+  <text x="1032" y="880" text-anchor="middle" class="small" fill="#ffffff" style="font-weight:750">EXECUTE</text>
+  <text x="1227" y="883" text-anchor="middle" class="subheading green">INITIATE EMERGENCY ACCESS</text>
+  <text x="1180" y="923" text-anchor="middle" class="body">Spend remainder now · fee 205 sats</text>
+  <text x="1180" y="951" text-anchor="middle" class="small">Creates two confirmed outputs below</text>
+
+  <!-- Trigger outputs become on-chain -->
+  <path d="M1180 968 V988 H1008 V1002" fill="none" stroke="#2376a8" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <path d="M1180 988 H1368 V1002" fill="none" stroke="#2376a8" stroke-width="3" marker-end="url(#arrow-blue)"/>
+
+  <rect x="836" y="1010" width="344" height="82" rx="8" fill="#e9f4fb" stroke="#2376a8" stroke-width="2"/>
+  <text x="1008" y="1038" text-anchor="middle" class="small blue" style="font-weight:750">ON CHAIN IF INITIATED</text>
+  <text x="1008" y="1068" text-anchor="middle" class="amount">0.50000162 BTC staged</text>
+
+  <rect x="1196" y="1010" width="328" height="82" rx="8" fill="#e9f4fb" stroke="#2376a8" stroke-width="2"/>
+  <text x="1360" y="1038" text-anchor="middle" class="small blue" style="font-weight:750">STAYS IN THE VAULT</text>
+  <text x="1360" y="1068" text-anchor="middle" class="amount">0.39997011 BTC change</text>
+
+  <!-- Emergency conflict arrows -->
+  <path d="M1008 1092 V1118 H900 V1140" fill="none" stroke="#15804a" stroke-width="3" marker-end="url(#arrow-green)"/>
+  <path d="M1008 1118 H1270 V1140" fill="none" stroke="#c23d4b" stroke-width="3" marker-end="url(#arrow-red)"/>
+
+  <rect x="824" y="1148" width="330" height="144" fill="#edf9f2" stroke="#15804a" stroke-width="3" stroke-dasharray="10 7"/>
+  <rect x="839" y="1163" width="100" height="30" fill="#15804a"/>
+  <text x="889" y="1184" text-anchor="middle" class="small" fill="#ffffff" style="font-weight:750">EXECUTE</text>
+  <text x="1050" y="1190" text-anchor="middle" class="subheading green">WITHDRAW</text>
+  <text x="989" y="1225" text-anchor="middle" style="font-size:23px;font-weight:780;fill:#116b3d">0.5 BTC → HOT</text>
+  <text x="989" y="1256" text-anchor="middle" class="body" style="font-weight:700">Valid after 1 week</text>
+  <text x="989" y="1281" text-anchor="middle" class="small">Fee: 162 sats</text>
+
+  <rect x="1194" y="1148" width="330" height="144" fill="#fff0f2" stroke="#c23d4b" stroke-width="3" stroke-dasharray="10 7"/>
+  <rect x="1209" y="1163" width="96" height="30" fill="#c23d4b"/>
+  <text x="1257" y="1184" text-anchor="middle" class="small" fill="#ffffff" style="font-weight:750">REVOKE</text>
+  <text x="1435" y="1190" text-anchor="middle" class="subheading red">CANCEL</text>
+  <text x="1359" y="1225" text-anchor="middle" style="font-size:23px;font-weight:780;fill:#a92e3b">0.5 BTC → VAULT</text>
+  <text x="1359" y="1256" text-anchor="middle" class="body" style="font-weight:700">Valid immediately</text>
+  <text x="1359" y="1281" text-anchor="middle" class="small">Fee: 162 sats</text>
+
+  <g transform="translate(1134 1198)">
+    <circle cx="40" cy="22" r="31" fill="#172033"/>
+    <text x="40" y="17" text-anchor="middle" class="tiny" fill="#ffffff" style="font-weight:750">SAME</text>
+    <text x="40" y="35" text-anchor="middle" class="tiny" fill="#ffffff" style="font-weight:750">INPUT</text>
+  </g>
+
+  <!-- Legend -->
+  <rect x="40" y="1350" width="1520" height="2" fill="#d4dbe4"/>
+  <circle cx="68" cy="1367" r="7" fill="#2376a8"/>
+  <text x="84" y="1373" class="tiny">Blue solid boxes are confirmed UTXOs</text>
+  <rect x="366" y="1359" width="32" height="16" fill="#edf9f2" stroke="#15804a" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="410" y="1373" class="tiny">Green dashed boxes execute approved policy</text>
+  <rect x="746" y="1359" width="32" height="16" fill="#fff0f2" stroke="#c23d4b" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="790" y="1373" class="tiny">Red dashed boxes revoke and return funds to the vault</text>
+  <text x="1524" y="1373" text-anchor="end" class="tiny">Illustrative values at 1 sat/vB</text>
+</svg>

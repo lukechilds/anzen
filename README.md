@@ -71,45 +71,11 @@ The first value is a fixed nothing-up-my-sleeve internal key with no known priva
 
 ### Annual vault layout and presigned transaction graph
 
-Once per year, the phone proposes a policy and the HWW approves it once. Together they sign an annual rollover plus every transaction shown below. Only the rollover is broadcast immediately. After it confirms, the vault consists of twelve independent monthly UTXOs and one remainder UTXO; all other transactions remain encrypted on the phone until needed.
+Once per year, the phone proposes a policy and the HWW approves it once. Together they sign an annual rollover plus every transaction shown below. Only the rollover is broadcast immediately. After it confirms, the vault consists of twelve independent monthly UTXOs and one remainder UTXO; all other transactions remain encrypted on the phone until needed. This example shows a 2.1 BTC vault with 0.1 BTC monthly withdrawals and one 0.5 BTC emergency withdrawal protected by a one-week cancellation window.
 
-```mermaid
-flowchart TB
-    ROLLOVER["ON CHAIN: confirmed annual rollover"]
-    MONTHS["ON CHAIN: 12 independent monthly UTXOs<br/>Month 1 · Month 2 · … · Month 12<br/>each holds limit + authorization fee"]
-    REMAINDER["ON CHAIN: remainder UTXO<br/>all cold funds not assigned to a month"]
+![A 2.1 BTC Anzen vault split into twelve confirmed monthly UTXOs and one confirmed remainder UTXO, with its conflicting presigned execute and revoke transaction paths](docs/vault-policy.svg)
 
-    ROLLOVER -->|creates| MONTHS
-    ROLLOVER -->|creates| REMAINDER
-
-    AUTHORIZE["PRESIGNED ×12: monthly authorization<br/>one per UTXO; valid from 00:00 UTC on the 1st"]
-    REVOKE["PRESIGNED ×12: monthly revocation<br/>one per UTXO; valid immediately"]
-    HOT_MONTH["IF CONFIRMED: monthly limit<br/>at a fresh hot-wallet address"]
-    COLD_MONTH["IF CONFIRMED: chunk minus fee<br/>back under the vault script"]
-
-    MONTHS -.->|each UTXO has this alternative| AUTHORIZE
-    MONTHS -.->|conflicting spend of the same UTXO| REVOKE
-    AUTHORIZE -->|creates| HOT_MONTH
-    REVOKE -->|creates| COLD_MONTH
-
-    TRIGGER["PRESIGNED: emergency trigger<br/>valid immediately; usable once per epoch"]
-    STAGING["ON CHAIN only after trigger confirms:<br/>staging UTXO = emergency amount + withdrawal fee"]
-    COLD_CHANGE["ON CHAIN only after trigger confirms:<br/>all remaining value stays cold"]
-    WITHDRAW["PRESIGNED: emergency withdrawal<br/>valid 605,184 seconds after trigger confirms"]
-    CANCEL["PRESIGNED: emergency cancellation<br/>valid immediately"]
-    HOT_EMERGENCY["IF CONFIRMED: approved emergency amount<br/>at a fresh hot-wallet address"]
-    COLD_EMERGENCY["IF CONFIRMED: staged value minus fee<br/>back under the vault script"]
-
-    REMAINDER -.->|spends the remainder| TRIGGER
-    TRIGGER -->|creates| STAGING
-    TRIGGER -->|creates| COLD_CHANGE
-    STAGING -.->|delayed alternative| WITHDRAW
-    STAGING -.->|conflicting spend of the same UTXO| CANCEL
-    WITHDRAW -->|creates| HOT_EMERGENCY
-    CANCEL -->|creates| COLD_EMERGENCY
-```
-
-Solid arrows mean “creates this output if the transaction confirms.” Dashed arrows point to transactions that are already signed but are not yet on-chain. Each conflicting pair spends the same UTXO, so only one transaction in the pair can confirm:
+Blue solid boxes are confirmed UTXOs. Dashed square boxes are transactions signed during the annual ceremony but kept off-chain on the phone. Green transactions execute the approved policy; red transactions revoke it and return the funds to the vault. Each conflicting pair spends the same UTXO, so only one transaction in the pair can confirm:
 
 - **Authorize or revoke:** an authorization releases that month's fixed limit to the hot wallet after its absolute calendar timelock. The revocation is valid immediately and returns the chunk to the vault. If revocation confirms first, the authorization is permanently invalid.
 - **Withdraw or cancel:** the emergency withdrawal becomes valid one week after the trigger confirms. Cancellation is valid immediately and returns the staged funds to the vault. If cancellation confirms first, the withdrawal is permanently invalid.
