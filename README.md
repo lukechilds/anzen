@@ -41,6 +41,83 @@ Anzen is designed to make permanent loss extraordinarily difficult. It has no si
 
 The full protocol and its trade-offs are documented in [anzen-design.md](anzen-design.md).
 
+## How the vault is constructed
+
+Anzen's cold storage is a Taproot address controlled by two keys: the mobile key (`M`) and the hardware-wallet key (`H`). Every cold output uses the same vault script. Bitcoin accepts a spend through any one of these paths:
+
+```text
+Phone + hardware wallet                      → spend immediately
+Phone + 61,200 blocks since UTXO confirmation → phone-only recovery
+HWW   + 65,535 blocks since UTXO confirmation → HWW-only recovery
+```
+
+The delays belong to each individual UTXO and begin when that output confirms. They are not controlled by Anzen, a server, or a calendar. The earlier phone path gives an honest phone holder a priority window to rotate the vault if the HWW key is stolen.
+
+### Miniscript policy
+
+In human-readable logic, the policy is:
+
+```text
+(M AND H) OR (M AFTER 61,200 BLOCKS) OR (H AFTER 65,535 BLOCKS)
+```
+
+The corresponding Taproot Miniscript descriptor template is shown below, with `M` and `H` standing for the devices' x-only public keys:
+
+```text
+tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,M,H),{and_v(v:older(61200),pk(M)),and_v(v:older(65535),pk(H))}})
+```
+
+The first value is a fixed nothing-up-my-sleeve internal key with no known private key, so there is no hidden key-path spend. `multi_a(2,M,H)` is the immediate 2-of-2 path. Each `older(...)` branch is a Bitcoin-enforced relative block delay followed by a signature from the surviving key.
+
+### Annual vault layout and presigned transaction graph
+
+Once per year, the phone proposes a policy and the HWW approves it once. Together they sign an annual rollover plus every transaction shown below. Only the rollover is broadcast immediately. After it confirms, the vault consists of twelve independent monthly UTXOs and one remainder UTXO; all other transactions remain encrypted on the phone until needed.
+
+```mermaid
+flowchart TB
+    ROLLOVER["ON CHAIN: confirmed annual rollover"]
+    MONTHS["ON CHAIN: 12 independent monthly UTXOs<br/>Month 1 · Month 2 · … · Month 12<br/>each holds limit + authorization fee"]
+    REMAINDER["ON CHAIN: remainder UTXO<br/>all cold funds not assigned to a month"]
+
+    ROLLOVER -->|creates| MONTHS
+    ROLLOVER -->|creates| REMAINDER
+
+    AUTHORIZE["PRESIGNED ×12: monthly authorization<br/>one per UTXO; valid from 00:00 UTC on the 1st"]
+    REVOKE["PRESIGNED ×12: monthly revocation<br/>one per UTXO; valid immediately"]
+    HOT_MONTH["IF CONFIRMED: monthly limit<br/>at a fresh hot-wallet address"]
+    COLD_MONTH["IF CONFIRMED: chunk minus fee<br/>back under the vault script"]
+
+    MONTHS -.->|each UTXO has this alternative| AUTHORIZE
+    MONTHS -.->|conflicting spend of the same UTXO| REVOKE
+    AUTHORIZE -->|creates| HOT_MONTH
+    REVOKE -->|creates| COLD_MONTH
+
+    TRIGGER["PRESIGNED: emergency trigger<br/>valid immediately; usable once per epoch"]
+    STAGING["ON CHAIN only after trigger confirms:<br/>staging UTXO = emergency amount + withdrawal fee"]
+    COLD_CHANGE["ON CHAIN only after trigger confirms:<br/>all remaining value stays cold"]
+    WITHDRAW["PRESIGNED: emergency withdrawal<br/>valid 605,184 seconds after trigger confirms"]
+    CANCEL["PRESIGNED: emergency cancellation<br/>valid immediately"]
+    HOT_EMERGENCY["IF CONFIRMED: approved emergency amount<br/>at a fresh hot-wallet address"]
+    COLD_EMERGENCY["IF CONFIRMED: staged value minus fee<br/>back under the vault script"]
+
+    REMAINDER -.->|spends the remainder| TRIGGER
+    TRIGGER -->|creates| STAGING
+    TRIGGER -->|creates| COLD_CHANGE
+    STAGING -.->|delayed alternative| WITHDRAW
+    STAGING -.->|conflicting spend of the same UTXO| CANCEL
+    WITHDRAW -->|creates| HOT_EMERGENCY
+    CANCEL -->|creates| COLD_EMERGENCY
+```
+
+Solid arrows mean “creates this output if the transaction confirms.” Dashed arrows point to transactions that are already signed but are not yet on-chain. Each conflicting pair spends the same UTXO, so only one transaction in the pair can confirm:
+
+- **Authorize or revoke:** an authorization releases that month's fixed limit to the hot wallet after its absolute calendar timelock. The revocation is valid immediately and returns the chunk to the vault. If revocation confirms first, the authorization is permanently invalid.
+- **Withdraw or cancel:** the emergency withdrawal becomes valid one week after the trigger confirms. Cancellation is valid immediately and returns the staged funds to the vault. If cancellation confirms first, the withdrawal is permanently invalid.
+
+The phone can broadcast any of these approved actions without reconnecting the HWW. Presigned transactions are convenience permissions, not custody: losing them does not lose the bitcoin, because every unspent output still has the three vault-script paths above. A later annual rollover spends all remaining cold UTXOs, resets their recovery delays, and invalidates the previous epoch's unused presigned transactions.
+
+For a concrete byte-level example of this graph—including txids, outpoints, locktimes, sequences, values, addresses, and scripts—see the checked-in [vault output test vector](test-vectors/vault-output-graph.json).
+
 ## Use the CLI manually
 
 Start the regtest node and define an `anzen` shell helper:
