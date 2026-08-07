@@ -2,44 +2,22 @@
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
-Anzen is a Bitcoin wallet that achieves the security of a 2-of-3 multisig with the simplicity of a mobile hot wallet. It pairs a mobile hot wallet with a cold wallet that acts as a programmable vault, keeping savings in cold storage while making everyday access simple.
+> [!WARNING]
+> Anzen is an experimental reference implementation, not a production-ready wallet. The current hardware wallet is simulated in software, mnemonics are printed, and fees are fixed at 1 sat/vB. Use regtest to explore the protocol; do not secure significant mainnet funds with this prototype.
 
-Anzen is an open protocol, and this repository is its reference wallet implementation. Any hardware wallet can implement the cold-wallet side to review and sign Anzen vault policies, while any mobile or desktop wallet can implement the hot-wallet side to propose and execute them. Compatible implementations can work together without depending on the Anzen reference app or any particular vendor.
+Anzen is a Bitcoin wallet that achieves the two-device compromise resistance of a 2-of-3 multivendor multisig with the simplicity of a mobile hot wallet. It combines a phone hot wallet for everyday use with an independent hardware wallet and a programmable Taproot vault for cold storage.
 
-A core design philosophy is that the hardware wallet signs vault policies, not individual day-to-day transactions. In one approval ceremony, it authorizes the policy and presigns everything the hot wallet needs to execute that policy for the next year. The hardware wallet is then unnecessary until the policy changes or the vault timelocks are renewed on the same calendar date the following year.
+Most self-custody designs force a compromise: singlesig is simple but makes one key a catastrophic point of failure; multivendor multisig removes that failure but is difficult to operate; collaborative custody restores good UX by introducing a provider with a signing key. Anzen is designed to be secure, easy to use, and trustless at the same time. [Read the motivation behind the design.](https://lu.ke/self-custody-trilemma/)
 
-A vault policy can permit the hot wallet to withdraw up to a predefined amount from cold storage each month. The hot wallet alone can execute an approved withdrawal or revoke it before it becomes available. This behavior is enforced by Bitcoin—not an Anzen server, custodian, or online co-signer—using Bitcoin Script, signatures, and timelocks.
+**The experience of a hot wallet, backed by cold storage.** Think checking and savings: the phone is your checking account and the vault is your savings account. Once a year, the hardware wallet approves a human-readable policy covering monthly transfers, immediate revocations, and a larger emergency transfer with a one-week cancellation window. It validates and presigns the complete transaction graph in one ceremony; the phone stores it encrypted and can execute the policy for the rest of the year.
 
-Anzen is designed to be difficult to operate incorrectly. It guides the user through complete policy, renewal, revocation, and recovery operations instead of leaving them to construct transactions or work out the next step themselves.
+Immediate vault access requires both independent device keys. If either key is lost or compromised, the honest holder of the other key retains a Bitcoin-enforced route to safety. No company, server, custodian, or online cosigner can change those paths, and losing the presigned policy transactions cannot lose the underlying bitcoin.
 
-Anzen is designed to make permanent loss extraordinarily difficult. It has no single point of failure: no single lost device or unavailable service can strand a correctly configured vault forever, and no single stolen key can immediately drain it. Every on-chain spending and recovery path is encoded in Bitcoin Script and enforced by Bitcoin’s consensus rules.
+Anzen is designed to be difficult to operate incorrectly. It guides complete policy, renewal, revocation, rotation, and recovery operations rather than exposing raw transaction machinery and leaving the user to assemble a safe procedure.
 
-### What Anzen guarantees
+Anzen is an open protocol, and this repository is its reference wallet implementation. Any hardware wallet can implement the cold-wallet side, and any mobile or desktop wallet can implement the hot-wallet side. Compatible implementations can work together without the reference app or any particular vendor.
 
-- **No single-device failure:** either surviving key has a path to recover funds if the other key is permanently lost.
-- **No immediate single-key theft:** one stolen key cannot spend the main vault before its delayed recovery path activates. An honest key holder can always rotate funds away from an attacker before the stolen key gets access.
-- **Hardware-wallet independence:** routine monthly spending uses the phone alone. With annual rollover maintained, the hardware wallet normally needs to be accessed only once per year.
-- **Programmable monthly liquidity:** the phone can withdraw a fixed, pre-approved amount from the vault each calendar month without another hardware-wallet prompt.
-- **Phone-controlled revocation:** the phone can cancel a future monthly allowance by broadcasting its presigned revocation before the allowance becomes spendable.
-- **Cancellable emergency liquidity:** once per annual vault epoch, the phone can start a larger pre-approved withdrawal, cancel it during a one-week safety window, or complete it after the delay.
-- **Optional social recovery:** a configured recovery friend can decrypt the phone backup if both devices are lost.
-- **Trustless enforcement:** the 2-of-2 spend and both delayed single-key recovery paths live entirely in Taproot. Presigned policy transactions are enforced by ordinary Bitcoin signatures and absolute/relative locktimes.
-- **Open interoperability:** hardware-wallet, mobile-wallet, and desktop-wallet vendors can implement either side of the protocol without depending on Anzen software or infrastructure.
-- **No provider dependency:** Anzen does not rely on a company, server, or proprietary recovery service remaining available.
-
-### Exact loss and theft behavior
-
-| Scenario | What happens |
-| --- | --- |
-| Phone lost | The hardware wallet immediately decrypts the cloud backup of the phone key, allowing the phone key to be restored and rotated. |
-| Hardware wallet lost | Existing monthly allowances continue to work from the phone. The phone-only recovery path activates after 61,200 blocks (~14 months) from confirmation, and potentially much sooner after the device is lost. |
-| Phone stolen | The attacker may take the hot balance or matured allowances, but cannot immediately spend the main vault. The honest hardware-wallet holder can restore the backed-up phone key and rotate the vault before the delayed phone path activates. |
-| Hardware wallet stolen | The attacker cannot immediately spend the vault. The honest phone’s recovery path activates first, leaving roughly a one-month priority window before the hardware-wallet-only path matures. |
-| Both devices lost | If social recovery was configured, any approved recovery friend can decrypt the phone backup and use the delayed phone-recovery path to sweep into replacement keys. Without social recovery, permanent loss of both devices is unrecoverable. |
-| Cloud backup stolen | The backup is encrypted. It is useless without the hardware wallet or a configured recovery friend’s private key. |
-| Both signing keys stolen | The attacker can satisfy the immediate 2-of-2 path. No wallet can protect funds after every required signing key is compromised, so the vault must be rotated before that happens. |
-
-The full protocol and its trade-offs are documented in [anzen-design.md](anzen-design.md).
+The [protocol design](anzen-design.md) specifies the exact wallet properties, transaction graph, assumptions, and loss or theft behavior. [Design decisions](design-decisions.md) explains why Anzen uses this model and records its engineering trade-offs.
 
 ## How the vault is constructed
 

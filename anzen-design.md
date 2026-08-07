@@ -255,20 +255,22 @@ The demonstration should derive its schedule from the actual UTC date when the t
 
 ## Loss and theft scenarios
 
-- **Lost phone**
+- **Lost, broken, or stolen locked phone**
+  - A stolen device that does not yield its key is equivalent to a lost device for vault security.
   - Recover the encrypted mobile-key backup from cloud storage using HWW decryption.
   - Rotate to a fresh mobile key while preserving the active monthly and emergency-access limits. The rotation proposal chains a replacement annual rollover and policy schedule to the emergency sweep, and the HWW signs both under one high-level rotation approval.
 
-- **Stolen phone or extracted mobile key**
+- **Extracted mobile key**
   - The attacker can steal the current hot balance and use any matured monthly authorizations.
   - The attacker cannot spend the main vault before the phone fallback matures.
   - Recover the mobile key using the HWW and immediately sweep all vault chunks to fresh keys, invalidating the old authorizations while replacing them with an equivalent schedule encrypted to the new phone key.
 
-- **Lost HWW**
+- **Lost, broken, or stolen locked HWW**
+  - A stolen device that does not yield its key is equivalent to a lost device for vault security.
   - The phone can continue using existing monthly authorizations.
   - After approximately 61,200 blocks, the phone can recover each vault UTXO alone.
 
-- **Stolen HWW with extracted key**
+- **Extracted HWW key**
   - The attacker cannot spend immediately.
   - The phone fallback activates first.
   - The legitimate phone sweeps funds during the approximately one-month priority window before the HWW-only path becomes valid.
