@@ -58,9 +58,9 @@ The delays belong to each individual UTXO and begin when that output confirms. T
 In human-readable logic, the policy is:
 
 ```text
-(phone AND hww)
-OR (phone AFTER 61,200 BLOCKS)
-OR (hww AFTER 65,535 BLOCKS)
+phone + hww immediately
+phone only after 14 months
+hww only after 15 months
 ```
 
 The same policy in minimal Taproot Miniscript descriptor notation is:
