@@ -113,6 +113,9 @@ enum PhoneCommand {
     BroadcastSweep { approved_sweep: PathBuf },
     /// Propose a new phone key while preserving the active vault policy.
     RotateKey {
+        /// Grind until the new vault address begins with bc1pvault or bcrt1pvault.
+        #[arg(long)]
+        vanity: bool,
         #[arg(long)]
         output: PathBuf,
     },
@@ -481,9 +484,40 @@ fn run_phone(
                 hot_wallet::broadcast_cooperative_sweep(data_dir, backend.as_ref(), &package)?;
             print_sweep_result("Cooperative vault sweep broadcast", &result);
         }
-        PhoneCommand::RotateKey { output } => {
+        PhoneCommand::RotateKey { vanity, output } => {
             let backend = rpc_args.connect_hot(data_dir)?;
-            let package = hot_wallet::create_phone_rotation(data_dir, backend.as_ref())?;
+            let package = if vanity {
+                let target = hot_wallet::vanity_address_prefix(network)?;
+                eprintln!(
+                    "Preparing a vanity phone-key rotation for {target}; this may take a while..."
+                );
+                let result = hot_wallet::create_vanity_phone_rotation(
+                    data_dir,
+                    backend.as_ref(),
+                    |attempts| {
+                        eprintln!(
+                            "Vanity search: {} candidates tested...",
+                            format_number(attempts)
+                        );
+                    },
+                )?;
+                if result.resumed {
+                    eprintln!(
+                        "Reused the matching pending vanity key for {}",
+                        result.package.new_vault_address
+                    );
+                } else {
+                    eprintln!(
+                        "Vanity search: {} candidates across {} threads",
+                        format_number(result.attempts),
+                        result.worker_count
+                    );
+                    eprintln!("Vanity vault address: {}", result.package.new_vault_address);
+                }
+                result.package
+            } else {
+                hot_wallet::create_phone_rotation(data_dir, backend.as_ref())?
+            };
             report_rotation(&package, artifact_reports_to_stderr(&output))?;
             write_artifact(&output, &package)?;
             report_artifact(&output, "Phone-key rotation proposal")?;

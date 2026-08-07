@@ -5,7 +5,10 @@
 mod rotation;
 mod wallet;
 
-pub use rotation::{activate_phone_rotation, create_phone_rotation};
+pub use rotation::{
+    VanityPhoneRotation, activate_phone_rotation, create_phone_rotation,
+    create_vanity_phone_rotation,
+};
 pub use wallet::HotWallet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +73,14 @@ pub struct VanityInitialization {
     pub worker_count: usize,
 }
 
+#[derive(Debug)]
+struct VanityPhoneKey {
+    phone: DeviceKeys,
+    vault_address: String,
+    attempts: u64,
+    worker_count: usize,
+}
+
 /// Grind the phone vault-key derivation index across all available CPU threads.
 pub fn initialize_vanity<F>(
     data_dir: &Path,
@@ -79,9 +90,7 @@ pub fn initialize_vanity<F>(
 where
     F: Fn(u64) + Sync,
 {
-    let worker_count = thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
+    let worker_count = available_worker_count();
     initialize_vanity_with_suffix(
         data_dir,
         network,
@@ -126,6 +135,37 @@ where
         bail!("phone and HWW must use the same network");
     }
     let hww_pubkey = public_hww.parsed_vault_pubkey()?;
+    let vanity =
+        grind_vanity_phone_key(network, hww_pubkey, suffix, worker_count, report_progress)?;
+    let device = persist_phone(data_dir, network, &vanity.phone)?;
+    Ok(VanityInitialization {
+        device,
+        vault_address: vanity.vault_address,
+        attempts: vanity.attempts,
+        worker_count: vanity.worker_count,
+    })
+}
+
+fn available_worker_count() -> usize {
+    thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+}
+
+fn grind_vanity_phone_key<F>(
+    network: Network,
+    hww_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
+    suffix: &str,
+    worker_count: usize,
+    report_progress: F,
+) -> Result<VanityPhoneKey>
+where
+    F: Fn(u64) + Sync,
+{
+    validate_supported_network(network)?;
+    if worker_count == 0 {
+        bail!("vanity search requires at least one worker thread");
+    }
     let target = VanityTarget::new(suffix)?;
     let base_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
     let parent = base_phone.vault_parent_xpriv(&Secp256k1::new())?;
@@ -198,9 +238,8 @@ where
     if !vault_address.to_string().starts_with(&expected_prefix) {
         bail!("vanity search result did not reproduce the requested address prefix");
     }
-    let device = persist_phone(data_dir, network, &phone)?;
-    Ok(VanityInitialization {
-        device,
+    Ok(VanityPhoneKey {
+        phone,
         vault_address: vault_address.to_string(),
         attempts: attempts.load(Ordering::Relaxed),
         worker_count,
@@ -925,5 +964,15 @@ mod tests {
         let restored = load_device_keys(dir.path(), PHONE_DEVICE_FILE).unwrap();
         assert_eq!(restored.vault_pubkey, persisted.vault_pubkey);
         assert_eq!(load_config(dir.path()).unwrap().network, "regtest");
+    }
+
+    #[test]
+    fn vanity_search_encodes_the_mainnet_prefix() {
+        let network = Network::Bitcoin;
+        let hww = DeviceKeys::generate_for_network(&Secp256k1::new(), network).unwrap();
+        let result = grind_vanity_phone_key(network, hww.vault_pubkey, "v", 4, |_| {}).unwrap();
+        assert!(result.vault_address.starts_with("bc1pv"));
+        assert_eq!(result.worker_count, 4);
+        assert!(result.attempts > 0);
     }
 }

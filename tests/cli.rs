@@ -84,6 +84,14 @@ fn phone_cli_exposes_the_complete_emergency_access_lifecycle() {
         .stdout(predicate::str::contains("initiate"))
         .stdout(predicate::str::contains("withdraw"))
         .stdout(predicate::str::contains("cancel"));
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["phone", "rotate-key", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--vanity"))
+        .stdout(predicate::str::contains("--output"));
 }
 
 #[test]
@@ -231,6 +239,21 @@ fn mainnet_mode_is_persisted_and_requires_the_dangerous_flag_every_time() {
     Command::cargo_bin("anzen")
         .unwrap()
         .args(["--data-dir", data_dir, "policy"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("mainnet vault is locked"));
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args([
+            "--data-dir",
+            data_dir,
+            "phone",
+            "rotate-key",
+            "--vanity",
+            "--output",
+            "rotation.json",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("mainnet vault is locked"));

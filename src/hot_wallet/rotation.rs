@@ -4,8 +4,9 @@
 //! applies the validation/signing rules in `cold_wallet` and `core`.
 
 use super::{
-    HotWallet, HotWalletBackend, activate_policy, broadcast_cooperative_sweep_for_config,
-    ensure_backend_network,
+    HotWallet, HotWalletBackend, VANITY_SUFFIX, VanityPhoneKey, activate_policy,
+    available_worker_count, broadcast_cooperative_sweep_for_config, ensure_backend_network,
+    grind_vanity_phone_key,
 };
 use crate::core::{
     ceremony::{
@@ -33,14 +34,148 @@ use std::{
     str::FromStr,
 };
 
+#[derive(Debug)]
+pub struct VanityPhoneRotation {
+    pub package: PhoneRotationPackage,
+    pub attempts: u64,
+    pub worker_count: usize,
+    pub resumed: bool,
+}
+
+struct RotationContext {
+    old_config: VaultConfig,
+    utxos: Vec<VaultUtxo>,
+    old_phone: DeviceKeys,
+}
+
 pub fn create_phone_rotation(
     data_dir: &Path,
     backend: &dyn HotWalletBackend,
 ) -> Result<PhoneRotationPackage> {
+    let context = load_rotation_context(data_dir, backend)?;
+    let network = context.old_config.bitcoin_network()?;
+    let new_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
+    build_phone_rotation(data_dir, context, new_phone)
+}
+
+pub fn create_vanity_phone_rotation<F>(
+    data_dir: &Path,
+    backend: &dyn HotWalletBackend,
+    report_progress: F,
+) -> Result<VanityPhoneRotation>
+where
+    F: Fn(u64) + Sync,
+{
+    create_vanity_phone_rotation_with_suffix(
+        data_dir,
+        backend,
+        VANITY_SUFFIX,
+        available_worker_count(),
+        report_progress,
+    )
+}
+
+fn create_vanity_phone_rotation_with_suffix<F>(
+    data_dir: &Path,
+    backend: &dyn HotWalletBackend,
+    suffix: &str,
+    worker_count: usize,
+    report_progress: F,
+) -> Result<VanityPhoneRotation>
+where
+    F: Fn(u64) + Sync,
+{
+    let context = load_rotation_context(data_dir, backend)?;
+    let network = context.old_config.bitcoin_network()?;
+    let hww_pubkey = XOnlyPublicKey::from_str(&context.old_config.hww_vault_pubkey)?;
+    let pending = load_pending_vanity_phone(data_dir, &context.old_config, hww_pubkey, suffix)?;
+    let (new_phone, expected_address, attempts, actual_worker_count, resumed) = match pending {
+        Some((phone, address)) => (phone, address, 0, 0, true),
+        None => {
+            let VanityPhoneKey {
+                phone,
+                vault_address,
+                attempts,
+                worker_count,
+            } = grind_vanity_phone_key(network, hww_pubkey, suffix, worker_count, report_progress)?;
+            (phone, vault_address, attempts, worker_count, false)
+        }
+    };
+    let package = build_phone_rotation(data_dir, context, new_phone)?;
+    ensure!(
+        package.new_vault_address == expected_address,
+        "vanity rotation address changed while building its proposal"
+    );
+    Ok(VanityPhoneRotation {
+        package,
+        attempts,
+        worker_count: actual_worker_count,
+        resumed,
+    })
+}
+
+fn load_rotation_context(
+    data_dir: &Path,
+    backend: &dyn HotWalletBackend,
+) -> Result<RotationContext> {
     let old_config = load_config(data_dir)?;
     ensure_backend_network(backend, &old_config)?;
+    let utxos = backend.scan_vault(&old_config)?;
+    let old_phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    Ok(RotationContext {
+        old_config,
+        utxos,
+        old_phone,
+    })
+}
+
+fn load_pending_vanity_phone(
+    data_dir: &Path,
+    old_config: &VaultConfig,
+    hww_pubkey: XOnlyPublicKey,
+    suffix: &str,
+) -> Result<Option<(DeviceKeys, String)>> {
+    let pending_path = data_dir.join(recovery::PENDING_PHONE_ROTATION_FILE);
+    if !pending_path.exists() {
+        return Ok(None);
+    }
     let network = old_config.bitcoin_network()?;
-    let new_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
+    let pending: DeviceFile = read_json(&pending_path)?;
+    if pending.kind != "pending-phone-rotation" || pending.bitcoin_network()? != network {
+        bail!("existing pending phone rotation is invalid for this vault");
+    }
+    let phone = DeviceKeys::parse_for_network_at_index(
+        &Secp256k1::new(),
+        &pending.mnemonic,
+        network,
+        pending.vault_key_index,
+    )?;
+    let policy = VaultPolicy::new_for_network(phone.vault_pubkey, hww_pubkey, network)?;
+    let expected_prefix = match network {
+        bitcoin::Network::Bitcoin => format!("bc1p{suffix}"),
+        bitcoin::Network::Regtest => format!("bcrt1p{suffix}"),
+        other => bail!("vanity rotation is unsupported on {other}"),
+    };
+    let address = policy.address.to_string();
+    if !address.starts_with(&expected_prefix) {
+        bail!(
+            "a non-vanity phone rotation is already pending; finish it before starting a vanity rotation"
+        );
+    }
+    Ok(Some((phone, address)))
+}
+
+fn build_phone_rotation(
+    data_dir: &Path,
+    context: RotationContext,
+    new_phone: DeviceKeys,
+) -> Result<PhoneRotationPackage> {
+    let RotationContext {
+        old_config,
+        utxos,
+        old_phone,
+    } = context;
+    let network = old_config.bitcoin_network()?;
     let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
     let new_policy = VaultPolicy::new_for_network(new_phone.vault_pubkey, hww_pubkey, network)?;
     let new_config = recovery::rotated_config(&old_config, &new_phone, &new_policy)?;
@@ -54,8 +189,6 @@ pub fn create_phone_rotation(
         },
     )?;
 
-    let utxos = backend.scan_vault(&old_config)?;
-    let old_phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     let sweep =
         recovery::create_cooperative_sweep(&old_config, &utxos, &new_policy.address, &old_phone)?;
     let renewed_policy =
@@ -253,4 +386,132 @@ fn archive_old_epoch(data_dir: &Path, old_config: &VaultConfig, txid: bitcoin::T
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        cold_wallet,
+        core::{
+            chain::{Blockchain, ChainTip},
+            storage::{CONFIG_FILE, initialize_vault, read_json, write_json},
+        },
+        hot_wallet::{self, HotWalletBackend},
+    };
+    use anyhow::Result;
+    use bitcoin::{
+        Address, Amount, BlockHash, Network, OutPoint, Transaction, TxOut, Txid, hashes::Hash as _,
+    };
+    use std::str::FromStr;
+
+    struct TestBackend {
+        network: Network,
+        utxos: Vec<VaultUtxo>,
+    }
+
+    impl Blockchain for TestBackend {
+        fn network(&self) -> Network {
+            self.network
+        }
+
+        fn backend_description(&self) -> String {
+            "test backend".to_owned()
+        }
+
+        fn chain_tip(&self) -> Result<ChainTip> {
+            Ok(ChainTip {
+                network: self.network,
+                height: 1,
+                median_time: 0,
+                best_block_hash: BlockHash::all_zeros(),
+            })
+        }
+
+        fn scan_vault(&self, _config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
+            Ok(self.utxos.clone())
+        }
+
+        fn broadcast(&self, transaction: &Transaction) -> Result<Txid> {
+            Ok(transaction.compute_txid())
+        }
+    }
+
+    impl HotWalletBackend for TestBackend {
+        fn sync_hot_wallet(&self, _wallet: &mut HotWallet) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn vanity_rotation_grinds_resumes_and_preserves_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let network = Network::Regtest;
+        hot_wallet::initialize(dir.path(), network).unwrap();
+        cold_wallet::initialize(dir.path(), network).unwrap();
+        let mut config = initialize_vault(dir.path()).unwrap();
+        config.monthly_limit_sats = 10_000_000;
+        config.emergency_access_limit_sats = 50_000_000;
+        write_json(&dir.path().join(CONFIG_FILE), &config).unwrap();
+
+        let script_pubkey = Address::from_str(&config.vault_address)
+            .unwrap()
+            .require_network(network)
+            .unwrap()
+            .script_pubkey();
+        let backend = TestBackend {
+            network,
+            utxos: vec![VaultUtxo {
+                outpoint: OutPoint::new(Txid::all_zeros(), 0),
+                txout: TxOut {
+                    value: Amount::from_sat(210_000_000),
+                    script_pubkey,
+                },
+                confirmation_height: 1,
+            }],
+        };
+
+        let first =
+            create_vanity_phone_rotation_with_suffix(dir.path(), &backend, "v", 4, |_| {}).unwrap();
+        assert!(!first.resumed);
+        assert!(first.attempts > 0);
+        assert_eq!(first.worker_count, 4);
+        assert!(first.package.new_vault_address.starts_with("bcrt1pv"));
+        assert_ne!(first.package.new_vault_address, config.vault_address);
+        assert_eq!(first.package.monthly_limit_sats, 10_000_000);
+        assert_eq!(first.package.emergency_access_limit_sats, 50_000_000);
+        let renewed = first.package.renewed_policy.as_ref().unwrap();
+        assert_eq!(renewed.manifest.monthly_limit_sats, 10_000_000);
+        assert_eq!(renewed.manifest.months.len(), 12);
+        assert_eq!(renewed.manifest.emergency_access_limit_sats, 50_000_000);
+        assert!(renewed.manifest.emergency_access.is_some());
+
+        let pending: DeviceFile =
+            read_json(&dir.path().join(recovery::PENDING_PHONE_ROTATION_FILE)).unwrap();
+        let pending_phone = DeviceKeys::parse_for_network_at_index(
+            &Secp256k1::new(),
+            &pending.mnemonic,
+            network,
+            pending.vault_key_index,
+        )
+        .unwrap();
+        assert_eq!(
+            pending_phone.vault_pubkey.to_string(),
+            first.package.new_phone_vault_pubkey
+        );
+
+        let second =
+            create_vanity_phone_rotation_with_suffix(dir.path(), &backend, "v", 4, |_| {}).unwrap();
+        assert!(second.resumed);
+        assert_eq!(second.attempts, 0);
+        assert_eq!(second.worker_count, 0);
+        assert_eq!(
+            second.package.new_vault_address,
+            first.package.new_vault_address
+        );
+        assert_eq!(
+            second.package.new_phone_vault_pubkey,
+            first.package.new_phone_vault_pubkey
+        );
+    }
 }
