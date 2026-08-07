@@ -1,0 +1,179 @@
+{
+  "format": "anzen-vault-output-graph",
+  "version": 1,
+  "network": "regtest",
+  "scenario": {
+    "created_at": "2026-08-03T12:00:00+00:00",
+    "input_sats": 70000000
+  },
+  "vault": {
+    "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+    "descriptor": "tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,da74a18a88e1cfc8f23aa101bc88f0381a7e86a9edd73d132a15432a1d8b0eef,a0bbe210e795419e8c1574ddc4a90e840ad64485983e7523975b937b06615ad6),{and_v(v:older(61200),pk(da74a18a88e1cfc8f23aa101bc88f0381a7e86a9edd73d132a15432a1d8b0eef)),and_v(v:older(65535),pk(a0bbe210e795419e8c1574ddc4a90e840ad64485983e7523975b937b06615ad6))}})#r2j36vtx"
+  },
+  "policy": {
+    "monthly_limit_sats": 10000000,
+    "emergency_access_limit_sats": 50000000,
+    "emergency_access_delay_seconds": 605184,
+    "fee_rate_sat_vb": 1
+  },
+  "transactions": [
+    {
+      "name": "rollover",
+      "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 205,
+      "inputs": [
+        {
+          "txid": "0000000000000000000000000000000000000000000000000000000000000000",
+          "vout": 0,
+          "value_sats": 70000000,
+          "sequence": 4294967295
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "monthly-allowance:2026-09",
+          "value_sats": 10000162,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        },
+        {
+          "vout": 1,
+          "purpose": "vault-remainder",
+          "value_sats": 59999633,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        }
+      ]
+    },
+    {
+      "name": "monthly:2026-09:authorization",
+      "txid": "995f3eb99d9694a4769cdd28888e9cee6e54b681e1a8130c00c136938f54aa06",
+      "version": 2,
+      "lock_time": 1788220800,
+      "fee_sats": 162,
+      "inputs": [
+        {
+          "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+          "vout": 0,
+          "value_sats": 10000162,
+          "sequence": 4294967294
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "hot-wallet-monthly-allowance:2026-09",
+          "value_sats": 10000000,
+          "address": "bcrt1p90h6z3p36n9hrzy7580h5l429uwchyg8uc9sz4jwzhdtuhqdl5eqkcyx0f",
+          "script_pubkey": "51202befa14431d4cb71889ea1df7a7eaa2f1d8b9107e60b01564e15dabe5c0dfd32"
+        }
+      ]
+    },
+    {
+      "name": "monthly:2026-09:revocation",
+      "txid": "00b6d93e32f7fe7a951f6374ff8e337e98955a638ceb899aa58ab05ce04e860c",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 162,
+      "inputs": [
+        {
+          "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+          "vout": 0,
+          "value_sats": 10000162,
+          "sequence": 4294967295
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "vault-monthly-revocation:2026-09",
+          "value_sats": 10000000,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        }
+      ]
+    },
+    {
+      "name": "emergency:trigger",
+      "txid": "e313b5c8a5568fb7d224aed0e10d7c4b84f40275d3e3c51e1428fa385dbb9325",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 205,
+      "inputs": [
+        {
+          "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+          "vout": 1,
+          "value_sats": 59999633,
+          "sequence": 4294967295
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "emergency-staging",
+          "value_sats": 50000162,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        },
+        {
+          "vout": 1,
+          "purpose": "vault-change",
+          "value_sats": 9999266,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        }
+      ]
+    },
+    {
+      "name": "emergency:withdrawal",
+      "txid": "aafea35052e816a1ef4096cbe746ed4e62404047bd70908602761d8b168c9b5d",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 162,
+      "inputs": [
+        {
+          "txid": "e313b5c8a5568fb7d224aed0e10d7c4b84f40275d3e3c51e1428fa385dbb9325",
+          "vout": 0,
+          "value_sats": 50000162,
+          "sequence": 4195486
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "hot-wallet-emergency-access",
+          "value_sats": 50000000,
+          "address": "bcrt1p8wpt9v4frpf3tkn0srd97pksgsxc5hs52lafxwru9kgeephvs7rqjeprhg",
+          "script_pubkey": "51203b82b2b2a9185315da6f80da5f06d0440d8a5e1457fa93387c2d919c86ec8786"
+        }
+      ]
+    },
+    {
+      "name": "emergency:cancellation",
+      "txid": "4cce3cc75e98a9da4d13dcd7ccf0b48a3f09ab597fac3f2daa760ef82010e56d",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 162,
+      "inputs": [
+        {
+          "txid": "e313b5c8a5568fb7d224aed0e10d7c4b84f40275d3e3c51e1428fa385dbb9325",
+          "vout": 0,
+          "value_sats": 50000162,
+          "sequence": 4294967295
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "vault-emergency-cancellation",
+          "value_sats": 50000000,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        }
+      ]
+    }
+  ]
+}
