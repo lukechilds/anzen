@@ -43,7 +43,7 @@ The full protocol and its trade-offs are documented in [anzen-design.md](anzen-d
 
 ## How the vault is constructed
 
-Anzen's cold storage is a Taproot address controlled by two keys: the mobile key (`M`) and the hardware-wallet key (`H`). Every cold output uses the same vault script. Bitcoin accepts a spend through any one of these paths:
+Anzen's cold storage is a Taproot address controlled by two keys: the mobile key (`phone`) and the hardware-wallet key (`hww`). Every cold output uses the same vault script. Bitcoin accepts a spend through any one of these paths:
 
 ```text
 Phone + hardware wallet                      → spend immediately
@@ -58,16 +58,27 @@ The delays belong to each individual UTXO and begin when that output confirms. T
 In human-readable logic, the policy is:
 
 ```text
-(M AND H) OR (M AFTER 61,200 BLOCKS) OR (H AFTER 65,535 BLOCKS)
+(phone AND hww)
+OR (phone AFTER 61,200 BLOCKS)
+OR (hww AFTER 65,535 BLOCKS)
 ```
 
-The corresponding Taproot Miniscript descriptor template is shown below, with `M` and `H` standing for the devices' x-only public keys:
+The same policy in minimal Taproot Miniscript descriptor notation is:
 
 ```text
-tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,M,H),{and_v(v:older(61200),pk(M)),and_v(v:older(65535),pk(H))}})
+tr(
+  NUMS,
+  {
+    multi_a(2,phone,hww),
+    {
+      and_v(v:older(61200),pk(phone)),
+      and_v(v:older(65535),pk(hww))
+    }
+  }
+)
 ```
 
-The first value is a fixed nothing-up-my-sleeve internal key with no known private key, so there is no hidden key-path spend. `multi_a(2,M,H)` is the immediate 2-of-2 path. Each `older(...)` branch is a Bitcoin-enforced relative block delay followed by a signature from the surviving key.
+`phone` and `hww` name the devices' x-only public keys. `NUMS` is Anzen's fixed nothing-up-my-sleeve internal key, which has no known private key, so there is no hidden key-path spend. `multi_a(2,phone,hww)` is the immediate 2-of-2 path. Each `older(...)` branch is a Bitcoin-enforced relative block delay followed by a signature from the surviving key.
 
 ### Annual vault layout and presigned transaction graph
 
