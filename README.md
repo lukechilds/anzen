@@ -73,9 +73,59 @@ The first value is a fixed nothing-up-my-sleeve internal key with no known priva
 
 Once per year, the phone proposes a policy and the HWW approves it once. Together they sign an annual rollover plus every transaction shown below. Only the rollover is broadcast immediately. After it confirms, the vault consists of twelve independent monthly UTXOs and one remainder UTXO; all other transactions remain encrypted on the phone until needed. This example shows a 2.1 BTC vault with 0.1 BTC monthly withdrawals and one 0.5 BTC emergency withdrawal protected by a one-week cancellation window.
 
-![A 2.1 BTC Anzen vault split into twelve confirmed monthly UTXOs and one confirmed remainder UTXO, with its conflicting presigned execute and revoke transaction paths](docs/vault-policy.svg)
+```text
+POLICY  2.1 BTC vault | 0.1 BTC monthly | 0.5 BTC emergency | 1 week emergency delay
 
-Blue solid boxes are confirmed UTXOs. Dashed square boxes are transactions signed during the annual ceremony but kept off-chain on the phone. Green transactions execute the approved policy; red transactions revoke it and return the funds to the vault. Each conflicting pair spends the same UTXO, so only one transaction in the pair can confirm:
+CONFIRMED ON CHAIN          PRESIGNED PHONE ACTION                  RESULT IF CONFIRMED
+
+Month 01  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 02  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 03  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 04  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 05  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 06  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 07  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 08  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 09  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 10  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 11  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Month 12  0.10000162 BTC ---> EXECUTE | on its 1st at 00:00 UTC ---> HOT    0.10000000 BTC
+                         ---> REVOKE  | immediately              ---> VAULT  0.10000000 BTC
+
+Each EXECUTE/REVOKE pair spends the same monthly UTXO: only one can confirm.
+
+Remainder 0.89997378 BTC ---> INITIATE | immediately --+--> STAGING      0.50000162 BTC
+                                                       +--> VAULT CHANGE 0.39997011 BTC
+
+Staging   0.50000162 BTC ---> EXECUTE | after 1 week ---> HOT    0.50000000 BTC
+                         ---> REVOKE  | immediately  ---> VAULT  0.50000000 BTC
+
+The emergency EXECUTE/REVOKE pair spends the same staging UTXO: only one can confirm.
+```
+
+The left column is the UTXO list produced by the confirmed annual rollover. The middle column is signed during the annual ceremony but remains off-chain on the phone until broadcast. For each pair, `EXECUTE` and `REVOKE` spend the same UTXO, so the first one to confirm permanently invalidates the other:
 
 - **Authorize or revoke:** an authorization releases that month's fixed limit to the hot wallet after its absolute calendar timelock. The revocation is valid immediately and returns the chunk to the vault. If revocation confirms first, the authorization is permanently invalid.
 - **Withdraw or cancel:** the emergency withdrawal becomes valid one week after the trigger confirms. Cancellation is valid immediately and returns the staged funds to the vault. If cancellation confirms first, the withdrawal is permanently invalid.
