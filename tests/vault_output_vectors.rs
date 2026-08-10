@@ -1,6 +1,7 @@
 use anzen::{
     core::{
-        EMERGENCY_ACCESS_DELAY_SECONDS, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
+        EMERGENCY_ACCESS_DELAY_SECONDS, HWW_RECOVERY_BLOCKS, MONTHLY_ALLOWANCE_DELAY_SECONDS,
+        PHONE_RECOVERY_BLOCKS,
         ceremony::{
             BatchTransaction, PolicyLimits, build_policy_proposal, read_psbt, validate_batch,
         },
@@ -47,6 +48,7 @@ struct VectorVault {
 #[derive(Serialize)]
 struct VectorPolicy {
     monthly_limit_sats: u64,
+    monthly_allowance_delay_seconds: u32,
     emergency_access_limit_sats: u64,
     emergency_access_delay_seconds: u32,
     fee_rate_sat_vb: u64,
@@ -176,7 +178,7 @@ fn vault_output_graph_matches_checked_in_json_vector() {
     let mut hot = HotWallet::ephemeral(&phone).unwrap();
     let batch = dir.path().join("batch");
     let now = Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap();
-    let input_sats = 70_000_000;
+    let input_sats = 90_000_000;
     let manifest = build_policy_proposal(
         &config,
         &[fake_utxo(&config, input_sats)],
@@ -190,34 +192,45 @@ fn vault_output_graph_matches_checked_in_json_vector() {
         &mut hot,
     )
     .unwrap();
-    assert_eq!(manifest.chunk_count, 1);
+    assert_eq!(manifest.allowance_count, 3);
     validate_batch(&config, &manifest, &batch).unwrap();
 
-    let month = &manifest.months[0];
     let emergency = manifest.emergency_access.as_ref().unwrap();
     assert_eq!(emergency.delay_seconds, EMERGENCY_ACCESS_DELAY_SECONDS);
-    let transactions = vec![
-        vector_transaction(
-            "rollover",
-            &manifest.rollover,
+    let mut transactions = vec![vector_transaction(
+        "rollover",
+        &manifest.rollover,
+        &batch,
+        vec![
+            "allowance-chain:step-1".to_owned(),
+            "vault-remainder".to_owned(),
+        ],
+    )];
+    for (index, allowance) in manifest.allowances.iter().enumerate() {
+        let mut authorization_outputs = vec![format!(
+            "hot-wallet-monthly-allowance:step-{}",
+            allowance.step
+        )];
+        if index + 1 < manifest.allowance_count {
+            authorization_outputs.push(format!("allowance-chain:step-{}", allowance.step + 1));
+        }
+        transactions.push(vector_transaction(
+            &format!("allowance:step-{}:authorization", allowance.step),
+            &allowance.authorization,
             &batch,
-            vec![
-                format!("monthly-allowance:{}", month.month),
-                "vault-remainder".to_owned(),
-            ],
-        ),
-        vector_transaction(
-            &format!("monthly:{}:authorization", month.month),
-            &month.authorization,
+            authorization_outputs,
+        ));
+        transactions.push(vector_transaction(
+            &format!("allowance:step-{}:revoke-chain", allowance.step),
+            &allowance.revocation,
             &batch,
-            vec![format!("hot-wallet-monthly-allowance:{}", month.month)],
-        ),
-        vector_transaction(
-            &format!("monthly:{}:revocation", month.month),
-            &month.revocation,
-            &batch,
-            vec![format!("vault-monthly-revocation:{}", month.month)],
-        ),
+            vec![format!(
+                "vault-revocation:step-{}-and-later",
+                allowance.step
+            )],
+        ));
+    }
+    transactions.extend([
         vector_transaction(
             "emergency:trigger",
             &emergency.trigger,
@@ -236,10 +249,10 @@ fn vault_output_graph_matches_checked_in_json_vector() {
             &batch,
             vec!["vault-emergency-cancellation".to_owned()],
         ),
-    ];
+    ]);
     let vector = VaultOutputGraphVector {
         format: "anzen-vault-output-graph",
-        version: 1,
+        version: 2,
         network: manifest.network.clone(),
         scenario: VectorScenario {
             created_at: now.to_rfc3339(),
@@ -251,6 +264,7 @@ fn vault_output_graph_matches_checked_in_json_vector() {
         },
         policy: VectorPolicy {
             monthly_limit_sats: manifest.monthly_limit_sats,
+            monthly_allowance_delay_seconds: MONTHLY_ALLOWANCE_DELAY_SECONDS,
             emergency_access_limit_sats: manifest.emergency_access_limit_sats,
             emergency_access_delay_seconds: emergency.delay_seconds,
             fee_rate_sat_vb: manifest.fee_rate_sat_vb,

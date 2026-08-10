@@ -28,13 +28,21 @@ Bitcoin does not currently provide the covenant primitives needed to express Anz
 
 Presigned policy artifacts are permissions, not essential custody state. Losing every artifact removes the convenient monthly and emergency actions but does not remove any vault-script recovery path. Keys plus the static descriptor remain sufficient to recover the underlying outputs.
 
+## Why monthly allowances form one sequential chain
+
+The annual rollover creates one allowance-chain output rather than twelve independently spendable calendar outputs. Each authorization waits for a time-based BIP68 delay of at least 30 days, releases the fixed limit, and creates the next smaller chain output. The next delay cannot begin until that authorization confirms, so unused allowances do not accumulate and the phone cannot release several missed months at once.
+
+Every live hop has an immediate conflicting revocation that returns the entire remaining chain to the vault. Confirming it invalidates both the current authorization and every descendant that depended on that authorization's txid. The resulting trade-off is deliberate: individual future allowances cannot be revoked selectively, but one phone action can cancel all remaining mobile access for the epoch.
+
+Relative delays also avoid embedding calendar dates and absolute timestamps into the annual policy. “Monthly” means a minimum 30-day cadence, encoded as 5,063 BIP68 time units (2,592,256 seconds), rather than the first day of each calendar month. This makes the security property relative to actual on-chain confirmation while keeping the transaction graph independent of wall-clock policy creation time.
+
 ## Why the vault address is static
 
 Every ordinary vault output reuses the same keys, descriptor, and address until a key rotation. This deliberately trades address-level privacy for a durable receive address, simpler backup and recovery, and easier verification. Annual rollovers already link the vault's UTXOs, so rotating addresses without rotating keys would add operational complexity with limited privacy benefit. A key rotation creates a new descriptor and address.
 
 ## Why rotation and policy rollover are separate transactions
 
-Phone-key rotation first sweeps every old-policy UTXO into one output under the new keys. If programmable policy is active, the ordinary rollover transaction then splits that output into monthly chunks and a remainder. This gives the two transactions clear responsibilities: the old keys authorize leaving the old policy, while the new keys authorize the renewed policy and its presigned children.
+Phone-key rotation first sweeps every old-policy UTXO into one output under the new keys. If programmable policy is active, the ordinary rollover transaction then splits that output into one allowance-chain output and a remainder. This gives the two transactions clear responsibilities: the old keys authorize leaving the old policy, while the new keys authorize the renewed policy and its presigned children.
 
 The separation also lets rotation use the same validation path whether monthly and emergency features are enabled or disabled, and lets renewed policy reuse the normal rollover machinery. It is not a Bitcoin requirement. A future format could make the cooperative rotation create the policy outputs directly, saving one transaction and one unconfirmed ancestor at the cost of coupling rotation validation to the policy layout.
 

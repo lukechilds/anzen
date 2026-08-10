@@ -1,10 +1,10 @@
 {
   "format": "anzen-vault-output-graph",
-  "version": 1,
+  "version": 2,
   "network": "regtest",
   "scenario": {
     "created_at": "2026-08-03T12:00:00+00:00",
-    "input_sats": 70000000
+    "input_sats": 90000000
   },
   "vault": {
     "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
@@ -12,6 +12,7 @@
   },
   "policy": {
     "monthly_limit_sats": 10000000,
+    "monthly_allowance_delay_seconds": 2592256,
     "emergency_access_limit_sats": 50000000,
     "emergency_access_delay_seconds": 605184,
     "fee_rate_sat_vb": 1
@@ -19,7 +20,7 @@
   "transactions": [
     {
       "name": "rollover",
-      "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+      "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
       "version": 2,
       "lock_time": 0,
       "fee_sats": 205,
@@ -27,61 +28,171 @@
         {
           "txid": "0000000000000000000000000000000000000000000000000000000000000000",
           "vout": 0,
-          "value_sats": 70000000,
+          "value_sats": 90000000,
           "sequence": 4294967295
         }
       ],
       "outputs": [
         {
           "vout": 0,
-          "purpose": "monthly-allowance:2026-09",
-          "value_sats": 10000162,
+          "purpose": "allowance-chain:step-1",
+          "value_sats": 30000572,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
         },
         {
           "vout": 1,
           "purpose": "vault-remainder",
-          "value_sats": 59999633,
+          "value_sats": 59999223,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
         }
       ]
     },
     {
-      "name": "monthly:2026-09:authorization",
-      "txid": "995f3eb99d9694a4769cdd28888e9cee6e54b681e1a8130c00c136938f54aa06",
+      "name": "allowance:step-1:authorization",
+      "txid": "304d32fd77d948df0d2b063e32030b527110dbf630df28d241ab5520b1e62b80",
       "version": 2,
-      "lock_time": 1788220800,
-      "fee_sats": 162,
+      "lock_time": 0,
+      "fee_sats": 205,
       "inputs": [
         {
-          "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+          "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
           "vout": 0,
-          "value_sats": 10000162,
-          "sequence": 4294967294
+          "value_sats": 30000572,
+          "sequence": 4199367
         }
       ],
       "outputs": [
         {
           "vout": 0,
-          "purpose": "hot-wallet-monthly-allowance:2026-09",
+          "purpose": "hot-wallet-monthly-allowance:step-1",
           "value_sats": 10000000,
           "address": "bcrt1p90h6z3p36n9hrzy7580h5l429uwchyg8uc9sz4jwzhdtuhqdl5eqkcyx0f",
           "script_pubkey": "51202befa14431d4cb71889ea1df7a7eaa2f1d8b9107e60b01564e15dabe5c0dfd32"
+        },
+        {
+          "vout": 1,
+          "purpose": "allowance-chain:step-2",
+          "value_sats": 20000367,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
         }
       ]
     },
     {
-      "name": "monthly:2026-09:revocation",
-      "txid": "00b6d93e32f7fe7a951f6374ff8e337e98955a638ceb899aa58ab05ce04e860c",
+      "name": "allowance:step-1:revoke-chain",
+      "txid": "39b3dd01f72b1451dc38fc9634d87fc679e8a194d4e4dcc1c13f2490c1aa1a3f",
       "version": 2,
       "lock_time": 0,
       "fee_sats": 162,
       "inputs": [
         {
-          "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+          "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
           "vout": 0,
+          "value_sats": 30000572,
+          "sequence": 4294967295
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "vault-revocation:step-1-and-later",
+          "value_sats": 30000410,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        }
+      ]
+    },
+    {
+      "name": "allowance:step-2:authorization",
+      "txid": "b726d00b8a7a0cf94629dbcd9557a33b19224ecfa8cd53f1d9d3af4a6ba317ba",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 205,
+      "inputs": [
+        {
+          "txid": "304d32fd77d948df0d2b063e32030b527110dbf630df28d241ab5520b1e62b80",
+          "vout": 1,
+          "value_sats": 20000367,
+          "sequence": 4199367
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "hot-wallet-monthly-allowance:step-2",
+          "value_sats": 10000000,
+          "address": "bcrt1p40qqa84kpphe5vtcwd8zv7v6w7p62cmupf6f60mf8pxdkcv2455qgtw98j",
+          "script_pubkey": "5120abc00e9eb6086f9a3178734e26799a7783a5637c0a749d3f69384cdb618aad28"
+        },
+        {
+          "vout": 1,
+          "purpose": "allowance-chain:step-3",
+          "value_sats": 10000162,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        }
+      ]
+    },
+    {
+      "name": "allowance:step-2:revoke-chain",
+      "txid": "be403260a1520b9b651dc6b6ee508a54b79fe55b9d248552edd26d72b0f12d3f",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 162,
+      "inputs": [
+        {
+          "txid": "304d32fd77d948df0d2b063e32030b527110dbf630df28d241ab5520b1e62b80",
+          "vout": 1,
+          "value_sats": 20000367,
+          "sequence": 4294967295
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "vault-revocation:step-2-and-later",
+          "value_sats": 20000205,
+          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
+          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        }
+      ]
+    },
+    {
+      "name": "allowance:step-3:authorization",
+      "txid": "107629579962b0b9c58308d64305574b3edc3358543cc27820a3dcec8b9f20c4",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 162,
+      "inputs": [
+        {
+          "txid": "b726d00b8a7a0cf94629dbcd9557a33b19224ecfa8cd53f1d9d3af4a6ba317ba",
+          "vout": 1,
+          "value_sats": 10000162,
+          "sequence": 4199367
+        }
+      ],
+      "outputs": [
+        {
+          "vout": 0,
+          "purpose": "hot-wallet-monthly-allowance:step-3",
+          "value_sats": 10000000,
+          "address": "bcrt1p5z45vylh6vue39806mze8wl7z360ynn0uhxd8cnr5p4swe6n5gts4pf74z",
+          "script_pubkey": "5120a0ab4613f7d3399894efd6c593bbfe1474f24e6fe5ccd3e263a06b076753a217"
+        }
+      ]
+    },
+    {
+      "name": "allowance:step-3:revoke-chain",
+      "txid": "8dc2b6b99ae73781fdf7f02bf1dfb24cc1d413a86cc45811b5147462a3ac7181",
+      "version": 2,
+      "lock_time": 0,
+      "fee_sats": 162,
+      "inputs": [
+        {
+          "txid": "b726d00b8a7a0cf94629dbcd9557a33b19224ecfa8cd53f1d9d3af4a6ba317ba",
+          "vout": 1,
           "value_sats": 10000162,
           "sequence": 4294967295
         }
@@ -89,7 +200,7 @@
       "outputs": [
         {
           "vout": 0,
-          "purpose": "vault-monthly-revocation:2026-09",
+          "purpose": "vault-revocation:step-3-and-later",
           "value_sats": 10000000,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
@@ -98,15 +209,15 @@
     },
     {
       "name": "emergency:trigger",
-      "txid": "e313b5c8a5568fb7d224aed0e10d7c4b84f40275d3e3c51e1428fa385dbb9325",
+      "txid": "bd95e1d78119402083ff13d9d722c7c680508b0dcf8c5737ad53b5faa03c601f",
       "version": 2,
       "lock_time": 0,
       "fee_sats": 205,
       "inputs": [
         {
-          "txid": "260bce86bad8554270271eaec4f3d565b0847c8200738e315dc58fd9f1a3ad59",
+          "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
           "vout": 1,
-          "value_sats": 59999633,
+          "value_sats": 59999223,
           "sequence": 4294967295
         }
       ],
@@ -121,7 +232,7 @@
         {
           "vout": 1,
           "purpose": "vault-change",
-          "value_sats": 9999266,
+          "value_sats": 9998856,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
         }
@@ -129,13 +240,13 @@
     },
     {
       "name": "emergency:withdrawal",
-      "txid": "aafea35052e816a1ef4096cbe746ed4e62404047bd70908602761d8b168c9b5d",
+      "txid": "e2bebe94d4cd77d86f023a18c48319d33e6efd605782e7e5793019328c85b19e",
       "version": 2,
       "lock_time": 0,
       "fee_sats": 162,
       "inputs": [
         {
-          "txid": "e313b5c8a5568fb7d224aed0e10d7c4b84f40275d3e3c51e1428fa385dbb9325",
+          "txid": "bd95e1d78119402083ff13d9d722c7c680508b0dcf8c5737ad53b5faa03c601f",
           "vout": 0,
           "value_sats": 50000162,
           "sequence": 4195486
@@ -153,13 +264,13 @@
     },
     {
       "name": "emergency:cancellation",
-      "txid": "4cce3cc75e98a9da4d13dcd7ccf0b48a3f09ab597fac3f2daa760ef82010e56d",
+      "txid": "c05c4f2a53ec3a5627b2e90b181a8af7a38b770634ac26c920c95c5ab435f54a",
       "version": 2,
       "lock_time": 0,
       "fee_sats": 162,
       "inputs": [
         {
-          "txid": "e313b5c8a5568fb7d224aed0e10d7c4b84f40275d3e3c51e1428fa385dbb9325",
+          "txid": "bd95e1d78119402083ff13d9d722c7c680508b0dcf8c5737ad53b5faa03c601f",
           "vout": 0,
           "value_sats": 50000162,
           "sequence": 4294967295

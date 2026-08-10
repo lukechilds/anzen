@@ -7,6 +7,7 @@ readonly DEFAULT_FUNDING_SATS=200000000
 readonly PHONE_RECOVERY_BLOCKS=61200
 readonly HWW_RECOVERY_BLOCKS=65535
 readonly BLOCKS_PER_YEAR=52560
+readonly MONTHLY_ALLOWANCE_DELAY_SECONDS=2592256
 readonly EMERGENCY_ACCESS_DELAY_SECONDS=605184
 
 CLI_OUTPUT_COLOR=$'\033[90m'
@@ -281,7 +282,7 @@ mine_to_next_height() {
     fi
 }
 
-advance_calendar_to() {
+advance_mtp_to() {
     local target=$1
     local label=$2
     local target_display
@@ -295,7 +296,7 @@ advance_calendar_to() {
         printf 'ERROR: Median Time Past did not advance beyond %s\n' "$target_display" >&2
         exit 1
     fi
-    printf 'Regtest calendar is now beyond %s.\n' "$target_display"
+    printf 'Regtest Median Time Past is now beyond %s.\n' "$target_display"
     success "$label complete."
 }
 
@@ -325,15 +326,15 @@ ceremony() {
     local proposal="${E2E_TEST}-policy.json"
     local approved="${E2E_TEST}-approved-policy.json"
     anzen_filtered '
-        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Monthly pairs:|WARNING:|Rollover txid:|Rollover fee:|Exact monthly UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
+        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Allowance steps:|Allowance hop delay:|WARNING:|Rollover txid:|Rollover fee:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
     ' "$MAIN" phone set-policy --monthly-limit "$monthly_limit" \
         --emergency-access-limit "$emergency_access_limit" \
         --output "$proposal" --now "$now"
     anzen_filtered '
-        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Monthly pairs:|Rollover txid:|Exact monthly UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
+        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Allowance steps:|Allowance hop delay:|Rollover txid:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
     ' "$MAIN" hww confirm-policy "$proposal" --output "$approved" --yes
     anzen_filtered '
-        /^(Rollover broadcast:|Active monthly limit:|Encrypted monthly transaction pairs:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
+        /^(Rollover broadcast:|Active monthly limit:|Encrypted allowance transaction pairs:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
     ' "$MAIN" phone activate-policy "$approved"
 }
 
@@ -419,66 +420,86 @@ test_setup_policy() {
     init_vault
     show_backup_metadata
     anzen "$MAIN" policy
-    printf 'Policy timestamps are derived from the current UTC date when a ceremony begins.\n'
+    printf 'Allowance delays begin from each chain output confirmation, not from a calendar date.\n'
     success "Vault policy configured and verified."
 }
 
 test_monthly_spend() {
-    local first_month first_unlock
+    local first_delay_base first_unlock second_delay_base second_unlock
     setup_vault
 
-    step "Approve one annual policy and presign all monthly transactions"
+    step "Approve one annual policy and presign the allowance chain"
     ceremony "$NOW"
+    first_delay_base=$(node_mtp)
     confirm_transaction "Confirming the annual rollover"
-    first_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
-    first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
-    printf 'First allowance: %s at %s.\n' \
-        "$first_month" "$(date -u -d "@$first_unlock" '+%Y-%m-%d %H:%M:%S UTC')"
+    first_unlock=$((first_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
+    printf 'Step 1 becomes valid about 30 days after the rollover confirms.\n'
     printf 'Each authorization and revocation is stored as its own phone-key-encrypted artifact.\n'
-    success "Twelve monthly transaction pairs presigned."
+    success "Twelve sequential allowance hops presigned."
 
     step "Attempt the first allowance before it unlocks"
-    expect_failure "the allowance is locked before 00:00 UTC on the first of its month" \
-        "$MAIN" phone authorize "$first_month"
+    expect_failure "step 1 has not completed its relative 30-day delay" \
+        "$MAIN" phone authorize 1
     success "Pre-unlock allowance correctly rejected."
 
-    advance_calendar_to "$first_unlock" "Fast-forward to the first monthly allowance"
+    advance_mtp_to "$first_unlock" "Fast-forward through the first allowance delay"
 
     step "Execute the allowance with a lower soft limit"
-    anzen "$MAIN" phone authorize "$first_month"
-    anzen "$MAIN" phone apply-soft-limit "$first_month" --limit 1000000
+    anzen "$MAIN" phone authorize 1
+    second_delay_base=$(node_mtp)
+    anzen "$MAIN" phone apply-soft-limit 1 --limit 1000000
     confirm_transaction "Confirming the authorization and soft-limit return"
     printf 'The 0.1 BTC monthly allowance retained 0.01 BTC hot and returned 0.09 BTC to cold storage (fees paid from hot funds).\n'
     status_compact
     success "0.01 BTC retained; 0.09 BTC returned cold."
+
+    step "Attempt the second hop immediately after the first"
+    expect_failure "each new chain output starts its own relative 30-day delay" \
+        "$MAIN" phone authorize 2
+    success "Step 2 did not inherit step 1's elapsed time."
+
+    second_unlock=$((second_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
+    advance_mtp_to "$second_unlock" "Fast-forward through the second allowance delay"
+    step "Execute the second sequential allowance"
+    anzen "$MAIN" phone authorize 2
+    confirm_transaction "Confirming the second allowance authorization"
+    success "Two sequential allowance hops executed."
 }
 
 test_monthly_revoke() {
-    local second_month second_unlock first_unlock revoke_time
+    local first_delay_base first_unlock second_delay_base second_unlock revoke_time
     setup_vault
 
-    step "Approve one annual policy and presign all monthly transactions"
+    step "Approve one annual policy and presign the allowance chain"
     ceremony "$NOW"
+    first_delay_base=$(node_mtp)
     confirm_transaction "Confirming the annual rollover"
-    first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
-    second_month=$(jq -r '.entries[1].month' "$MAIN/phone/schedule.json")
-    second_unlock=$(jq -r '.entries[1].unlock_timestamp' "$MAIN/phone/schedule.json")
-    revoke_time=$((first_unlock + 14 * 24 * 60 * 60))
-    success "Twelve monthly transaction pairs presigned."
+    first_unlock=$((first_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
+    success "Twelve sequential allowance hops presigned."
 
-    advance_calendar_to "$revoke_time" "Fast-forward two weeks into the first allowance month"
-    step "Revoke the next month's allowance from the phone before it unlocks"
-    anzen "$MAIN" phone revoke "$second_month"
-    confirm_transaction "Confirming the phone-only revocation"
-    printf 'The %s chunk returned to the static vault before its allowance became spendable.\n' "$second_month"
-    success "Future allowance revoked back to the vault."
+    advance_mtp_to "$first_unlock" "Fast-forward through the first allowance delay"
+    step "Execute step 1 so step 2 becomes the live chain output"
+    anzen "$MAIN" phone authorize 1
+    second_delay_base=$(node_mtp)
+    confirm_transaction "Confirming the first allowance authorization"
+    success "Step 1 released funds and created the step 2 output."
 
-    advance_calendar_to "$second_unlock" "Fast-forward to the revoked allowance month"
+    revoke_time=$((second_delay_base + 14 * 24 * 60 * 60))
+    advance_mtp_to "$revoke_time" "Fast-forward two weeks into step 2's delay"
+    step "Revoke the entire remaining allowance chain from the phone"
+    anzen "$MAIN" phone revoke 2
+    confirm_transaction "Confirming the whole-chain revocation"
+    success "Step 2 and every descendant were revoked back to the vault."
 
-    step "Attempt the revoked monthly allowance"
-    expect_failure "the authorization conflicts with the already-confirmed revocation" \
-        "$MAIN" phone authorize "$second_month"
-    success "Revoked allowance remained unspendable."
+    second_unlock=$((second_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
+    advance_mtp_to "$second_unlock" "Fast-forward beyond step 2's original delay"
+
+    step "Attempt revoked current and future allowance hops"
+    expect_failure "step 2 conflicts with the confirmed whole-chain revocation" \
+        "$MAIN" phone authorize 2
+    expect_failure "step 3 depended on the now-impossible step 2 transaction" \
+        "$MAIN" phone authorize 3
+    success "Whole-chain revocation permanently invalidated all remaining hops."
 }
 
 test_emergency_access() {
@@ -499,7 +520,7 @@ test_emergency_access() {
     success "Emergency access started; withdrawal stayed locked."
 
     unlock_time=$((relative_lock_base + EMERGENCY_ACCESS_DELAY_SECONDS))
-    advance_calendar_to "$unlock_time" "Fast-forward through the one-week cancellation window"
+    advance_mtp_to "$unlock_time" "Fast-forward through the one-week cancellation window"
 
     step "Withdraw the preconfigured emergency amount to the hot wallet"
     anzen "$MAIN" phone emergency withdraw
@@ -531,7 +552,7 @@ test_emergency_cancel() {
     success "Staged emergency funds returned to the vault."
 
     unlock_time=$((relative_lock_base + EMERGENCY_ACCESS_DELAY_SECONDS))
-    advance_calendar_to "$unlock_time" "Fast-forward beyond the cancelled withdrawal's delay"
+    advance_mtp_to "$unlock_time" "Fast-forward beyond the cancelled withdrawal's delay"
 
     step "Attempt the cancelled emergency withdrawal"
     expect_failure "the cancellation already spent the staged vault output" \
@@ -546,11 +567,11 @@ test_partial_funding() {
     ceremony "$NOW" 100000
     confirm_transaction "Confirming the partial annual rollover"
     status_compact
-    success "Earliest three allowances funded; rollover continued."
+    success "Three sequential allowances funded; rollover continued."
 }
 
 test_lost_phone() {
-    local old_address new_address first_month first_unlock
+    local old_address new_address first_delay_base first_unlock
     setup_vault
 
     step "Approve the annual vault policy before the phone is lost"
@@ -570,6 +591,7 @@ test_lost_phone() {
     step "Use the HWW to decrypt the cloud backup, then rotate the phone key"
     restore_phone "$MAIN"
     rotate_phone_key "$MAIN"
+    first_delay_base=$(node_mtp)
     new_address=$(jq -r .vault_address "$MAIN/anzen.json")
     if [[ $old_address == "$new_address" ]]; then
         printf 'ERROR: emergency key rotation reused the vault address\n' >&2
@@ -592,11 +614,10 @@ test_lost_phone() {
     fi
     success "Phone restored, key rotated, and vault policy preserved."
 
-    first_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
-    first_unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
-    advance_calendar_to "$first_unlock" "Fast-forward to the replacement phone's first allowance"
+    first_unlock=$((first_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
+    advance_mtp_to "$first_unlock" "Fast-forward through the replacement allowance delay"
     step "Use the monthly allowance preserved through rotation"
-    anzen "$MAIN" phone authorize "$first_month"
+    anzen "$MAIN" phone authorize 1
     confirm_transaction "Confirming the replacement phone's monthly authorization"
     success "Replacement phone used the preserved monthly policy."
 }
@@ -633,22 +654,22 @@ test_stolen_phone() {
 }
 
 test_lost_hww() {
-    local month unlock latest_height recovery_address target
+    local delay_base unlock latest_height recovery_address target
     setup_vault
 
     step "Presign the annual schedule before the HWW is lost"
     ceremony "$NOW"
+    delay_base=$(node_mtp)
     confirm_transaction "Confirming the annual rollover"
-    month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
-    unlock=$(jq -r '.entries[0].unlock_timestamp' "$MAIN/phone/schedule.json")
+    unlock=$((delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
     show_file_command rm -- "$MAIN/hww/device.json"
     rm -- "$MAIN/hww/device.json"
     success "Annual schedule presigned before HWW loss."
 
-    advance_calendar_to "$unlock" "Fast-forward to a presigned monthly allowance"
+    advance_mtp_to "$unlock" "Fast-forward through the first allowance delay"
 
     step "Use the phone-held allowance without the HWW"
-    anzen "$MAIN" phone authorize "$month"
+    anzen "$MAIN" phone authorize 1
     confirm_transaction "Confirming the phone-held monthly authorization"
     anzen_capture recovery_address "$MAIN" phone receive-address
     recovery_address=$(printf '%s\n' "$recovery_address" | awk '/^Hot receive address:/ {print $4}')
@@ -822,7 +843,7 @@ test_both_compromised() {
 
 test_rollover_on_time() {
     local initial_rollover_height annual_next_height pre_calendar_target anniversary
-    local old_phone_target old_month old_schedule current_mtp
+    local old_phone_target old_schedule current_mtp
     local renewed_rollover_height renewed_oldest renewed_phone_target
     setup_vault
 
@@ -831,11 +852,10 @@ test_rollover_on_time() {
     confirm_transaction "Confirming the first annual rollover"
     initial_rollover_height=$(node_height)
     old_phone_target=$((initial_rollover_height + PHONE_RECOVERY_BLOCKS))
-    old_month=$(jq -r '.entries[0].month' "$MAIN/phone/schedule.json")
     old_schedule="$DEMO_ROOT/rollover-on-time-old-schedule"
     cp -a "$MAIN" "$old_schedule"
     anzen "$MAIN" status
-    success "Initial annual rollover confirmed with twelve monthly pairs."
+    success "Initial annual rollover confirmed with twelve allowance hops."
 
     annual_next_height=$((initial_rollover_height + BLOCKS_PER_YEAR))
     pre_calendar_target=$((annual_next_height - 11))
@@ -843,7 +863,7 @@ test_rollover_on_time() {
     step "Wait one year without crossing either recovery deadline"
     mine_to_next_height "$pre_calendar_target" \
         "Mining one year of real block height for the scheduled rollover"
-    advance_calendar_to "$anniversary" "Advance the calendar to the annual rollover date"
+    advance_mtp_to "$anniversary" "Advance the calendar to the annual rollover date"
     anzen "$MAIN" status
     expect_failure "phone recovery is still locked at the scheduled rollover" \
         "$MAIN" phone recover "$MINING_ADDRESS"
@@ -869,9 +889,9 @@ test_rollover_on_time() {
     success "All funds rolled over and both recovery timers reset."
 
     step "Try a retained authorization from the previous annual schedule"
-    expect_failure "the confirmed rollover spent every old monthly chunk" \
-        "$old_schedule" phone authorize "$old_month"
-    success "Old monthly authorizations were invalidated by the rollover."
+    expect_failure "the confirmed rollover spent the old allowance-chain output" \
+        "$old_schedule" phone authorize 1
+    success "Old allowance authorizations were invalidated by the rollover."
 
     step "Reach the old phone-recovery deadline"
     mine_to_next_height "$old_phone_target" \

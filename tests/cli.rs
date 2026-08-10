@@ -95,6 +95,19 @@ fn phone_cli_exposes_the_complete_emergency_access_lifecycle() {
 }
 
 #[test]
+fn phone_cli_addresses_allowances_by_sequential_step() {
+    for command in ["authorize", "revoke", "apply-soft-limit"] {
+        Command::cargo_bin("anzen")
+            .unwrap()
+            .args(["phone", command, "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("<STEP>"))
+            .stdout(predicate::str::contains("<MONTH>").not());
+    }
+}
+
+#[test]
 fn hww_can_be_initialized_first_for_a_future_vanity_phone() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_str().unwrap();

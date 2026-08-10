@@ -196,7 +196,18 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     assert_eq!(new_config.monthly_limit_sats, 10_000_000);
     assert_eq!(new_config.emergency_access_limit_sats, 20_000_000);
     assert_eq!(rpc.scan_vault(&old_config).unwrap().len(), 0);
-    assert_eq!(rpc.scan_vault(&new_config).unwrap().len(), 13);
+    let renewed_utxos = rpc.scan_vault(&new_config).unwrap();
+    assert_eq!(
+        renewed_utxos.len(),
+        2,
+        "the renewed rollover must create one allowance-chain head and one remainder"
+    );
+    assert!(renewed_utxos.iter().any(|utxo| {
+        utxo.outpoint.txid.to_string() == renewed_schedule.rollover_txid && utxo.outpoint.vout == 0
+    }));
+    assert!(renewed_utxos.iter().any(|utxo| {
+        utxo.outpoint.txid.to_string() == renewed_schedule.rollover_txid && utxo.outpoint.vout == 1
+    }));
 }
 
 fn mine_until_next_height(rpc: &BitcoinCoreBackend, target_next_height: u64, address: &Address) {

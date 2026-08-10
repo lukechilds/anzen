@@ -84,16 +84,16 @@ enum PhoneCommand {
     },
     /// Verify an HWW-approved policy, broadcast its rollover, and store artifacts.
     ActivatePolicy { approved_policy: PathBuf },
-    /// Broadcast a presigned monthly authorization.
-    Authorize { month: String },
+    /// Broadcast the next presigned allowance authorization after its relative delay.
+    Authorize { step: u8 },
     /// Return the difference between an authorization and a lower soft limit.
     ApplySoftLimit {
-        month: String,
+        step: u8,
         #[arg(long)]
         limit: u64,
     },
-    /// Broadcast a presigned monthly revocation.
-    Revoke { month: String },
+    /// Revoke this allowance step and every later step in its chain.
+    Revoke { step: u8 },
     /// Execute or cancel the epoch's presigned emergency-access package.
     Emergency {
         #[command(subcommand)]
@@ -403,30 +403,30 @@ fn run_phone(
         PhoneCommand::ActivatePolicy { approved_policy } => {
             phone_activate_policy(data_dir, rpc_args, &approved_policy)?
         }
-        PhoneCommand::Authorize { month } => {
+        PhoneCommand::Authorize { step } => {
             broadcast_monthly(
                 data_dir,
                 rpc_args,
-                &month,
+                step,
                 core::ceremony::TransactionKind::Authorization,
             )?;
         }
-        PhoneCommand::ApplySoftLimit { month, limit } => {
+        PhoneCommand::ApplySoftLimit { step, limit } => {
             let backend = rpc_args.connect_hot(data_dir)?;
-            match hot_wallet::apply_soft_limit(data_dir, backend.as_ref(), &month, limit)? {
+            match hot_wallet::apply_soft_limit(data_dir, backend.as_ref(), step, limit)? {
                 Some(txid) => println!(
-                    "Soft limit applied for {month}: retained at most {limit} sats hot; cold-return txid={txid}"
+                    "Soft limit applied for allowance step {step}: retained at most {limit} sats hot; cold-return txid={txid}"
                 ),
                 None => println!(
-                    "Soft limit equals the monthly limit for {month}; no cold-return transaction required"
+                    "Soft limit equals the monthly limit for allowance step {step}; no cold-return transaction required"
                 ),
             }
         }
-        PhoneCommand::Revoke { month } => {
+        PhoneCommand::Revoke { step } => {
             broadcast_monthly(
                 data_dir,
                 rpc_args,
-                &month,
+                step,
                 core::ceremony::TransactionKind::Revocation,
             )?;
         }
@@ -541,7 +541,7 @@ fn run_phone(
                     );
                     println!("Policy rollover broadcast: {}", schedule.rollover_txid);
                     println!(
-                        "Encrypted monthly transaction pairs: {}",
+                        "Encrypted allowance transaction pairs: {}",
                         schedule.entries.len()
                     );
                     if let Some(emergency) = &schedule.emergency_access {
@@ -816,7 +816,7 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path)
     println!("Rollover broadcast: {}", schedule.rollover_txid);
     println!("Active monthly limit: {} sats", schedule.monthly_limit_sats);
     println!(
-        "Encrypted monthly transaction pairs: {}",
+        "Encrypted allowance transaction pairs: {}",
         schedule.entries.len()
     );
     match &schedule.emergency_access {
@@ -856,17 +856,17 @@ fn print_hww_sweep_prompt(
 fn broadcast_monthly(
     data_dir: &Path,
     rpc_args: &ChainArgs,
-    month: &str,
+    step: u8,
     kind: core::ceremony::TransactionKind,
 ) -> Result<()> {
     let backend = rpc_args.connect_hot(data_dir)?;
-    let result = hot_wallet::broadcast_monthly(data_dir, backend.as_ref(), month, kind)?;
+    let result = hot_wallet::broadcast_monthly(data_dir, backend.as_ref(), step, kind)?;
     let action = match kind {
         core::ceremony::TransactionKind::Authorization => "Authorization",
         core::ceremony::TransactionKind::Revocation => "Revocation",
     };
     println!(
-        "Broadcast {action} for {month}: {}",
+        "Broadcast {action} for allowance step {step}: {}",
         result.transaction_txid
     );
     Ok(())
@@ -909,8 +909,12 @@ fn print_active_policy(data_dir: &Path) -> Result<()> {
         println!("Monthly limit: {} sats", config.monthly_limit_sats);
         if let Ok(schedule) = hot_wallet::load_schedule(data_dir) {
             println!(
-                "Presigned monthly transaction pairs: {}",
+                "Presigned allowance transaction pairs: {}",
                 schedule.entries.len()
+            );
+            println!(
+                "Allowance hop delay: {} seconds (~30 days)",
+                schedule.monthly_delay_seconds
             );
         }
     }
@@ -1049,22 +1053,29 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
     }
     writeln!(output, "Fee rate: {} sat/vB", manifest.fee_rate_sat_vb)?;
     writeln!(output, "Total input: {} sats", manifest.total_input_sats)?;
-    writeln!(output, "Monthly pairs: {}", manifest.chunk_count)?;
-    if manifest.chunk_count < core::MONTHS_PER_ROLLOVER && manifest.monthly_limit_sats > 0 {
+    writeln!(output, "Allowance steps: {}", manifest.allowance_count)?;
+    if manifest.monthly_limit_sats > 0 {
+        writeln!(
+            output,
+            "Allowance hop delay: {} seconds (~30 days)",
+            core::MONTHLY_ALLOWANCE_DELAY_SECONDS
+        )?;
+    }
+    if manifest.allowance_count < core::MONTHS_PER_ROLLOVER && manifest.monthly_limit_sats > 0 {
         writeln!(
             output,
             "WARNING: balance funds only {} of {} monthly allowances",
-            manifest.chunk_count,
+            manifest.allowance_count,
             core::MONTHS_PER_ROLLOVER
         )?;
     }
     writeln!(output, "Rollover txid: {}", manifest.rollover.unsigned_txid)?;
     writeln!(output, "Rollover fee: {} sats", manifest.rollover.fee_sats)?;
-    if manifest.chunk_count > 0 {
+    if manifest.allowance_count > 0 {
         writeln!(
             output,
-            "Exact monthly UTXO: {} sats",
-            manifest.months[0].chunk_value_sats
+            "Initial allowance-chain UTXO: {} sats",
+            manifest.allowance_value_sats
         )?;
         writeln!(
             output,
@@ -1145,8 +1156,8 @@ fn report_rotation(package: &core::recovery::PhoneRotationPackage, stderr: bool)
         )?;
         writeln!(
             output,
-            "Renewed monthly pairs: {}",
-            policy.manifest.chunk_count
+            "Renewed allowance steps: {}",
+            policy.manifest.allowance_count
         )?;
         writeln!(
             output,

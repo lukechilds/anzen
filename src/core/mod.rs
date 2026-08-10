@@ -21,5 +21,8 @@ pub const MONTHS_PER_ROLLOVER: usize = 12;
 pub const DEFAULT_MONTHLY_LIMIT_SATS: u64 = 10_000_000;
 pub const DEFAULT_FEE_RATE_SAT_VB: u64 = 1;
 // BIP68 time locks use 512-second units. This is the smallest representable delay that is at
+// least 30 days: ceil(2_592_000 / 512) * 512 = 2_592_256 seconds.
+pub const MONTHLY_ALLOWANCE_DELAY_SECONDS: u32 = 5_063 * 512;
+// BIP68 time locks use 512-second units. This is the smallest representable delay that is at
 // least one week: ceil(604_800 / 512) * 512 = 605_184 seconds.
 pub const EMERGENCY_ACCESS_DELAY_SECONDS: u32 = 1_182 * 512;

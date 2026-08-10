@@ -267,9 +267,9 @@ pub fn activate_phone_rotation(
                 "renewed emergency access does not match the new phone address sequence"
             );
         }
-        for month in &policy.manifest.months {
-            if hot.next_receive_address()?.to_string() != month.hot_address {
-                bail!("renewed monthly policy does not match the new phone address sequence");
+        for allowance in &policy.manifest.allowances {
+            if hot.next_receive_address()?.to_string() != allowance.hot_address {
+                bail!("renewed allowance policy does not match the new phone address sequence");
             }
         }
     }
@@ -339,9 +339,9 @@ fn validate_rotation_hot_addresses(new_phone: &DeviceKeys, renewed: &PolicyPacka
             "renewed emergency access does not use the new phone's address sequence"
         );
     }
-    for month in &renewed.manifest.months {
-        if addresses.next_receive_address()?.to_string() != month.hot_address {
-            bail!("renewed monthly policy does not use the new phone's address sequence");
+    for allowance in &renewed.manifest.allowances {
+        if addresses.next_receive_address()?.to_string() != allowance.hot_address {
+            bail!("renewed allowance policy does not use the new phone's address sequence");
         }
     }
     Ok(())
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(first.package.emergency_access_limit_sats, 50_000_000);
         let renewed = first.package.renewed_policy.as_ref().unwrap();
         assert_eq!(renewed.manifest.monthly_limit_sats, 10_000_000);
-        assert_eq!(renewed.manifest.months.len(), 12);
+        assert_eq!(renewed.manifest.allowances.len(), 12);
         assert_eq!(renewed.manifest.emergency_access_limit_sats, 50_000_000);
         assert!(renewed.manifest.emergency_access.is_some());
 

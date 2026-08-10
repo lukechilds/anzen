@@ -367,36 +367,34 @@ pub fn activate_policy(
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
 
     let rollover = finalize_vault_psbt(read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?)?;
-    let mut entries = Vec::with_capacity(manifest.months.len());
-    for month in &manifest.months {
-        let authorization =
-            finalize_vault_psbt(read_psbt(&batch_dir.join(&month.authorization.psbt_file))?)?;
+    let mut entries = Vec::with_capacity(manifest.allowances.len());
+    for allowance in &manifest.allowances {
+        let authorization = finalize_vault_psbt(read_psbt(
+            &batch_dir.join(&allowance.authorization.psbt_file),
+        )?)?;
         let revocation =
-            finalize_vault_psbt(read_psbt(&batch_dir.join(&month.revocation.psbt_file))?)?;
+            finalize_vault_psbt(read_psbt(&batch_dir.join(&allowance.revocation.psbt_file))?)?;
         let authorization_path =
-            encrypted_transaction_path(data_dir, &month.month, TransactionKind::Authorization);
+            encrypted_transaction_path(data_dir, allowance.step, TransactionKind::Authorization);
         let revocation_path =
-            encrypted_transaction_path(data_dir, &month.month, TransactionKind::Revocation);
+            encrypted_transaction_path(data_dir, allowance.step, TransactionKind::Revocation);
         write_encrypted_transaction(
             &authorization_path,
             &phone.seed,
-            &month.month,
+            allowance.step,
             TransactionKind::Authorization,
-            Some(month.unlock_timestamp),
             &authorization,
         )?;
         write_encrypted_transaction(
             &revocation_path,
             &phone.seed,
-            &month.month,
+            allowance.step,
             TransactionKind::Revocation,
-            None,
             &revocation,
         )?;
         entries.push(ScheduleEntry {
-            month: month.month.clone(),
-            unlock_timestamp: month.unlock_timestamp,
-            hot_address: month.hot_address.clone(),
+            step: allowance.step,
+            hot_address: allowance.hot_address.clone(),
             authorization_file: relative_to(data_dir, &authorization_path)?,
             authorization_txid: authorization.compute_txid().to_string(),
             revocation_file: relative_to(data_dir, &revocation_path)?,
@@ -461,9 +459,10 @@ pub fn activate_policy(
         })
         .transpose()?;
     let schedule = Schedule {
-        version: 3,
+        version: 4,
         rollover_txid: rollover.compute_txid().to_string(),
         monthly_limit_sats: manifest.monthly_limit_sats,
+        monthly_delay_seconds: crate::core::MONTHLY_ALLOWANCE_DELAY_SECONDS,
         emergency_access_limit_sats: manifest.emergency_access_limit_sats,
         entries,
         emergency_access,
@@ -572,45 +571,49 @@ fn broadcast_emergency_transaction(
 pub fn broadcast_monthly(
     data_dir: &Path,
     backend: &dyn HotWalletBackend,
-    month: &str,
+    step: u8,
     kind: TransactionKind,
 ) -> Result<MonthlyBroadcastResult> {
     let schedule = load_schedule(data_dir)?;
     let entry = schedule
         .entries
         .iter()
-        .find(|entry| entry.month == month)
-        .with_context(|| format!("no monthly authorization exists for {month}"))?;
-    let file = match kind {
-        TransactionKind::Authorization => &entry.authorization_file,
-        TransactionKind::Revocation => &entry.revocation_file,
+        .find(|entry| entry.step == step)
+        .with_context(|| format!("no allowance exists for step {step}"))?;
+    let (file, expected_txid) = match kind {
+        TransactionKind::Authorization => (&entry.authorization_file, &entry.authorization_txid),
+        TransactionKind::Revocation => (&entry.revocation_file, &entry.revocation_txid),
     };
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     let artifact: EncryptedTransaction = read_json(&data_dir.join(file))?;
-    if artifact.month != month || artifact.kind != kind {
-        bail!("encrypted monthly transaction metadata does not match the requested action");
+    if artifact.version != 2
+        || artifact.step != step
+        || artifact.kind != kind
+        || artifact.txid != *expected_txid
+    {
+        bail!("encrypted allowance transaction metadata does not match the requested action");
     }
-    let purpose = transaction_purpose(month, kind, &artifact.txid);
+    let purpose = transaction_purpose(step, kind, &artifact.txid);
     let plaintext =
         crate::core::crypto::decrypt(&phone.seed, &purpose, &artifact.encrypted_transaction)?;
-    let transaction: Transaction =
-        consensus::deserialize(&plaintext).context("decrypted monthly transaction was invalid")?;
+    let transaction: Transaction = consensus::deserialize(&plaintext)
+        .context("decrypted allowance transaction was invalid")?;
     if transaction.compute_txid().to_string() != artifact.txid {
-        bail!("decrypted monthly transaction ID does not match its metadata");
+        bail!("decrypted allowance transaction ID does not match its metadata");
     }
     // TODO(production): revocations need a phone-available CPFP path. The fixed 1 sat/vB MVP fee
     // is deterministic on regtest and explicitly unsafe under dangerously enabled mainnet mode.
     let transaction_txid = backend
         .broadcast(&transaction)
-        .with_context(|| format!("failed to broadcast {kind:?} for {month}"))?;
+        .with_context(|| format!("failed to broadcast {kind:?} for allowance step {step}"))?;
     Ok(MonthlyBroadcastResult { transaction_txid })
 }
 
 pub fn load_schedule(data_dir: &Path) -> Result<Schedule> {
     let schedule: Schedule = read_json(&data_dir.join(SCHEDULE_FILE))?;
-    if schedule.version != 3 {
+    if schedule.version != 4 {
         bail!("unsupported active policy version; approve a new vault policy");
     }
     Ok(schedule)
@@ -619,7 +622,7 @@ pub fn load_schedule(data_dir: &Path) -> Result<Schedule> {
 pub fn apply_soft_limit(
     data_dir: &Path,
     backend: &dyn HotWalletBackend,
-    month: &str,
+    step: u8,
     soft_limit_sats: u64,
 ) -> Result<Option<Txid>> {
     let schedule = load_schedule(data_dir)?;
@@ -628,8 +631,8 @@ pub fn apply_soft_limit(
     let entry = schedule
         .entries
         .iter()
-        .find(|entry| entry.month == month)
-        .with_context(|| format!("no monthly authorization exists for {month}"))?;
+        .find(|entry| entry.step == step)
+        .with_context(|| format!("no allowance exists for step {step}"))?;
     let authorization_txid = entry.authorization_txid.parse()?;
     let mut wallet = HotWallet::open_or_create(data_dir)?;
     backend.sync_hot_wallet(&mut wallet)?;
@@ -797,11 +800,11 @@ fn read_psbt(path: &Path) -> Result<Psbt> {
 
 fn encrypted_transaction_path(
     data_dir: &Path,
-    month: &str,
+    step: u8,
     kind: TransactionKind,
 ) -> std::path::PathBuf {
     data_dir.join(format!(
-        "phone/transactions/{month}-{}.json",
+        "phone/transactions/allowance-{step:02}-{}.json",
         transaction_kind_name(kind)
     ))
 }
@@ -820,23 +823,21 @@ fn emergency_transaction_path(
 fn write_encrypted_transaction(
     path: &Path,
     phone_seed: &[u8],
-    month: &str,
+    step: u8,
     kind: TransactionKind,
-    unlock_timestamp: Option<u32>,
     transaction: &Transaction,
 ) -> Result<()> {
     let txid = transaction.compute_txid().to_string();
-    let purpose = transaction_purpose(month, kind, &txid);
+    let purpose = transaction_purpose(step, kind, &txid);
     let encrypted_transaction =
         crate::core::crypto::encrypt(phone_seed, &purpose, &consensus::serialize(transaction))?;
     write_json(
         path,
         &EncryptedTransaction {
-            version: 1,
-            month: month.to_owned(),
+            version: 2,
+            step,
             kind,
             txid,
-            unlock_timestamp,
             encrypted_transaction,
         },
     )
@@ -875,8 +876,8 @@ fn emergency_transaction_kind_name(kind: EmergencyTransactionKind) -> &'static s
     }
 }
 
-fn transaction_purpose(month: &str, kind: TransactionKind, txid: &str) -> String {
-    format!("monthly/{month}/{}/{txid}", transaction_kind_name(kind))
+fn transaction_purpose(step: u8, kind: TransactionKind, txid: &str) -> String {
+    format!("allowance/{step}/{}/{txid}", transaction_kind_name(kind))
 }
 
 fn transaction_kind_name(kind: TransactionKind) -> &'static str {

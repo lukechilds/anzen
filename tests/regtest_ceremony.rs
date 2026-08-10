@@ -1,7 +1,7 @@
 use anzen::{
     cold_wallet,
     core::{
-        EMERGENCY_ACCESS_DELAY_SECONDS,
+        EMERGENCY_ACCESS_DELAY_SECONDS, MONTHLY_ALLOWANCE_DELAY_SECONDS,
         ceremony::TransactionKind,
         chain::{BitcoinCoreBackend, RpcConfig},
         storage::{initialize_vault, set_policy_limits},
@@ -26,7 +26,7 @@ fn rpc_from_env() -> BitcoinCoreBackend {
 
 #[test]
 #[ignore = "requires a disposable Bitcoin Core regtest node"]
-fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
+fn real_regtest_runs_sequential_allowances_whole_chain_revocation_and_soft_limit() {
     let dir = tempfile::tempdir().unwrap();
     hot_wallet::initialize(dir.path(), Network::Regtest).unwrap();
     cold_wallet::initialize(dir.path(), Network::Regtest).unwrap();
@@ -49,52 +49,74 @@ fn real_regtest_runs_rollover_authorization_revocation_and_soft_limit() {
     let batch_dir = dir.path().join("batch");
     let prepared =
         hot_wallet::propose_policy(dir.path(), &rpc, now, 10_000_000, 0, &batch_dir).unwrap();
-    assert_eq!(prepared.chunk_count, 12);
+    assert_eq!(prepared.allowance_count, 12);
     let approved = cold_wallet::approve_policy(dir.path(), &batch_dir).unwrap();
     assert!(approved.hww_approved);
     let schedule = hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
+    let first_delay_base = rpc.chain_info().unwrap().median_time;
     rpc.mine(1, &mining_address).unwrap();
-    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 13);
+    assert_eq!(rpc.scan_vault(&config).unwrap().len(), 2);
 
     let first = schedule.entries[0].clone();
     let second = schedule.entries[1].clone();
-    let premature = hot_wallet::broadcast_monthly(
-        dir.path(),
-        &rpc,
-        &first.month,
-        TransactionKind::Authorization,
-    )
-    .unwrap_err();
-    assert!(format!("{premature:#}").contains("non-final"));
+    let third = schedule.entries[2].clone();
+    let fourth = schedule.entries[3].clone();
+    let premature =
+        hot_wallet::broadcast_monthly(dir.path(), &rpc, first.step, TransactionKind::Authorization)
+            .unwrap_err();
+    let premature = format!("{premature:#}");
+    assert!(premature.contains("non-BIP68-final") || premature.contains("non-final"));
 
-    hot_wallet::broadcast_monthly(dir.path(), &rpc, &second.month, TransactionKind::Revocation)
+    let first_unlock = u32::try_from(first_delay_base).unwrap() + MONTHLY_ALLOWANCE_DELAY_SECONDS;
+    advance_mtp(&rpc, first_unlock, &mining_address);
+    hot_wallet::broadcast_monthly(dir.path(), &rpc, first.step, TransactionKind::Authorization)
         .unwrap();
+    let second_delay_base = rpc.chain_info().unwrap().median_time;
     rpc.mine(1, &mining_address).unwrap();
-
-    advance_mtp(&rpc, first.unlock_timestamp, &mining_address);
-    hot_wallet::broadcast_monthly(
-        dir.path(),
-        &rpc,
-        &first.month,
-        TransactionKind::Authorization,
-    )
-    .unwrap();
-    rpc.mine(1, &mining_address).unwrap();
-    let soft_return = hot_wallet::apply_soft_limit(dir.path(), &rpc, &first.month, 1_000_000)
+    let soft_return = hot_wallet::apply_soft_limit(dir.path(), &rpc, first.step, 1_000_000)
         .unwrap()
         .unwrap();
     assert_ne!(soft_return.to_string(), first.authorization_txid);
     rpc.mine(1, &mining_address).unwrap();
 
-    advance_mtp(&rpc, second.unlock_timestamp, &mining_address);
-    let revoked = hot_wallet::broadcast_monthly(
+    let premature_second = hot_wallet::broadcast_monthly(
         dir.path(),
         &rpc,
-        &second.month,
+        second.step,
         TransactionKind::Authorization,
     )
     .unwrap_err();
-    assert!(format!("{revoked:#}").contains("missingorspent"));
+    let premature_second = format!("{premature_second:#}");
+    assert!(premature_second.contains("non-BIP68-final") || premature_second.contains("non-final"));
+
+    let second_unlock = u32::try_from(second_delay_base).unwrap() + MONTHLY_ALLOWANCE_DELAY_SECONDS;
+    advance_mtp(&rpc, second_unlock, &mining_address);
+    hot_wallet::broadcast_monthly(
+        dir.path(),
+        &rpc,
+        second.step,
+        TransactionKind::Authorization,
+    )
+    .unwrap();
+    let third_delay_base = rpc.chain_info().unwrap().median_time;
+    rpc.mine(1, &mining_address).unwrap();
+
+    hot_wallet::broadcast_monthly(dir.path(), &rpc, third.step, TransactionKind::Revocation)
+        .unwrap();
+    rpc.mine(1, &mining_address).unwrap();
+
+    let third_unlock = u32::try_from(third_delay_base).unwrap() + MONTHLY_ALLOWANCE_DELAY_SECONDS;
+    advance_mtp(&rpc, third_unlock, &mining_address);
+    for revoked_step in [third.step, fourth.step] {
+        let revoked = hot_wallet::broadcast_monthly(
+            dir.path(),
+            &rpc,
+            revoked_step,
+            TransactionKind::Authorization,
+        )
+        .unwrap_err();
+        assert!(format!("{revoked:#}").contains("missingorspent"));
+    }
 }
 
 #[test]
