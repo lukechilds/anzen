@@ -1,140 +1,238 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" role="img" aria-labelledby="title description">
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="532"
+  height="1008"
+  viewBox="0 0 532 1008"
+  role="img"
+  aria-labelledby="title description"
+>
   <title id="title">Anzen annual vault transaction graph</title>
-  <desc id="description">A 2.1 bitcoin vault has one confirmed 1.20002417 bitcoin allowance-chain output and one confirmed 0.89997378 bitcoin remainder. Each allowance authorization waits about 30 days, sends 0.1 bitcoin hot, and creates the next chain output. Its immediate conflicting revocation returns the entire remaining chain to the vault and invalidates all descendants. The remainder can trigger a 0.5 bitcoin emergency withdrawal with a one-week delay or immediate cancellation.</desc>
-  <defs>
-    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L8 4 L0 8 Z" fill="var(--line)" />
-    </marker>
-  </defs>
+  <desc id="description">The simplified on-chain structure of a 2.1 bitcoin vault after the annual ceremony, with transaction fees omitted. One confirmed 1.2 bitcoin allowance-chain output feeds twelve sequential presigned authorization transactions. Each authorization can release 0.1 bitcoin after a relative 30-day delay and is the parent of the next authorization and revocation pair. Every pair has an immediate conflicting revocation that returns the entire remaining chain to the vault. A separate confirmed 0.9 bitcoin remainder funds a presigned 0.5 bitcoin emergency withdrawal with a one-week cancellation window and 0.4 bitcoin of cold change.</desc>
   <style>
-    :root { --bg:#fff; --fg:#171717; --muted:#666; --line:#8a8a8a; --rule:#d4d4d4; --blue:#0284c7; --green:#16a34a; --red:#dc2626; --green-bg:#f0fdf4; --red-bg:#fef2f2; --blue-bg:#f0f9ff; }
-    @media (prefers-color-scheme: dark) { :root { --bg:#0a0a0a; --fg:#ededed; --muted:#a3a3a3; --line:#737373; --rule:#404040; --blue:#38bdf8; --green:#4ade80; --red:#f87171; --green-bg:#092d18; --red-bg:#351010; --blue-bg:#082f49; } }
-    .background { fill:var(--bg); }
-    text { fill:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; }
-    .title { font-size:22px; font-weight:700; }
-    .subtitle { fill:var(--muted); font-size:13px; }
-    .section { font-size:13px; font-weight:650; }
-    .small { fill:var(--muted); font-size:11px; }
-    .label { font-size:12px; font-weight:650; }
-    .amount { font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace; }
-    .utxo rect { fill:var(--blue-bg); stroke:var(--blue); stroke-width:1.5; }
-    .future rect { stroke-dasharray:6 4; }
-    .tx rect { stroke-width:1.5; }
-    .execute rect { fill:var(--green-bg); stroke:var(--green); }
-    .revoke rect { fill:var(--red-bg); stroke:var(--red); }
-    .neutral rect { fill:var(--bg); stroke:var(--line); }
-    .graph { fill:none; stroke:var(--rule); stroke-width:1.5; stroke-dasharray:7 5; }
-    .arrow { fill:none; stroke:var(--line); stroke-width:1.4; marker-end:url(#arrow); }
-    .conflict { fill:none; stroke:var(--red); stroke-width:1.2; stroke-dasharray:3 3; }
-    .execute-text { fill:var(--green); }
-    .revoke-text { fill:var(--red); }
+    :root {
+      --bg: #fafafa;
+      --fg: #171717;
+      --dim: #737373;
+      --rule: #e5e5e5;
+      --accent: #0ea5e9;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0a0a0a;
+        --fg: #e5e5e5;
+        --dim: #737373;
+        --rule: #262626;
+        --accent: #38bdf8;
+      }
+    }
+    text {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      text-anchor: middle;
+    }
+    .d-note {
+      fill: var(--dim);
+      font-size: 12px;
+    }
+    .d-note.start {
+      text-anchor: start;
+    }
+    .d-step {
+      fill: var(--dim);
+      font-size: 10.5px;
+    }
+    .d-utxo rect {
+      fill: var(--bg);
+      stroke: var(--accent);
+      stroke-width: 1.5;
+    }
+    .d-utxo.future rect {
+      stroke-dasharray: 4 3;
+    }
+    .d-utxo text {
+      fill: var(--fg);
+      font: 500 11.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .d-branchline {
+      fill: none;
+      stroke: var(--dim);
+      stroke-opacity: 0.55;
+      stroke-width: 1.25;
+    }
+    .d-branch {
+      fill: var(--dim);
+      font-size: 11.5px;
+      text-anchor: start;
+    }
+    .d-tx rect {
+      fill: var(--bg);
+      stroke: var(--dim);
+      stroke-opacity: 0.45;
+      stroke-width: 1.25;
+    }
+    .d-tx text {
+      fill: var(--dim);
+      font-size: 10.5px;
+      text-anchor: start;
+    }
+    .d-tx .d-when {
+      text-anchor: end;
+    }
+    .d-ok circle,
+    .d-no circle {
+      fill: var(--bg);
+      stroke: var(--dim);
+      stroke-opacity: 0.45;
+      stroke-width: 1.25;
+    }
+    .d-ok path {
+      fill: none;
+      stroke: #22c55e;
+      stroke-width: 1.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .d-no line {
+      stroke: #ef4444;
+      stroke-width: 1.2;
+      stroke-linecap: round;
+    }
+    .d-rule {
+      stroke: var(--rule);
+      stroke-width: 1;
+    }
   </style>
 
-  <rect class="background" width="960" height="720" />
-  <text class="title" x="30" y="36">2.1 BTC annual vault policy</text>
-  <text class="subtitle" x="30" y="59">0.1 BTC allowance every ≥30 days · up to 12 hops · 0.5 BTC emergency access after ≥1 week</text>
+  <text class="d-note" x="76" y="20">Vault UTXOs</text>
+  <text class="d-branch" x="170" y="20">Presigned transactions</text>
+  <text class="d-step" x="76" y="39">Confirmed allowance chain</text>
 
-  <text class="section" x="30" y="95">Confirmed on-chain after annual rollover</text>
-  <g class="utxo">
-    <rect x="30" y="112" width="180" height="66" rx="10" />
-    <text class="label" x="46" y="136">Allowance chain · step 1</text>
-    <text class="amount" x="46" y="160">1.20002417 BTC</text>
+  <g class="d-utxo">
+    <rect x="18" y="47" width="116" height="311" rx="17" />
+    <text x="76" y="207">1.2 BTC</text>
   </g>
-  <g class="utxo">
-    <rect x="30" y="505" width="180" height="66" rx="10" />
-    <text class="label" x="46" y="529">Emergency remainder</text>
-    <text class="amount" x="46" y="553">0.89997378 BTC</text>
+  <path class="d-branchline" d="M134 64 H142 M142 64 L170 52 M142 64 L170 78" />
+  <g class="d-tx">
+    <rect x="170" y="43" width="356" height="18" rx="9" />
+    <text x="180" y="56">Step 1: release 0.1 BTC</text>
+    <text class="d-when" x="516" y="56">after ≥30 days</text>
   </g>
-
-  <rect class="graph" x="240" y="82" width="690" height="382" rx="14" />
-  <text class="section" x="258" y="108">Presigned allowance graph · encrypted on phone</text>
-  <text class="small" x="905" y="108" text-anchor="end">dashed UTXOs do not exist until their parent confirms</text>
-
-  <path class="arrow" d="M210 132 H270" />
-  <path class="arrow" d="M210 158 C235 158 240 218 270 218" />
-  <g class="tx execute">
-    <rect x="270" y="120" width="215" height="58" rx="9" />
-    <text class="label execute-text" x="286" y="143">Authorize step 1</text>
-    <text class="small" x="286" y="163">valid ≥30 days after rollover confirms</text>
+  <g class="d-tx">
+    <rect x="170" y="69" width="356" height="18" rx="9" />
+    <text x="180" y="82">Revoke steps 1–12 back to vault</text>
+    <text class="d-when" x="516" y="82">immediately</text>
   </g>
-  <g class="tx revoke">
-    <rect x="270" y="196" width="215" height="58" rx="9" />
-    <text class="label revoke-text" x="286" y="219">Revoke at step 1</text>
-    <text class="small" x="286" y="239">valid immediately · cancels steps 1–12</text>
+  <g class="d-ok">
+    <circle cx="152" cy="55" r="5" />
+    <path d="M150 55 l1.4 1.7 l2.7 -3.4" />
   </g>
-  <path class="conflict" d="M258 149 V225" />
-  <text class="small revoke-text" x="251" y="188" text-anchor="end">conflict</text>
-
-  <path class="arrow" d="M485 135 C520 135 520 132 555 132" />
-  <path class="arrow" d="M485 163 C520 163 520 207 555 207" />
-  <g class="utxo">
-    <rect x="555" y="116" width="154" height="42" rx="8" />
-    <text class="amount" x="632" y="142" text-anchor="middle">0.1 BTC hot</text>
-  </g>
-  <g class="utxo future">
-    <rect x="555" y="184" width="154" height="50" rx="8" />
-    <text class="label" x="632" y="204" text-anchor="middle">Chain · step 2</text>
-    <text class="amount" x="632" y="223" text-anchor="middle">1.10002212 BTC</text>
-  </g>
-  <path class="arrow" d="M485 225 C520 225 520 271 555 271" />
-  <g class="utxo future">
-    <rect x="555" y="250" width="154" height="42" rx="8" />
-    <text class="label revoke-text" x="632" y="269" text-anchor="middle">Back to vault</text>
-    <text class="small" x="632" y="284" text-anchor="middle">entire remaining chain</text>
+  <g class="d-no">
+    <circle cx="152" cy="77" r="5" />
+    <line x1="150.4" y1="75.4" x2="153.6" y2="78.6" />
+    <line x1="153.6" y1="75.4" x2="150.4" y2="78.6" />
   </g>
 
-  <path class="arrow" d="M709 209 H750" />
-  <g class="tx execute">
-    <rect x="750" y="180" width="154" height="58" rx="9" />
-    <text class="label execute-text" x="827" y="203" text-anchor="middle">Authorize step 2</text>
-    <text class="small" x="827" y="223" text-anchor="middle">another ≥30 days</text>
-  </g>
-  <text class="title" x="827" y="277" text-anchor="middle">⋮</text>
-  <g class="tx execute">
-    <rect x="750" y="300" width="154" height="58" rx="9" />
-    <text class="label execute-text" x="827" y="323" text-anchor="middle">Authorize step 12</text>
-    <text class="small" x="827" y="343" text-anchor="middle">0.1 BTC hot · chain ends</text>
-  </g>
-  <g class="tx revoke">
-    <rect x="555" y="334" width="154" height="58" rx="9" />
-    <text class="label revoke-text" x="632" y="357" text-anchor="middle">Revoke live hop</text>
-    <text class="small" x="632" y="377" text-anchor="middle">cancels every descendant</text>
-  </g>
-  <path class="arrow" d="M632 234 V334" />
-  <text class="small" x="258" y="436">Only one chain UTXO is live. A later step's 30-day clock starts only when the previous authorization confirms.</text>
+  <path class="d-branchline" d="M526 52 H528 V124 H142 V166 M142 166 L170 153 M142 166 L170 179" />
+  <text class="d-note start" x="154" y="111">step 1 execution is the parent of step 2</text>
 
-  <rect class="graph" x="240" y="485" width="690" height="205" rx="14" />
-  <text class="section" x="258" y="511">Presigned emergency graph · independent of the allowance chain</text>
-  <path class="arrow" d="M210 538 H270" />
-  <g class="tx neutral">
-    <rect x="270" y="520" width="150" height="52" rx="9" />
-    <text class="label" x="345" y="542" text-anchor="middle">Trigger</text>
-    <text class="small" x="345" y="560" text-anchor="middle">valid immediately</text>
+  <g class="d-tx">
+    <rect x="170" y="144" width="356" height="18" rx="9" />
+    <text x="180" y="157">Step 2: release 0.1 BTC</text>
+    <text class="d-when" x="516" y="157">after ≥30 days</text>
   </g>
-  <path class="arrow" d="M420 538 H470" />
-  <path class="arrow" d="M420 558 C445 558 445 637 470 637" />
-  <g class="utxo future">
-    <rect x="470" y="520" width="155" height="52" rx="8" />
-    <text class="label" x="547" y="542" text-anchor="middle">Staging output</text>
-    <text class="amount" x="547" y="561" text-anchor="middle">0.50000162 BTC</text>
+  <g class="d-tx">
+    <rect x="170" y="170" width="356" height="18" rx="9" />
+    <text x="180" y="183">Revoke steps 2–12 back to vault</text>
+    <text class="d-when" x="516" y="183">immediately</text>
   </g>
-  <g class="utxo future">
-    <rect x="470" y="614" width="155" height="46" rx="8" />
-    <text class="label" x="547" y="634" text-anchor="middle">Cold change</text>
-    <text class="amount" x="547" y="652" text-anchor="middle">0.39997011 BTC</text>
+  <g class="d-ok">
+    <circle cx="152" cy="156" r="5" />
+    <path d="M150 156 l1.4 1.7 l2.7 -3.4" />
   </g>
-  <path class="arrow" d="M625 538 H670" />
-  <path class="arrow" d="M625 554 C650 554 650 628 670 628" />
-  <g class="tx execute">
-    <rect x="670" y="520" width="225" height="52" rx="9" />
-    <text class="label execute-text" x="686" y="542">Withdraw 0.5 BTC hot</text>
-    <text class="small" x="686" y="560">valid ≥1 week after trigger confirms</text>
-  </g>
-  <g class="tx revoke">
-    <rect x="670" y="604" width="225" height="52" rx="9" />
-    <text class="label revoke-text" x="686" y="626">Cancel back to vault</text>
-    <text class="small" x="686" y="644">valid immediately · conflicts with withdrawal</text>
+  <g class="d-no">
+    <circle cx="152" cy="178" r="5" />
+    <line x1="150.4" y1="176.4" x2="153.6" y2="179.6" />
+    <line x1="153.6" y1="176.4" x2="150.4" y2="179.6" />
   </g>
 
-  <text class="small" x="30" y="704">Amounts include fixed 1 sat/vB MVP fees. Green executes policy; red revokes it.</text>
+  <path class="d-branchline" d="M526 153 H528 V211 H142" />
+  <text class="d-note" x="142" y="239" style="font-size: 24px">⋮</text>
+  <path class="d-branchline" d="M142 251 V317 M142 317 L170 304 M142 317 L170 330" />
+  <text class="d-branch" x="170" y="229">Steps 3–11 repeat the same pair</text>
+  <text class="d-note start" x="170" y="248">Each execution becomes the parent of the next pair.</text>
+
+  <g class="d-tx">
+    <rect x="170" y="295" width="356" height="18" rx="9" />
+    <text x="180" y="308">Step 12: release the final 0.1 BTC</text>
+    <text class="d-when" x="516" y="308">after ≥30 days</text>
+  </g>
+  <g class="d-tx">
+    <rect x="170" y="321" width="356" height="18" rx="9" />
+    <text x="180" y="334">Revoke the final remaining chain back to vault</text>
+    <text class="d-when" x="516" y="334">immediately</text>
+  </g>
+  <g class="d-ok">
+    <circle cx="152" cy="307" r="5" />
+    <path d="M150 307 l1.4 1.7 l2.7 -3.4" />
+  </g>
+  <g class="d-no">
+    <circle cx="152" cy="329" r="5" />
+    <line x1="150.4" y1="327.4" x2="153.6" y2="330.6" />
+    <line x1="153.6" y1="327.4" x2="150.4" y2="330.6" />
+  </g>
+
+  <text class="d-note start" x="18" y="385">Each execution spends the output created by the preceding execution.</text>
+  <text class="d-note start" x="18" y="404">Intermediate chain outputs are implicit in this simplified view.</text>
+  <text class="d-note start" x="18" y="423">Its paired revocation returns the remaining chain to the vault and ends all later steps.</text>
+  <line class="d-rule" x1="18" y1="448" x2="526" y2="448" />
+
+  <text class="d-note" x="76" y="475">Confirmed remainder</text>
+  <text class="d-branch" x="170" y="475">Presigned emergency access</text>
+  <g class="d-utxo">
+    <rect x="18" y="493" width="116" height="250" rx="17" />
+    <text x="76" y="622">0.9 BTC</text>
+  </g>
+  <line class="d-branchline" x1="134" y1="618" x2="170" y2="618" />
+  <g class="d-tx">
+    <rect x="170" y="609" width="238" height="18" rx="9" />
+    <text x="180" y="622">Emergency trigger</text>
+    <text class="d-when" x="398" y="622">immediately</text>
+  </g>
+  <path class="d-branchline" d="M182 627 V936 M182 737 H194 M182 936 H194" />
+
+  <text class="d-step" x="252" y="660">Future staging output</text>
+  <g class="d-utxo future">
+    <rect x="194" y="670" width="116" height="134" rx="17" />
+    <text x="252" y="741">0.5 BTC</text>
+  </g>
+  <line class="d-branchline" x1="310" y1="737" x2="338" y2="724" />
+  <line class="d-branchline" x1="310" y1="737" x2="338" y2="750" />
+  <g class="d-tx">
+    <rect x="338" y="715" width="188" height="18" rx="9" />
+    <text x="348" y="728">Withdraw 0.5 BTC</text>
+    <text class="d-when" x="516" y="728">after ≥1 week</text>
+  </g>
+  <g class="d-tx">
+    <rect x="338" y="741" width="188" height="18" rx="9" />
+    <text x="348" y="754">Cancel back to vault</text>
+    <text class="d-when" x="516" y="754">immediately</text>
+  </g>
+  <g class="d-ok">
+    <circle cx="322" cy="727" r="5" />
+    <path d="M320 727 l1.4 1.7 l2.7 -3.4" />
+  </g>
+  <g class="d-no">
+    <circle cx="322" cy="749" r="5" />
+    <line x1="320.4" y1="747.4" x2="323.6" y2="750.6" />
+    <line x1="323.6" y1="747.4" x2="320.4" y2="750.6" />
+  </g>
+
+  <text class="d-step" x="252" y="852">Future cold change</text>
+  <g class="d-utxo future">
+    <rect x="194" y="862" width="116" height="108" rx="17" />
+    <text x="252" y="920">0.4 BTC</text>
+  </g>
+  <line class="d-branchline" x1="310" y1="916" x2="346" y2="916" />
+  <text class="d-branch" x="354" y="920">Change stays in vault</text>
+
+  <text class="d-note start" x="18" y="995">Round amounts shown; transaction fees omitted. Green executes policy; red revokes it.</text>
 </svg>
