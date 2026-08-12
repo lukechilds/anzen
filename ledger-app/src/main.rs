@@ -19,7 +19,7 @@ extern "C" fn sample_main() {
         let message = if show_anzen {
             "Hello Anzen"
         } else {
-            "Hello world"
+            "Hello World"
         };
 
         let _ = NbglAction::new()

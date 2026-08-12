@@ -25,21 +25,21 @@
       }
 
       .viewer {
-        padding: 28px;
+        padding: 24px;
       }
 
       .device {
         position: relative;
         /* Ledger publishes 56.5 x 78.4 mm for the Flex front face. */
-        width: min(565px, 82vw, calc((100vh - 56px) * 0.720663));
+        width: min(283px, 82vw, calc((100vh - 48px) * 0.720663));
         aspect-ratio: 56.5 / 78.4;
-        border-radius: 7.25% / 5.22%;
+        border-radius: 5.2% / 3.75%;
         background:
           linear-gradient(112deg, #74777a 0%, #55585b 5%, #3b3e41 48%, #292c2f 74%, #505356 100%);
         border: 1px solid #8a8d90;
         box-shadow:
-          0 46px 78px #000c,
-          0 10px 22px #0009,
+          0 23px 39px #000c,
+          0 5px 11px #0009,
           inset 1px 1px 1px #ffffff5c,
           inset -2px -2px 5px #08090bb8;
       }
@@ -50,13 +50,14 @@
         inset: 0.7%;
         pointer-events: none;
         border: 1px solid #0b0c0e;
-        border-radius: 6.75% / 4.9%;
+        border-radius: 4.8% / 3.45%;
         box-shadow: inset 0 0 0 1px #ffffff0d;
       }
 
       .screen-shell {
         position: absolute;
-        top: 5.45%;
+        /* The horizontal and vertical margins are both about 5.7 mm. */
+        top: 7.3%;
         left: 10.1%;
         width: 79.8%;
         aspect-ratio: 4 / 5;
@@ -65,9 +66,9 @@
         background: #e7e7e5;
         border: 1px solid #0a0b0c;
         box-shadow:
-          0 0 0 2px #111316,
-          0 3px 9px #0009,
-          inset 0 0 10px #0002;
+          0 0 0 1px #111316,
+          0 2px 5px #0009,
+          inset 0 0 5px #0002;
         touch-action: none;
         user-select: none;
         cursor: pointer;
@@ -84,29 +85,34 @@
 
       .chin {
         position: absolute;
-        left: 2.8%;
-        bottom: 1.1%;
-        width: 94.4%;
-        height: 16.2%;
-        border-radius: 13% 13% 5% 5% / 27% 27% 10% 10%;
+        left: 1.1%;
+        bottom: 0.5%;
+        width: 97.8%;
+        height: 16.8%;
+        border-radius: 7% 7% 4.8% 4.8% / 15% 15% 9% 9%;
         background:
           linear-gradient(176deg, #f1f2f2 0%, #d5d7d8 40%, #a9acae 76%, #6e7275 100%);
         border: 1px solid #8e9295;
         box-shadow:
-          inset 0 2px 2px #ffffffc7,
-          inset 0 -3px 5px #40434755,
-          0 2px 5px #0008;
+          inset 0 1px 1px #ffffffc7,
+          inset 0 -2px 3px #40434755,
+          0 1px 3px #0008;
         pointer-events: none;
       }
 
       .ledger-mark {
         position: absolute;
-        left: 8.5%;
-        top: 34%;
-        width: 10.5%;
+        left: 7.4%;
+        top: 31%;
+        width: 10.2%;
         height: auto;
-        fill: #595d60;
-        filter: drop-shadow(0 1px 0 #fff8);
+        color: #55595c;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.35;
+        stroke-linecap: square;
+        stroke-linejoin: miter;
+        filter: drop-shadow(0 0.5px 0 #fff9);
       }
 
       .side-button {
@@ -150,8 +156,8 @@
           <img id="screen" alt="Flex framebuffer" draggable="false">
         </div>
         <div class="chin" aria-hidden="true">
-          <svg class="ledger-mark" viewBox="0 0 28 28">
-            <path d="M2 2h10v4H6v6H2V2Zm14 0h10v10h-4V6h-6V2ZM2 16h4v6h6v4H2V16Zm20 0h4v10H16v-4h6v-6Z"/>
+          <svg class="ledger-mark" viewBox="0 0 32 32">
+            <path d="M10 2.5H2.5V10 M22 2.5h7.5V10 M2.5 22v7.5H10 M22 29.5h7.5V22 M11.5 10.5v10h9"/>
           </svg>
         </div>
         <button id="side-button" class="side-button" type="button" aria-label="Flex side button" title="Flex side button"></button>

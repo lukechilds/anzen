@@ -1,7 +1,7 @@
 # Anzen Ledger app
 
 This crate is the Ledger implementation of the Anzen cold signer. The first
-milestone only displays an interactive `Anzen` / `Hello world` screen; it does
+milestone only displays an interactive `Hello Anzen` / `Hello World` screen; it does
 not derive keys, parse policies, or sign transactions.
 
 The firmware depends on the platform-independent `anzen-cold-signer` crate and
