@@ -21,6 +21,11 @@ pub const MAINNET_ELECTRUM_SERVERS: &[&str] = &[
     "ssl://electrum.cakewallet.com:50002",
 ];
 
+pub const TESTNET_ELECTRUM_SERVERS: &[&str] = &[
+    "ssl://electrum.blockstream.info:60002",
+    "ssl://testnet.aranguren.org:51002",
+];
+
 pub const REGTEST_ELECTRUM_SERVERS: &[&str] = &["tcp://127.0.0.1:50001"];
 
 #[derive(Debug, Clone)]
@@ -55,6 +60,10 @@ pub trait Blockchain {
     fn chain_tip(&self) -> Result<ChainTip>;
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>>;
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid>;
+    /// Estimate the fee rate in satoshis per virtual byte that is likely to confirm
+    /// within `target_blocks`. Returns a conservative default when the backend cannot
+    /// produce a reliable estimate (e.g., regtest).
+    fn estimate_fee_rate(&self, target_blocks: u16) -> Result<u64>;
 }
 
 impl Blockchain for BitcoinCoreBackend {
@@ -80,6 +89,10 @@ impl Blockchain for BitcoinCoreBackend {
         BitcoinCoreBackend::scan_vault(self, config)
     }
 
+    fn estimate_fee_rate(&self, target_blocks: u16) -> Result<u64> {
+        BitcoinCoreBackend::estimate_fee_rate(self, target_blocks)
+    }
+
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid> {
         self.client
             .send_raw_transaction(transaction)
@@ -88,9 +101,23 @@ impl Blockchain for BitcoinCoreBackend {
 }
 
 impl ElectrumBackend {
+    pub fn estimate_fee_rate(&self, target_blocks: u16) -> Result<u64> {
+        if self.network == Network::Regtest {
+            return Ok(super::DEFAULT_FEE_RATE_SAT_VB);
+        }
+        match self.client.inner.estimate_fee(target_blocks as usize) {
+            Ok(btc_per_kb) => {
+                let sat_per_vbyte = (btc_per_kb * 100_000_000.0_f64 / 1_000.0_f64) as u64;
+                Ok(sat_per_vbyte.max(1))
+            }
+            Err(_) => Ok(super::DEFAULT_FEE_RATE_SAT_VB),
+        }
+    }
+
     pub fn connect_default(network: Network) -> Result<Self> {
         let servers = match network {
             Network::Bitcoin => MAINNET_ELECTRUM_SERVERS,
+            Network::Testnet => TESTNET_ELECTRUM_SERVERS,
             Network::Regtest => REGTEST_ELECTRUM_SERVERS,
             other => bail!("unsupported Electrum network: {other}"),
         };
@@ -202,6 +229,10 @@ impl Blockchain for ElectrumBackend {
         Ok(utxos)
     }
 
+    fn estimate_fee_rate(&self, target_blocks: u16) -> Result<u64> {
+        ElectrumBackend::estimate_fee_rate(self, target_blocks)
+    }
+
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid> {
         self.client
             .transaction_broadcast(transaction)
@@ -298,6 +329,24 @@ impl BitcoinCoreBackend {
             .map(|utxo| utxo.txout.value.to_sat())
             .sum();
         Ok(Amount::from_sat(sats))
+    }
+
+    pub fn estimate_fee_rate(&self, target_blocks: u16) -> Result<u64> {
+        // On regtest the mempool is often empty; return the MVP default.
+        if self.network == Network::Regtest {
+            return Ok(super::DEFAULT_FEE_RATE_SAT_VB);
+        }
+        use bitcoincore_rpc::json::EstimateSmartFeeResult;
+        let result: EstimateSmartFeeResult = self
+            .client
+            .call("estimatesmartfee", &[serde_json::json!(target_blocks)])
+            .context("Bitcoin Core estimatesmartfee failed")?;
+        let fee_btc_per_kvb = result
+            .fee_rate
+            .ok_or_else(|| anyhow::anyhow!("Bitcoin Core could not estimate fee rate"))?;
+        // fee_rate is BTC/kvB as an Amount; convert to sat/vB.
+        let sat_per_vbyte = fee_btc_per_kvb.to_sat() / 1_000;
+        Ok(sat_per_vbyte.max(1))
     }
 }
 

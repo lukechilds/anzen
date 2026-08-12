@@ -147,7 +147,7 @@ impl DeviceKeys {
 fn coin_type(network: Network) -> Result<u32> {
     match network {
         Network::Bitcoin => Ok(0),
-        Network::Regtest => Ok(1),
+        Network::Testnet | Network::Regtest => Ok(1),
         other => anyhow::bail!("unsupported device-key network: {other}"),
     }
 }

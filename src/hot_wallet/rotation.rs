@@ -153,6 +153,7 @@ fn load_pending_vanity_phone(
     let policy = VaultPolicy::new_for_network(phone.vault_pubkey, hww_pubkey, network)?;
     let expected_prefix = match network {
         bitcoin::Network::Bitcoin => format!("bc1p{suffix}"),
+        bitcoin::Network::Testnet => format!("tb1p{suffix}"),
         bitcoin::Network::Regtest => format!("bcrt1p{suffix}"),
         other => bail!("vanity rotation is unsupported on {other}"),
     };
@@ -430,6 +431,10 @@ mod tests {
 
         fn scan_vault(&self, _config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
             Ok(self.utxos.clone())
+        }
+
+        fn estimate_fee_rate(&self, _target_blocks: u16) -> Result<u64> {
+            Ok(crate::core::DEFAULT_FEE_RATE_SAT_VB)
         }
 
         fn broadcast(&self, transaction: &Transaction) -> Result<Txid> {

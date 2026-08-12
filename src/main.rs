@@ -226,6 +226,9 @@ struct ChainArgs {
     /// Use one Electrum endpoint instead of the network's built-in defaults.
     #[arg(long, env = "ANZEN_ELECTRUM_URL", global = true)]
     electrum_url: Option<String>,
+    /// Override the fee rate in sat/vB. Default: 1 for MVP, or auto-estimated from backend.
+    #[arg(long, env = "ANZEN_FEE_RATE", global = true)]
+    fee_rate: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -235,11 +238,21 @@ enum ChainBackendKind {
 }
 
 impl ChainArgs {
+    fn resolve_fee_rate(&self, _network: Network) -> Result<u64> {
+        if let Some(rate) = self.fee_rate {
+            if rate == 0 {
+                bail!("fee rate must be at least 1 sat/vB");
+            }
+            return Ok(rate);
+        }
+        Ok(core::DEFAULT_FEE_RATE_SAT_VB)
+    }
+
     fn selected_backend(&self, network: Network) -> Result<ChainBackendKind> {
         self.chain_backend.map_or_else(
             || match network {
                 Network::Regtest => Ok(ChainBackendKind::Rpc),
-                Network::Bitcoin => Ok(ChainBackendKind::Electrum),
+                Network::Testnet | Network::Bitcoin => Ok(ChainBackendKind::Electrum),
                 other => bail!("unsupported vault network: {other}"),
             },
             Ok,
@@ -249,6 +262,7 @@ impl ChainArgs {
     fn connect_core(&self, network: Network) -> Result<core::chain::BitcoinCoreBackend> {
         let default_url = match network {
             Network::Regtest => "http://127.0.0.1:18443",
+            Network::Testnet => "http://127.0.0.1:18332",
             Network::Bitcoin => "http://127.0.0.1:8332",
             other => bail!("unsupported Bitcoin Core network: {other}"),
         };
@@ -1278,6 +1292,7 @@ fn command_network(
             "vault is configured for regtest; --dangerously-enable-mainnet cannot change an existing vault"
         ),
         (Some(Network::Regtest), false) => Ok(Network::Regtest),
+        (Some(Network::Testnet), _) => Ok(Network::Testnet),
         (Some(other), _) => bail!("unsupported vault network: {other}"),
         (None, true) => Ok(Network::Bitcoin),
         (None, false) => Ok(Network::Regtest),
@@ -1287,6 +1302,7 @@ fn command_network(
 fn network_label(network: Network) -> &'static str {
     match network {
         Network::Bitcoin => "MAINNET — REAL FUNDS",
+        Network::Testnet => "TESTNET — NO MONETARY VALUE",
         Network::Regtest => "REGTEST ONLY",
         _ => "UNSUPPORTED NETWORK",
     }
@@ -1332,6 +1348,7 @@ mod tests {
             rpc_user: "anzen".to_owned(),
             rpc_password: "anzen".to_owned(),
             electrum_url: None,
+            fee_rate: None,
         }
     }
 

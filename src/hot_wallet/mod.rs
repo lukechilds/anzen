@@ -103,6 +103,7 @@ where
 pub fn vanity_address_prefix(network: Network) -> Result<&'static str> {
     match network {
         Network::Bitcoin => Ok("bc1pvault"),
+        Network::Testnet => Ok("tb1pvault"),
         Network::Regtest => Ok("bcrt1pvault"),
         other => bail!("vanity initialization is unsupported on {other}"),
     }
@@ -232,6 +233,7 @@ where
         template.address(&Secp256k1::verification_only(), phone.vault_pubkey, network);
     let expected_prefix = match network {
         Network::Bitcoin => format!("bc1p{suffix}"),
+        Network::Testnet => format!("tb1p{suffix}"),
         Network::Regtest => format!("bcrt1p{suffix}"),
         other => bail!("vanity initialization is unsupported on {other}"),
     };
