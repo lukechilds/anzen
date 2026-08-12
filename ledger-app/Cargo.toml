@@ -1,0 +1,33 @@
+[package]
+name = "anzen-ledger"
+version = "0.1.0"
+authors = ["Anzen developers"]
+edition = "2024"
+license = "MIT"
+description = "Anzen cold-signer app for Ledger devices"
+
+[dependencies]
+anzen-cold-signer = { path = "../cold-signer" }
+ledger_device_sdk = { version = "=1.36.1", features = ["io_new"] }
+
+[features]
+default = ["ledger_device_sdk/nano_nbgl"]
+debug = ["ledger_device_sdk/debug"]
+
+[package.metadata.ledger]
+curve = ["secp256k1"]
+flags = "0"
+path = ["86'/0'/100'", "86'/1'/100'"]
+name = "Anzen"
+nanosplus = { icon = "icons/anzen-14x14.png" }
+nanox = { icon = "icons/anzen-14x14.png" }
+stax = { icon = "icons/anzen-32x32.png" }
+flex = { icon = "icons/anzen-40x40.png" }
+apex_p = { icon = "icons/anzen-32x32.png" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("apex_p", "stax", "flex", "nanox", "nanosplus"))'] }
+
+# Keep device firmware out of the desktop workspace's default build and test
+# graph. Ledger firmware requires custom targets and the Ledger SDK toolchain.
+[workspace]

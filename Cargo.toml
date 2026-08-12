@@ -7,6 +7,12 @@ license = "MIT"
 description = "Anzen renewable Bitcoin vault CLI"
 autobins = false
 
+[workspace]
+members = [".", "cold-signer"]
+exclude = ["ledger-app"]
+default-members = ["."]
+resolver = "3"
+
 [[bin]]
 name = "anzen"
 path = "src/main.rs"

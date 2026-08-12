@@ -1,0 +1,10 @@
+[package]
+name = "anzen-cold-signer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Auditable, platform-independent cold-signer logic for Anzen"
+
+[lib]
+path = "src/lib.rs"

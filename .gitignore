@@ -1,4 +1,6 @@
 /target/
+/cold-signer/target/
+/ledger-app/target/
 /.anzen-data/
 /.anzen-mainnet/
 /.vault-data/
