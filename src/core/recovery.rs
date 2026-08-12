@@ -40,7 +40,9 @@ impl SweepPath {
 
     fn sequence(self) -> Sequence {
         match self {
-            Self::Cooperative => Sequence::MAX,
+            // BIP125 opt-in RBF for cooperative transactions since both keys
+            // are available to re-sign with a higher fee rate if needed.
+            Self::Cooperative => Sequence(0xFFFFFFFD),
             Self::PhoneRecovery => Sequence(u32::from(PHONE_RECOVERY_BLOCKS)),
             Self::HwwRecovery => Sequence(u32::from(HWW_RECOVERY_BLOCKS)),
         }
@@ -268,7 +270,7 @@ pub fn validate_cooperative_sweep(
         || transaction
             .input
             .iter()
-            .any(|input| input.sequence != Sequence::MAX)
+            .any(|input| input.sequence != Sequence(0xFFFFFFFD))
         || transaction.output.len() != 1
         || transaction.output[0].script_pubkey != destination.script_pubkey()
         || transaction.output[0].value.to_sat() != package.sent_sats
