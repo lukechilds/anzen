@@ -333,6 +333,7 @@ pub fn propose_policy(
     now: DateTime<Utc>,
     monthly_limit_sats: u64,
     emergency_access_limit_sats: u64,
+    fee_rate_sat_vb: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
     let config = load_config(data_dir)?;
@@ -348,6 +349,7 @@ pub fn propose_policy(
             monthly_limit_sats,
             emergency_access_limit_sats,
         },
+        fee_rate_sat_vb,
         batch_dir,
         &phone,
         &mut wallet,

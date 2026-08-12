@@ -323,6 +323,7 @@ fn build_renewed_policy(
             monthly_limit_sats: old_config.monthly_limit_sats,
             emergency_access_limit_sats: old_config.emergency_access_limit_sats,
         },
+        crate::core::DEFAULT_FEE_RATE_SAT_VB,
         &workspace,
         new_phone,
         &mut addresses,

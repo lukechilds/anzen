@@ -414,6 +414,7 @@ fn run_phone(
             emergency_access_limit,
             now,
             &output,
+            network,
         )?,
         PhoneCommand::ActivatePolicy { approved_policy } => {
             phone_activate_policy(data_dir, rpc_args, &approved_policy)?
@@ -769,6 +770,7 @@ fn phone_set_policy(
     emergency_access_limit: u64,
     now: Option<i64>,
     output: &Path,
+    network: Network,
 ) -> Result<()> {
     let backend = rpc_args.connect_hot(data_dir)?;
     if now.is_some() && backend.network() != Network::Regtest {
@@ -777,6 +779,7 @@ fn phone_set_policy(
     let timestamp = now.unwrap_or_else(|| chrono::Utc::now().timestamp());
     let now = chrono::DateTime::from_timestamp(timestamp, 0)
         .with_context(|| format!("invalid policy timestamp {timestamp}"))?;
+    let fee_rate_sat_vb = rpc_args.resolve_fee_rate(network)?;
     let workspace = data_dir.join("phone/policy-proposal");
     reset_workspace(&workspace)?;
     let manifest = hot_wallet::propose_policy(
@@ -785,6 +788,7 @@ fn phone_set_policy(
         now,
         monthly_limit,
         emergency_access_limit,
+        fee_rate_sat_vb,
         &workspace,
     )?;
     let package = core::ceremony::package_from_batch(&workspace)?;
