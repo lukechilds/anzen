@@ -21,79 +21,56 @@
         place-items: center;
         overflow: hidden;
         background:
-          radial-gradient(circle at 50% 35%, #252831 0, #111318 36%, #08090b 72%);
+          radial-gradient(ellipse at 50% 42%, #24262b 0, #111216 42%, #070809 76%);
       }
 
       .viewer {
-        display: grid;
-        justify-items: center;
-        gap: 18px;
         padding: 28px;
-      }
-
-      .heading {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        color: #aeb3bd;
-        font-size: 13px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .connection {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #ff6659;
-        box-shadow: 0 0 12px #ff665980;
-        transition: 160ms ease;
-      }
-
-      .connection.online {
-        background: #61e294;
-        box-shadow: 0 0 12px #61e29480;
       }
 
       .device {
         position: relative;
-        width: min(610px, 82vw, calc((100vh - 130px) * 0.78));
-        aspect-ratio: 0.78;
-        display: grid;
-        place-items: center;
-        border-radius: 62px;
+        /* Ledger publishes 56.5 x 78.4 mm for the Flex front face. */
+        width: min(565px, 82vw, calc((100vh - 56px) * 0.720663));
+        aspect-ratio: 56.5 / 78.4;
+        border-radius: 7.25% / 5.22%;
         background:
-          linear-gradient(145deg, #4b4f57 0%, #24272d 13%, #101216 55%, #2a2d33 100%);
-        border: 1px solid #5e626b;
+          linear-gradient(112deg, #74777a 0%, #55585b 5%, #3b3e41 48%, #292c2f 74%, #505356 100%);
+        border: 1px solid #8a8d90;
         box-shadow:
-          0 42px 80px #000b,
-          inset 0 1px 1px #ffffff40,
-          inset 0 -2px 8px #000d;
+          0 46px 78px #000c,
+          0 10px 22px #0009,
+          inset 1px 1px 1px #ffffff5c,
+          inset -2px -2px 5px #08090bb8;
       }
 
       .device::before {
-        content: "ANZEN";
+        content: "";
         position: absolute;
-        bottom: 3.6%;
-        color: #858a94;
-        font-size: clamp(9px, 1.3vw, 12px);
-        font-weight: 650;
-        letter-spacing: 0.28em;
+        inset: 0.7%;
+        pointer-events: none;
+        border: 1px solid #0b0c0e;
+        border-radius: 6.75% / 4.9%;
+        box-shadow: inset 0 0 0 1px #ffffff0d;
       }
 
       .screen-shell {
-        width: 78.7%;
+        position: absolute;
+        top: 5.45%;
+        left: 10.1%;
+        width: 79.8%;
         aspect-ratio: 4 / 5;
         overflow: hidden;
-        border-radius: 17px;
-        background: #fff;
-        border: 2px solid #050506;
+        border-radius: 4.3% / 3.45%;
+        background: #e7e7e5;
+        border: 1px solid #0a0b0c;
         box-shadow:
-          0 0 0 7px #17191d,
-          0 10px 34px #000c;
+          0 0 0 2px #111316,
+          0 3px 9px #0009,
+          inset 0 0 10px #0002;
         touch-action: none;
         user-select: none;
-        cursor: crosshair;
+        cursor: pointer;
       }
 
       #screen {
@@ -105,58 +82,80 @@
         -webkit-user-drag: none;
       }
 
+      .chin {
+        position: absolute;
+        left: 2.8%;
+        bottom: 1.1%;
+        width: 94.4%;
+        height: 16.2%;
+        border-radius: 13% 13% 5% 5% / 27% 27% 10% 10%;
+        background:
+          linear-gradient(176deg, #f1f2f2 0%, #d5d7d8 40%, #a9acae 76%, #6e7275 100%);
+        border: 1px solid #8e9295;
+        box-shadow:
+          inset 0 2px 2px #ffffffc7,
+          inset 0 -3px 5px #40434755,
+          0 2px 5px #0008;
+        pointer-events: none;
+      }
+
+      .ledger-mark {
+        position: absolute;
+        left: 8.5%;
+        top: 34%;
+        width: 10.5%;
+        height: auto;
+        fill: #595d60;
+        filter: drop-shadow(0 1px 0 #fff8);
+      }
+
       .side-button {
         position: absolute;
-        top: 19%;
-        right: -13px;
-        width: 20px;
-        height: 94px;
+        top: 17.1%;
+        right: -2.15%;
+        width: 3.35%;
+        height: 11.4%;
         padding: 0;
-        border: 1px solid #676b73;
-        border-left-color: #1b1d21;
-        border-radius: 0 9px 9px 0;
-        background: linear-gradient(90deg, #17191d, #4d5159 75%, #22252a);
-        box-shadow: 5px 7px 12px #0009, inset 0 1px 1px #ffffff24;
+        border: 1px solid #676a6e;
+        border-left-color: #111316;
+        border-radius: 0 48% 48% 0 / 0 10% 10% 0;
+        background: linear-gradient(90deg, #111316 0%, #45484d 42%, #7b7e81 72%, #292c30 100%);
+        box-shadow: 4px 4px 8px #000a, inset 0 1px 1px #ffffff52;
         cursor: pointer;
+      }
+
+      .side-button::before {
+        content: "";
+        position: absolute;
+        inset: -24% -85%;
       }
 
       .side-button:hover { filter: brightness(1.18); }
       .side-button:active,
       .side-button.pressed {
-        right: -9px;
+        right: -1.5%;
         filter: brightness(0.8);
-        box-shadow: 2px 4px 7px #000a;
-      }
-
-      .hint {
-        min-height: 20px;
-        color: #858b96;
-        font-size: 12px;
-        text-align: center;
+        box-shadow: 2px 2px 5px #000b;
       }
 
       @media (max-width: 600px) {
         .viewer { padding: 18px; }
-        .device { border-radius: 42px; }
-        .screen-shell { border-radius: 11px; }
       }
     </style>
   </head>
   <body>
     <main class="viewer">
-      <div class="heading">
-        <span id="connection" class="connection" aria-hidden="true"></span>
-        <span id="status">Connecting to Flex</span>
-      </div>
-
-      <section class="device" aria-label="Ledger Flex emulator">
+      <section id="device" class="device" aria-label="Ledger Flex emulator">
         <div id="screen-shell" class="screen-shell" aria-label="Interactive Flex screen">
           <img id="screen" alt="Flex framebuffer" draggable="false">
         </div>
+        <div class="chin" aria-hidden="true">
+          <svg class="ledger-mark" viewBox="0 0 28 28">
+            <path d="M2 2h10v4H6v6H2V2Zm14 0h10v10h-4V6h-6V2ZM2 16h4v6h6v4H2V16Zm20 0h4v10H16v-4h6v-6Z"/>
+          </svg>
+        </div>
         <button id="side-button" class="side-button" type="button" aria-label="Flex side button" title="Flex side button"></button>
       </section>
-
-      <div class="hint">Tap or swipe the screen. The side control sends Speculos’s right hardware-button event.</div>
     </main>
 
     <script>
@@ -165,15 +164,14 @@
       const screen = document.querySelector("#screen");
       const screenShell = document.querySelector("#screen-shell");
       const sideButton = document.querySelector("#side-button");
-      const connection = document.querySelector("#connection");
-      const status = document.querySelector("#status");
+      const device = document.querySelector("#device");
       let pointerStart = null;
       let refreshing = false;
       let currentFrameUrl = null;
 
-      function setConnection(online, message = online ? "Flex connected" : "Speculos unavailable") {
-        connection.classList.toggle("online", online);
-        status.textContent = message;
+      function setConnection(online, message = online ? "Speculos ready" : "Speculos unavailable") {
+        device.dataset.connected = String(online);
+        device.title = message;
       }
 
       async function post(path, body) {
