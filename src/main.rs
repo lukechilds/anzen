@@ -238,6 +238,7 @@ enum ChainBackendKind {
 }
 
 impl ChainArgs {
+    #[allow(dead_code)]
     fn resolve_fee_rate(&self, _network: Network) -> Result<u64> {
         if let Some(rate) = self.fee_rate {
             if rate == 0 {
