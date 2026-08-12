@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Anzen Flex viewer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b0c0f;
+        color: #f5f6f7;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 50% 35%, #252831 0, #111318 36%, #08090b 72%);
+      }
+
+      .viewer {
+        display: grid;
+        justify-items: center;
+        gap: 18px;
+        padding: 28px;
+      }
+
+      .heading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #aeb3bd;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .connection {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #ff6659;
+        box-shadow: 0 0 12px #ff665980;
+        transition: 160ms ease;
+      }
+
+      .connection.online {
+        background: #61e294;
+        box-shadow: 0 0 12px #61e29480;
+      }
+
+      .device {
+        position: relative;
+        width: min(610px, 82vw, calc((100vh - 130px) * 0.78));
+        aspect-ratio: 0.78;
+        display: grid;
+        place-items: center;
+        border-radius: 62px;
+        background:
+          linear-gradient(145deg, #4b4f57 0%, #24272d 13%, #101216 55%, #2a2d33 100%);
+        border: 1px solid #5e626b;
+        box-shadow:
+          0 42px 80px #000b,
+          inset 0 1px 1px #ffffff40,
+          inset 0 -2px 8px #000d;
+      }
+
+      .device::before {
+        content: "ANZEN";
+        position: absolute;
+        bottom: 3.6%;
+        color: #858a94;
+        font-size: clamp(9px, 1.3vw, 12px);
+        font-weight: 650;
+        letter-spacing: 0.28em;
+      }
+
+      .screen-shell {
+        width: 78.7%;
+        aspect-ratio: 4 / 5;
+        overflow: hidden;
+        border-radius: 17px;
+        background: #fff;
+        border: 2px solid #050506;
+        box-shadow:
+          0 0 0 7px #17191d,
+          0 10px 34px #000c;
+        touch-action: none;
+        user-select: none;
+        cursor: crosshair;
+      }
+
+      #screen {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: contain;
+        image-rendering: auto;
+        -webkit-user-drag: none;
+      }
+
+      .side-button {
+        position: absolute;
+        top: 19%;
+        right: -13px;
+        width: 20px;
+        height: 94px;
+        padding: 0;
+        border: 1px solid #676b73;
+        border-left-color: #1b1d21;
+        border-radius: 0 9px 9px 0;
+        background: linear-gradient(90deg, #17191d, #4d5159 75%, #22252a);
+        box-shadow: 5px 7px 12px #0009, inset 0 1px 1px #ffffff24;
+        cursor: pointer;
+      }
+
+      .side-button:hover { filter: brightness(1.18); }
+      .side-button:active,
+      .side-button.pressed {
+        right: -9px;
+        filter: brightness(0.8);
+        box-shadow: 2px 4px 7px #000a;
+      }
+
+      .hint {
+        min-height: 20px;
+        color: #858b96;
+        font-size: 12px;
+        text-align: center;
+      }
+
+      @media (max-width: 600px) {
+        .viewer { padding: 18px; }
+        .device { border-radius: 42px; }
+        .screen-shell { border-radius: 11px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="viewer">
+      <div class="heading">
+        <span id="connection" class="connection" aria-hidden="true"></span>
+        <span id="status">Connecting to Flex</span>
+      </div>
+
+      <section class="device" aria-label="Ledger Flex emulator">
+        <div id="screen-shell" class="screen-shell" aria-label="Interactive Flex screen">
+          <img id="screen" alt="Flex framebuffer" draggable="false">
+        </div>
+        <button id="side-button" class="side-button" type="button" aria-label="Flex side button" title="Flex side button"></button>
+      </section>
+
+      <div class="hint">Tap or swipe the screen. The side control sends Speculos’s right hardware-button event.</div>
+    </main>
+
+    <script>
+      const WIDTH = 480;
+      const HEIGHT = 600;
+      const screen = document.querySelector("#screen");
+      const screenShell = document.querySelector("#screen-shell");
+      const sideButton = document.querySelector("#side-button");
+      const connection = document.querySelector("#connection");
+      const status = document.querySelector("#status");
+      let pointerStart = null;
+      let refreshing = false;
+      let currentFrameUrl = null;
+
+      function setConnection(online, message = online ? "Flex connected" : "Speculos unavailable") {
+        connection.classList.toggle("online", online);
+        status.textContent = message;
+      }
+
+      async function post(path, body) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.error || `${response.status} ${response.statusText}`);
+        }
+      }
+
+      async function refreshFrame() {
+        if (refreshing || pointerStart) return;
+        refreshing = true;
+        try {
+          const response = await fetch(`/api/frame?t=${Date.now()}`, { cache: "no-store" });
+          if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+          const nextFrameUrl = URL.createObjectURL(await response.blob());
+          const oldFrameUrl = currentFrameUrl;
+          screen.onload = () => {
+            if (oldFrameUrl) URL.revokeObjectURL(oldFrameUrl);
+          };
+          currentFrameUrl = nextFrameUrl;
+          screen.src = nextFrameUrl;
+          setConnection(true);
+        } catch (error) {
+          setConnection(false, error.message);
+        } finally {
+          refreshing = false;
+        }
+      }
+
+      function devicePoint(event) {
+        const bounds = screenShell.getBoundingClientRect();
+        return {
+          x: Math.max(0, Math.min(WIDTH - 1, Math.round((event.clientX - bounds.left) * WIDTH / bounds.width))),
+          y: Math.max(0, Math.min(HEIGHT - 1, Math.round((event.clientY - bounds.top) * HEIGHT / bounds.height))),
+        };
+      }
+
+      screenShell.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        screenShell.setPointerCapture(event.pointerId);
+        pointerStart = devicePoint(event);
+      });
+
+      screenShell.addEventListener("pointerup", async (event) => {
+        if (!pointerStart) return;
+        event.preventDefault();
+        const end = devicePoint(event);
+        const payload = {
+          action: "press-and-release",
+          x: pointerStart.x,
+          y: pointerStart.y,
+          delay: 0.08,
+        };
+        if (Math.abs(end.x - pointerStart.x) > 3 || Math.abs(end.y - pointerStart.y) > 3) {
+          payload.x2 = end.x;
+          payload.y2 = end.y;
+        }
+        pointerStart = null;
+        try {
+          await post("/api/finger", payload);
+          await refreshFrame();
+        } catch (error) {
+          setConnection(false, error.message);
+        }
+      });
+
+      screenShell.addEventListener("pointercancel", () => { pointerStart = null; });
+
+      sideButton.addEventListener("click", async () => {
+        sideButton.classList.add("pressed");
+        try {
+          await post("/api/side-button", { action: "press-and-release", delay: 0.1 });
+          await refreshFrame();
+        } catch (error) {
+          setConnection(false, error.message);
+        } finally {
+          window.setTimeout(() => sideButton.classList.remove("pressed"), 100);
+        }
+      });
+
+      refreshFrame();
+      window.setInterval(refreshFrame, 140);
+    </script>
+  </body>
+</html>

@@ -23,3 +23,29 @@ docker run --rm \
 ```
 
 Other supported targets are `nanox`, `stax`, `flex`, and `apex_p`.
+
+## Interactive Flex viewer
+
+Start the Flex firmware in headless Speculos from the repository root:
+
+```console
+docker run --rm -it \
+  -p 5001:5001 \
+  -p 9999:9999 \
+  -v "$PWD:/app" \
+  -w /app/ledger-app \
+  ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest \
+  speculos --model flex --display headless --api-port 5001 --apdu-port 9999 \
+  target/flex/release/anzen-ledger
+```
+
+In another terminal, start the dependency-free local viewer and open it in the
+default browser:
+
+```console
+python3 ledger-app/tools/flex-viewer.py --open
+```
+
+The viewer runs at `http://127.0.0.1:5002`. Taps and swipes are translated to
+Flex screen coordinates and forwarded to Speculos. Its side control forwards
+Speculos's right hardware-button event.
