@@ -13,11 +13,20 @@ const APP_NAME: &str = PROTOCOL_NAME;
 extern "C" fn sample_main() {
     let comm = init_comm(&COMM);
     let _app_name = APP_NAME;
+    let mut show_anzen = false;
 
-    let _ = NbglAction::new()
-        .message("Hello world")
-        .action_text("Continue")
-        .show(comm);
+    loop {
+        let message = if show_anzen {
+            "Hello Anzen"
+        } else {
+            "Hello world"
+        };
 
-    ledger_device_sdk::exit_app(0);
+        let _ = NbglAction::new()
+            .message(message)
+            .action_text("Continue")
+            .show(comm);
+
+        show_anzen = !show_anzen;
+    }
 }
