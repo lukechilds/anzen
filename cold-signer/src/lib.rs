@@ -7,6 +7,8 @@
 //! implemented, without pulling filesystem, network, or hot-wallet code onto
 //! the signer.
 
+pub mod benchmark;
+
 /// Name presented by hardware-wallet implementations of the protocol.
 pub const PROTOCOL_NAME: &str = "Anzen";
 

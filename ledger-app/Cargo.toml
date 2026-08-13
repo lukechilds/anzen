@@ -8,13 +8,14 @@ description = "Anzen cold-signer app for Ledger devices"
 
 [dependencies]
 anzen-cold-signer = { path = "../cold-signer" }
-ledger_device_sdk = { version = "=1.36.1", features = ["io_new"] }
+ledger_device_sdk = { version = "=1.36.1", features = ["io_new", "sys"] }
 
 [features]
 default = ["ledger_device_sdk/nano_nbgl"]
 debug = ["ledger_device_sdk/debug"]
 
 [package.metadata.ledger]
+# Raster launcher icons are generated from ../media/anzen-mark.svg.
 curve = ["secp256k1"]
 flags = "0"
 path = ["86'/0'/100'", "86'/1'/100'"]

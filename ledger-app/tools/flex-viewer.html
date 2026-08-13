@@ -172,12 +172,14 @@
       const sideButton = document.querySelector("#side-button");
       const device = document.querySelector("#device");
       let pointerStart = null;
+      let pointerCurrent = null;
+      let pointerPress = null;
+      let activePointerId = null;
       let refreshing = false;
       let currentFrameUrl = null;
 
-      function setConnection(online, message = online ? "Speculos ready" : "Speculos unavailable") {
+      function setConnection(online) {
         device.dataset.connected = String(online);
-        device.title = message;
       }
 
       async function post(path, body) {
@@ -193,7 +195,7 @@
       }
 
       async function refreshFrame() {
-        if (refreshing || pointerStart) return;
+        if (refreshing) return;
         refreshing = true;
         try {
           const response = await fetch(`/api/frame?t=${Date.now()}`, { cache: "no-store" });
@@ -207,7 +209,7 @@
           screen.src = nextFrameUrl;
           setConnection(true);
         } catch (error) {
-          setConnection(false, error.message);
+          setConnection(false);
         } finally {
           refreshing = false;
         }
@@ -222,35 +224,57 @@
       }
 
       screenShell.addEventListener("pointerdown", (event) => {
+        if (pointerStart) return;
         event.preventDefault();
         screenShell.setPointerCapture(event.pointerId);
+        activePointerId = event.pointerId;
         pointerStart = devicePoint(event);
-      });
-
-      screenShell.addEventListener("pointerup", async (event) => {
-        if (!pointerStart) return;
-        event.preventDefault();
-        const end = devicePoint(event);
-        const payload = {
-          action: "press-and-release",
+        pointerCurrent = pointerStart;
+        pointerPress = post("/api/finger", {
+          action: "press",
           x: pointerStart.x,
           y: pointerStart.y,
-          delay: 0.08,
-        };
-        if (Math.abs(end.x - pointerStart.x) > 3 || Math.abs(end.y - pointerStart.y) > 3) {
-          payload.x2 = end.x;
-          payload.y2 = end.y;
-        }
-        pointerStart = null;
-        try {
-          await post("/api/finger", payload);
-          await refreshFrame();
-        } catch (error) {
-          setConnection(false, error.message);
-        }
+        }).then(
+          () => null,
+          (error) => error,
+        );
       });
 
-      screenShell.addEventListener("pointercancel", () => { pointerStart = null; });
+      screenShell.addEventListener("pointermove", (event) => {
+        if (!pointerStart || event.pointerId !== activePointerId) return;
+        pointerCurrent = devicePoint(event);
+      });
+
+      async function releasePointer(event) {
+        if (!pointerStart || (event && event.pointerId !== activePointerId)) return;
+        const end = event ? devicePoint(event) : pointerCurrent;
+        const press = pointerPress;
+        pointerStart = null;
+        pointerCurrent = null;
+        pointerPress = null;
+        activePointerId = null;
+        try {
+          const pressError = await press;
+          if (pressError) throw pressError;
+          await post("/api/finger", {
+            action: "release",
+            x: end.x,
+            y: end.y,
+          });
+          await refreshFrame();
+        } catch (error) {
+          setConnection(false);
+        }
+      }
+
+      screenShell.addEventListener("pointerup", async (event) => {
+        event.preventDefault();
+        await releasePointer(event);
+      });
+
+      screenShell.addEventListener("pointercancel", async () => {
+        await releasePointer(null);
+      });
 
       sideButton.addEventListener("click", async () => {
         sideButton.classList.add("pressed");
@@ -258,7 +282,7 @@
           await post("/api/side-button", { action: "press-and-release", delay: 0.1 });
           await refreshFrame();
         } catch (error) {
-          setConnection(false, error.message);
+          setConnection(false);
         } finally {
           window.setTimeout(() => sideButton.classList.remove("pressed"), 100);
         }

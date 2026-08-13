@@ -66,7 +66,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _validate_finger(body: dict[str, object]) -> None:
-        if body.get("action") != "press-and-release":
+        action = body.get("action")
+        if action not in {"press", "release", "press-and-release"}:
             raise ValueError("unsupported finger action")
         for name, upper_bound in (("x", SCREEN_WIDTH), ("y", SCREEN_HEIGHT)):
             value = body.get(name)
@@ -82,6 +83,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 raise ValueError(f"{name} must be an integer")
             if not 0 <= value < upper_bound:
                 raise ValueError(f"{name} is outside the Flex screen")
+        delay = body.get("delay")
+        if action == "press-and-release" or delay is not None:
+            if not isinstance(delay, (int, float)) or isinstance(delay, bool):
+                raise ValueError("delay must be a number")
+            if not 0 <= delay <= 3:
+                raise ValueError("delay is outside the supported range")
 
     @staticmethod
     def _validate_button(body: dict[str, object]) -> None:

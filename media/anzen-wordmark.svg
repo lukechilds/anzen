@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 536 103" role="img" aria-labelledby="title">
+  <title id="title">Anzen</title>
+  <g fill="#0a0a0b">
+    <path d="M54 0 108 103H82L54 49.6 26 103H0Z"/>
+    <path d="M132 103V3h28l32 55V3h26v100h-28l-32-55v55Z"/>
+    <path d="M242 3h82v21l-47 55h47v24h-82V82l47-55h-47Z"/>
+    <path d="M348 3h78v24h-52v14h42v24h-42v14h52v24h-78Z"/>
+    <path d="M450 103V3h28l32 55V3h26v100h-28l-32-55v55Z"/>
+  </g>
+</svg>

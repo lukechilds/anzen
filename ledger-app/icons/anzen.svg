@@ -1,3 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <path fill="#fff" fill-rule="evenodd" d="M32 3 62 61H49l-7-14H22l-7 14H2L32 3Zm0 20-6 13h12l-6-13Z"/>
+<!-- Raster firmware icons are generated from ../../media/anzen-mark.svg. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -20 220 220">
+  <path fill="#0a0a0b" d="M95 0 190 180h-46L95 87.2 46 180H0Z"/>
 </svg>

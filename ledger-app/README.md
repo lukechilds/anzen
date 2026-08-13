@@ -1,8 +1,12 @@
 # Anzen Ledger app
 
-This crate is the Ledger implementation of the Anzen cold signer. The first
-milestone only displays an interactive `Hello Anzen` / `Hello World` screen; it does
-not derive keys, parse policies, or sign transactions.
+This crate is the Ledger implementation of the Anzen cold signer. It currently
+provides a native Ledger home screen and a deterministic benchmark of the
+complete annual vault-policy signing workload. The benchmark constructs real
+Bitcoin transactions and BIP341 sighashes, derives a reserved key from the
+Ledger seed, and creates real BIP340 signatures. All outpoints and amounts
+belong to an isolated fake fixture; generated signatures are committed to a
+transcript and discarded.
 
 The firmware depends on the platform-independent `anzen-cold-signer` crate and
 does not depend on the Anzen CLI, hot wallet, chain backends, or filesystem
@@ -48,4 +52,24 @@ python3 ledger-app/tools/flex-viewer.py --open
 
 The viewer runs at `http://127.0.0.1:5002`. Taps and swipes are translated to
 Flex screen coordinates and forwarded to Speculos. Its side control forwards
-Speculos's right hardware-button event.
+Speculos's right hardware-button event. Select **Run signing benchmark** on the
+Anzen home screen to run the workload locally; use the home-screen quit control
+to return to the Ledger dashboard.
+
+For accurate timing, use a physical Flex and run the host benchmark while Anzen
+is open:
+
+```sh
+python3 ledger-app/tools/signing-benchmark.py --inputs 12
+```
+
+The host measures only the signing APDU, reports the duration on the Flex
+completion screen, and does not ask the device to verify its own signatures.
+`--inputs` accepts `1`, `2`, or `12`; the rollover requires one signature per
+input, while every other policy transaction has one input. Speculos can
+exercise the same protocol for correctness, but its timing is not
+representative of physical hardware:
+
+```sh
+python3 ledger-app/tools/signing-benchmark.py --speculos 127.0.0.1:9999 --inputs 12
+```

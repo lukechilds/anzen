@@ -8,3 +8,8 @@ description = "Auditable, platform-independent cold-signer logic for Anzen"
 
 [lib]
 path = "src/lib.rs"
+
+[dev-dependencies]
+bitcoin = "0.32.9"
+hex-literal = "1.1"
+sha2 = "0.10"
