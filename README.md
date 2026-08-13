@@ -1,4 +1,4 @@
-<h1><img src="media/anzen-wordmark.svg" alt="Anzen" width="402"></h1>
+<p align="center"><img src="media/anzen-wordmark.svg" alt="Anzen" width="100%"></p>
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
