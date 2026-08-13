@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 536 103" role="img" aria-labelledby="title">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img" aria-labelledby="title">
   <title id="title">Anzen</title>
-  <g fill="#0a0a0b">
+  <rect width="720" height="240" fill="#fff"/>
+  <g fill="#0a0a0b" transform="translate(172.4 83.95) scale(.7)">
     <path d="M54 0 108 103H82L54 49.6 26 103H0Z"/>
     <path d="M132 103V3h28l32 55V3h26v100h-28l-32-55v55Z"/>
     <path d="M242 3h82v21l-47 55h47v24h-82V82l47-55h-47Z"/>
