@@ -1,4 +1,4 @@
-<p align="center"><img src="media/anzen-banner.svg?v=2" alt="Anzen" width="100%"></p>
+<p align="center"><img src="media/anzen-banner-v2.svg" alt="Anzen" width="100%"></p>
 
 [![CI](https://github.com/lukechilds/anzen/actions/workflows/ci.yml/badge.svg)](https://github.com/lukechilds/anzen/actions/workflows/ci.yml)
 
