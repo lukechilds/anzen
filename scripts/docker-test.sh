@@ -4,7 +4,7 @@ set -euo pipefail
 cd /build
 
 echo "== Unit, CLI, and compile-time integration tests =="
-cargo test --all-targets --locked -- --test-threads=1
+cargo test --workspace --all-targets --locked -- --test-threads=1
 
 echo "== Real Bitcoin Core RPC/BDK integration =="
 cargo test --locked --test regtest_rpc -- --ignored --nocapture --test-threads=1

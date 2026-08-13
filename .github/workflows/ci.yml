@@ -35,16 +35,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-rust-1.85-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          key: cargo-${{ runner.os }}-rust-1.85-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'cold-signer/Cargo.toml') }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Run unit and CLI tests
-        run: cargo test --all-targets --locked
+        run: cargo test --workspace --all-targets --locked
 
   real-node-tests:
     name: Real Bitcoin Core integration tests

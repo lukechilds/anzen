@@ -6,12 +6,14 @@ RUN apt-get update \
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
+COPY cold-signer/Cargo.toml ./cold-signer/Cargo.toml
 
-# Give Cargo source-independent placeholder targets. The release and test dependency
-# stages below can then be restored when application code changes.
-RUN mkdir -p src \
+# Give every workspace member source-independent placeholder targets. The release
+# and test dependency stages below can then be restored when application code changes.
+RUN mkdir -p src cold-signer/src \
     && printf 'fn main() {}\n' > src/main.rs \
-    && printf '' > src/lib.rs
+    && printf '' > src/lib.rs \
+    && printf '' > cold-signer/src/lib.rs
 
 FROM base AS release-dependencies
 
@@ -24,15 +26,16 @@ RUN touch src/*.rs && cargo build --release --locked
 
 FROM base AS test-dependencies
 
-RUN cargo test --lib --locked --no-run
+RUN cargo test --workspace --all-targets --locked --no-run
 
 FROM test-dependencies AS test
 
 COPY src ./src
+COPY cold-signer/src ./cold-signer/src
 COPY tests ./tests
 COPY test-vectors ./test-vectors
-RUN touch src/*.rs tests/*.rs
-RUN cargo test --all-targets --locked --no-run
+RUN touch src/*.rs cold-signer/src/*.rs tests/*.rs
+RUN cargo test --workspace --all-targets --locked --no-run
 COPY scripts ./scripts
 ENTRYPOINT ["/build/scripts/docker-test.sh"]
 
