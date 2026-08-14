@@ -1,0 +1,4 @@
+[submodule "trezor-firmware"]
+	path = trezor-firmware
+	url = git@github.com:lukechilds/trezor-firmware.git
+	branch = anzen

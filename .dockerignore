@@ -2,5 +2,6 @@
 .anzen-data
 .vault-data
 target
+trezor-firmware
 **/*.swp
 **/.DS_Store

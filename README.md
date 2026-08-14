@@ -509,11 +509,11 @@ Recovery tests mine the real 61,200/65,535-block CSV delays, and the on-time rol
 This runs unit and CLI tests, focused real-node integration tests, and the slow recovery integration test. For fast local development without Docker:
 
 ```bash
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
+cargo test --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Implementation rationale, library boundaries, and CI details are recorded in [design-decisions.md](design-decisions.md).
+Project layout, development commands, and the hardware-firmware workflow are documented in [DEVELOPMENT.md](DEVELOPMENT.md). Implementation rationale and engineering trade-offs are recorded in [design-decisions.md](design-decisions.md).
 
 ## License
 
