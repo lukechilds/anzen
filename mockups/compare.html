@@ -1,0 +1,1108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anzen — Dark vs Light</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#E6E4DE;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  min-height:100vh;display:flex;justify-content:center;align-items:center;gap:56px;padding:56px 24px;
+  -webkit-user-select:none;user-select:none}
+#themeDark{--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --num:ui-rounded,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --c92:rgba(255,255,255,.92);--c68:rgba(255,255,255,.68);--c55:rgba(255,255,255,.55);
+    --c42:rgba(255,255,255,.42);--c30:rgba(255,255,255,.30);
+    --in:rgba(167,227,187,.95);
+    --out:rgba(226,148,140,.72);}
+#themeDark .ph{width:375px;height:812px;background:#0A0A0C;border-radius:58px;padding:10px;
+    box-shadow:0 34px 80px rgba(20,18,14,.30)}
+#themeDark .screen{background:#060607;border-radius:48px;height:100%;position:relative;overflow:hidden;
+    color:var(--c92);display:flex;flex-direction:column}
+#themeDark .glow{position:absolute;top:-90px;left:50%;transform:translateX(-50%);width:460px;height:320px;
+    pointer-events:none;z-index:0;background:radial-gradient(closest-side,rgba(255,255,255,.045),transparent 72%)}
+#themeDark .mark{position:absolute;top:26px;left:50%;transform:translateX(-50%);z-index:-1;opacity:.05;pointer-events:none}
+#themeDark .grain{position:absolute;inset:0;pointer-events:none;opacity:.04;z-index:60;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E")}
+#themeDark .island{position:absolute;top:16px;left:50%;transform:translateX(-50%);width:122px;height:34px;
+    border-radius:17px;background:#000;z-index:20;box-shadow:0 0 0 .5px rgba(255,255,255,.06)}
+#themeDark .status{display:flex;justify-content:space-between;align-items:center;padding:26px 32px 0;
+    position:relative;z-index:20}
+#themeDark .topfade{position:absolute;top:0;left:0;right:0;height:118px;z-index:12;pointer-events:none}
+#themeDark .topfade i{position:absolute;inset:0;display:block}
+#themeDark .topfade i:nth-child(1){backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
+    mask-image:linear-gradient(to bottom,#000 58%,transparent 90%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 58%,transparent 90%)}
+#themeDark .topfade i:nth-child(2){backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+    mask-image:linear-gradient(to bottom,#000 35%,transparent 62%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 35%,transparent 62%)}
+#themeDark .topfade i:nth-child(3){backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    mask-image:linear-gradient(to bottom,#000 22%,transparent 48%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 22%,transparent 48%)}
+#themeDark .status .time{font-size:15px;font-weight:600}
+#themeDark .sig{display:flex;align-items:center;gap:7px}
+#themeDark .bars{display:flex;align-items:flex-end;gap:1.5px}
+#themeDark .bars i{width:2.5px;background:var(--c92);border-radius:1px;display:block}
+#themeDark .batt{width:23px;height:11.5px;border:1.5px solid var(--c55);border-radius:4px;padding:1.5px;position:relative}
+#themeDark .batt::after{content:"";position:absolute;right:-4px;top:3px;width:1.5px;height:4px;background:var(--c55);border-radius:1px}
+#themeDark .batt i{display:block;height:100%;width:72%;background:var(--c92);border-radius:1.5px}
+#themeDark .views{position:relative;flex:1;z-index:5}
+#themeDark .view{position:absolute;inset:0;opacity:0;pointer-events:none;transform:translateY(8px);
+    transition:opacity .28s ease,transform .28s ease;
+    overflow-y:auto;scrollbar-width:none}
+#themeDark .view::-webkit-scrollbar{display:none}
+#themeDark .view.on{opacity:1;pointer-events:auto;transform:none}
+#themeDark .eyebrow{margin-top:64px;text-align:center;font-size:10px;letter-spacing:4px;
+    color:var(--c30);text-transform:uppercase;flex:none}
+#themeDark .balance{margin-top:16px;text-align:center;font-family:var(--num);font-size:46px;font-weight:500;
+    font-variant-numeric:tabular-nums;letter-spacing:-.5px;flex:none}
+#themeDark .balance .u{margin-right:3px}
+#themeDark .fiat{margin-top:12px;text-align:center;font-family:var(--num);font-size:12px;color:var(--c42);flex:none}
+#themeDark .seal{margin-top:13px;text-align:center;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:1px;color:var(--c42)}
+#themeDark .acts{display:flex;gap:12px;margin:54px 26px 0;flex:none}
+#themeDark .pill{flex:1;height:52px;border-radius:26px;display:flex;align-items:center;justify-content:center;
+    gap:8px;font-size:14px;font-weight:500;color:var(--c92);cursor:pointer;
+    background:rgba(255,255,255,.08);
+    backdrop-filter:blur(20px) saturate(165%);-webkit-backdrop-filter:blur(20px) saturate(165%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.16),inset 0 -1px 0 rgba(255,255,255,.03),
+      0 0 0 .5px rgba(255,255,255,.07),0 12px 26px rgba(0,0,0,.45);
+    transition:transform .12s ease}
+#themeDark .pill:active{transform:scale(.96)}
+#themeDark .pill svg{opacity:.7}
+#themeDark .pill .dot{width:5px;height:5px;border-radius:50%;background:var(--in);
+    box-shadow:0 0 8px rgba(167,227,187,.8)}
+#themeDark .listwrap{margin-top:22px;padding:12px 20px 132px}
+#themeDark .tx{display:flex;align-items:center;gap:13px;padding:10px 0}
+#themeDark .tx .m{flex:1;min-width:0}
+#themeDark .ava{width:40px;height:40px;border-radius:50%;flex:none;display:flex;align-items:center;
+    justify-content:center;font-size:14px;font-weight:600;color:var(--c68);
+    position:relative;overflow:hidden;
+    background:rgba(255,255,255,.06);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 0 0 .5px rgba(255,255,255,.05)}
+#themeDark .ava svg{display:block}
+#themeDark .ava img.face{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#themeDark .ava img.logo{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;padding:6px}
+#themeDark .ava.duo{background:none;box-shadow:none;overflow:visible}
+#themeDark .ava.duo .c1, #themeDark .ava.duo .c2{position:absolute;width:26px;height:26px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;color:var(--c92);
+    background:rgba(255,255,255,.06);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 0 0 .5px rgba(255,255,255,.07)}
+#themeDark .ava.duo .c1{top:0;left:0}
+#themeDark .ava.duo .c2{bottom:0;right:0;background:#26262C;
+    box-shadow:0 0 0 2px #060607,inset 0 1px 0 rgba(255,255,255,.12)}
+#themeDark .ava.cw{color:var(--c92)}
+#themeDark .ava.cg{background:rgba(96,190,112,.15);color:#86D89A}
+#themeDark .ava.cg2{background:rgba(46,140,104,.16);color:#66C39C}
+#themeDark .ava.cv{background:rgba(139,124,246,.16);color:#A99CF7}
+#themeDark .ava.cr{background:rgba(226,110,100,.14);color:#E89B92}
+#themeDark .ava.cb{background:rgba(96,150,240,.15);color:#8FB4F2}
+#themeDark .ava.ca{background:rgba(238,180,90,.15);color:#E9C489}
+#themeDark .tx .n{font-size:13.5px;font-weight:440;color:var(--c68)}
+#themeDark .tx .d{font-size:11.5px;color:var(--c42);margin-top:3px}
+#themeDark .tx .d .vtag{display:inline-flex;align-items:center;gap:4px;color:var(--c55);vertical-align:-1px}
+#themeDark .tx .d .vtag svg{flex:none}
+#themeDark .tx .r{text-align:right}
+#themeDark .tx .v{font-family:var(--num);font-size:13px;font-weight:500;font-variant-numeric:tabular-nums;color:var(--c68)}
+#themeDark .tx .v.in{color:var(--in)}
+#themeDark .tx .v.nt{color:var(--c42)}
+#themeDark .tx .fv{font-family:var(--num);font-size:11px;color:var(--c42);margin-top:3px}
+#themeDark .tx.pend{border:1px dashed rgba(255,255,255,.18);border-radius:14px;
+    padding:9px 14px;margin:0 -14px 6px;position:relative}
+#themeDark .px{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;cursor:pointer;
+    background:#26262C;color:var(--c55);display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 0 2px #060607,inset 0 1px 0 rgba(255,255,255,.10);transition:transform .12s ease}
+#themeDark .px:active{transform:scale(.85)}
+#themeDark .tx.pend .n{color:var(--c55)}
+#themeDark .tx.pend .ava{opacity:.8}
+#themeDark .listwrap .lines{margin:42px 12px 0}
+#themeDark .listwrap .kicker{margin-top:30px;padding-bottom:6px}
+#themeDark .lines{margin:44px 56px 0;text-align:center}
+#themeDark .line{font-size:12.5px;line-height:2.1;color:var(--c55)}
+#themeDark .kicker{margin-top:32px;text-align:center}
+#themeDark .kicker .k1{font-size:13px;font-weight:500;color:var(--c92)}
+#themeDark .kicker .k2{font-size:10.5px;color:var(--c42);margin-top:6px}
+#themeDark .srows{margin:48px 30px 0}
+#themeDark .srow{display:flex;justify-content:space-between;align-items:center;padding:15px 0;cursor:pointer}
+#themeDark .srow .sl{font-size:13.5px;color:var(--c68)}
+#themeDark .srow .sr{display:flex;align-items:center;gap:8px}
+#themeDark .srow .sv{font-size:12px;color:var(--c42)}
+#themeDark .srow .sv.mono{font-family:var(--mono)}
+#themeDark .srow .ch{color:var(--c30);font-size:15px}
+#themeDark .srow .gd{width:5px;height:5px;border-radius:50%;background:var(--in);
+    box-shadow:0 0 6px rgba(167,227,187,.7)}
+#themeDark .sfoot{margin-top:44px;text-align:center;font-family:var(--mono);font-size:9.5px;
+    letter-spacing:1px;color:var(--c30)}
+#themeDark .scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;
+    transition:opacity .26s ease;z-index:40}
+#themeDark .scrim.on{opacity:1;pointer-events:auto}
+#themeDark .qrsheet, #themeDark .wsheet, #themeDark .rsheet, #themeDark .ssheet, #themeDark .csheet{position:absolute;left:10px;right:10px;bottom:10px;z-index:45;border-radius:38px;
+    background:rgba(24,24,28,.72);
+    backdrop-filter:blur(30px) saturate(170%);-webkit-backdrop-filter:blur(30px) saturate(170%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 0 .5px rgba(255,255,255,.08),
+      0 -12px 44px rgba(0,0,0,.5);
+    padding:12px 22px 26px;transform:translateY(115%);
+    transition:transform .32s cubic-bezier(.3,.9,.3,1)}
+#themeDark .qrsheet.on, #themeDark .wsheet.on, #themeDark .rsheet.on, #themeDark .ssheet.on, #themeDark .csheet.on{transform:translateY(0)}
+#themeDark .cbody{margin:20px 34px 0;text-align:center;font-size:12.5px;line-height:1.75;color:var(--c55)}
+#themeDark .cbtns{display:flex;gap:12px;margin:24px 6px 4px}
+#themeDark .cbtns .pill{height:48px;font-size:13px}
+#themeDark .pill.danger{color:#E89B92}
+#themeDark .wopts{margin:22px 6px 4px;display:flex;flex-direction:column;gap:10px}
+#themeDark .wopt{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:24px;cursor:pointer;
+    background:rgba(255,255,255,.07);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 0 .5px rgba(255,255,255,.05);
+    transition:transform .12s ease}
+#themeDark .wopt:active{transform:scale(.97)}
+#themeDark .wic{width:38px;height:38px;border-radius:50%;flex:none;display:flex;align-items:center;
+    justify-content:center;color:var(--c68);
+    background:rgba(255,255,255,.07);box-shadow:inset 0 1px 0 rgba(255,255,255,.10)}
+#themeDark .wopt .m{flex:1}
+#themeDark .wopt .n{font-size:13.5px;font-weight:500;color:var(--c92)}
+#themeDark .wopt .d{font-size:11.5px;color:var(--c42);margin-top:3px}
+#themeDark .wopt .ch{color:var(--c30);font-size:16px}
+#themeDark .grab{width:36px;height:4px;border-radius:2px;background:var(--c30);margin:4px auto 0}
+#themeDark .qeyebrow{text-align:center;font-size:9.5px;letter-spacing:3px;color:var(--c42);
+    text-transform:uppercase;margin-top:16px}
+#themeDark .qrbox{display:flex;justify-content:center;margin-top:18px;position:relative}
+#themeDark .qrbadge{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    display:flex;align-items:center;justify-content:center;color:var(--c92)}
+#themeDark .samt{margin-top:26px;text-align:center;font-family:var(--num);font-size:38px;font-weight:500;
+    font-variant-numeric:tabular-nums;color:var(--c42)}
+#themeDark .sfx{margin-top:8px;text-align:center;font-family:var(--num);font-size:12px;color:var(--c30)}
+#themeDark .sfield{margin:24px 6px 0;display:flex;align-items:center;gap:10px;padding:15px 18px;border-radius:26px;
+    background:rgba(255,255,255,.07);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 0 .5px rgba(255,255,255,.05);
+    color:var(--c42);font-size:12.5px}
+#themeDark .sfield svg{flex:none;opacity:.55}
+#themeDark .sfield .ft{flex:1}
+#themeDark .addr{margin:18px auto 0;text-align:center;font-family:var(--mono);font-size:11.5px;
+    letter-spacing:.5px;line-height:1.75;color:var(--c42)}
+#themeDark .addr b{color:var(--c92);font-weight:500}
+#themeDark .cpyrow{display:flex;justify-content:center;margin-top:16px}
+#themeDark .cpy{height:40px;padding:0 22px;border-radius:20px;display:flex;align-items:center;gap:7px;
+    font-size:12.5px;font-weight:500;color:var(--c92);cursor:pointer;
+    background:rgba(255,255,255,.08);
+    backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 0 .5px rgba(255,255,255,.06);
+    transition:transform .12s ease}
+#themeDark .cpy:active{transform:scale(.95)}
+#themeDark .cpy svg{opacity:.7}
+#themeDark .qnote{margin-top:14px;text-align:center;font-size:10.5px;color:var(--c42)}
+#themeDark .tabbar{position:absolute;left:20px;right:20px;bottom:28px;z-index:25;
+    height:60px;border-radius:30px;
+    background:rgba(28,28,33,.46);
+    backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 0 .5px rgba(255,255,255,.08),
+      0 16px 36px rgba(0,0,0,.5);
+    display:flex;align-items:center;justify-content:space-between;padding:5px}
+#themeDark .tab{flex:1;height:50px;border-radius:25px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;color:var(--c30);cursor:pointer;
+    transition:background .18s ease,color .18s ease}
+#themeDark .tab.on{color:var(--c92);background:rgba(255,255,255,.12);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 0 0 .5px rgba(255,255,255,.05)}
+#themeDark .tab i{font-style:normal;font-size:10.5px;font-weight:500;letter-spacing:.2px}
+#themeDark .me{position:absolute;top:56px;left:26px;width:34px;height:34px;border-radius:50%;overflow:hidden;
+    z-index:15;cursor:pointer;
+    box-shadow:0 0 0 .5px rgba(255,255,255,.14),0 4px 12px rgba(0,0,0,.4);
+    transition:transform .12s ease}
+#themeDark .me:active{transform:scale(.92)}
+#themeDark .me img{width:100%;height:100%;object-fit:cover;display:block}
+#themeDark .homebar{position:absolute;bottom:9px;left:50%;transform:translateX(-50%);z-index:50;
+    width:134px;height:5px;border-radius:3px;background:rgba(255,255,255,.24)}
+#themeDark .caption{font-size:9px;letter-spacing:3px;color:#8A8880}
+#themeLight{--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --num:ui-rounded,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --c92:rgba(24,21,26,.94);--c68:rgba(24,21,26,.68);--c55:rgba(24,21,26,.55);
+    --c42:rgba(24,21,26,.44);--c30:rgba(24,21,26,.32);
+    --in:rgba(18,140,86,.95);
+    --out:rgba(196,74,62,.9);
+    --paper:#FBF5F4;}
+#themeLight .ph{width:375px;height:812px;background:#0A0A0C;border-radius:58px;padding:10px;
+    box-shadow:0 34px 80px rgba(20,18,14,.30)}
+#themeLight .screen{background:var(--paper);border-radius:48px;height:100%;position:relative;overflow:hidden;
+    color:var(--c92);display:flex;flex-direction:column}
+#themeLight .bloom{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
+#themeLight .bloom img.wash{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;
+    filter:blur(50px) saturate(1.25);transform:scale(1.3) scaleY(-1);opacity:.55;
+    mask-image:linear-gradient(to bottom,#000 44%,rgba(0,0,0,.45) 64%,rgba(0,0,0,.28) 100%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 44%,rgba(0,0,0,.45) 64%,rgba(0,0,0,.28) 100%)}
+#themeLight .bloom .heroframe{position:absolute;top:0;left:0;right:0;height:345px;overflow:hidden;
+    mask-image:linear-gradient(to bottom,#000 46%,rgba(0,0,0,.55) 72%,transparent 96%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 46%,rgba(0,0,0,.55) 72%,transparent 96%)}
+#themeLight .bloom img.hero{position:absolute;top:0;left:0;width:100%;height:345px;object-fit:contain;
+    object-position:50% 50%;transform:translate(101px,30px) scale(1.75);will-change:filter;
+    mask-image:linear-gradient(to bottom,#000 62%,transparent 100%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 62%,transparent 100%)}
+#themeLight .bloom .veil{position:absolute;inset:0;background:var(--paper);opacity:0}
+#themeLight .grain{position:absolute;inset:0;pointer-events:none;opacity:.03;z-index:60;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E")}
+#themeLight .island{position:absolute;top:16px;left:50%;transform:translateX(-50%);width:122px;height:34px;
+    border-radius:17px;background:#000;z-index:20}
+#themeLight .status{display:flex;justify-content:space-between;align-items:center;padding:26px 32px 0;
+    position:relative;z-index:20}
+#themeLight .topfade{position:absolute;top:0;left:0;right:0;height:118px;z-index:12;pointer-events:none}
+#themeLight .topfade i{position:absolute;inset:0;display:block}
+#themeLight .topfade i{mask-composite:intersect;-webkit-mask-composite:source-in}
+#themeLight .topfade i:nth-child(1){mask-image:linear-gradient(to bottom,#000 58%,transparent 90%),
+      linear-gradient(to right,transparent 0,#000 52px,#000 calc(100% - 52px),transparent 100%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 58%,transparent 90%),
+      linear-gradient(to right,transparent 0,#000 52px,#000 calc(100% - 52px),transparent 100%)}
+#themeLight .topfade i:nth-child(2){mask-image:linear-gradient(to bottom,#000 35%,transparent 62%),
+      linear-gradient(to right,transparent 0,#000 52px,#000 calc(100% - 52px),transparent 100%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 35%,transparent 62%),
+      linear-gradient(to right,transparent 0,#000 52px,#000 calc(100% - 52px),transparent 100%)}
+#themeLight .topfade i:nth-child(3){mask-image:linear-gradient(to bottom,#000 22%,transparent 48%),
+      linear-gradient(to right,transparent 0,#000 52px,#000 calc(100% - 52px),transparent 100%);
+    -webkit-mask-image:linear-gradient(to bottom,#000 22%,transparent 48%),
+      linear-gradient(to right,transparent 0,#000 52px,#000 calc(100% - 52px),transparent 100%)}
+#themeLight .status .time{font-size:15px;font-weight:600}
+#themeLight .sig{display:flex;align-items:center;gap:7px}
+#themeLight .bars{display:flex;align-items:flex-end;gap:1.5px}
+#themeLight .bars i{width:2.5px;background:var(--c92);border-radius:1px;display:block}
+#themeLight .batt{width:23px;height:11.5px;border:1.5px solid var(--c55);border-radius:4px;padding:1.5px;position:relative}
+#themeLight .batt::after{content:"";position:absolute;right:-4px;top:3px;width:1.5px;height:4px;background:var(--c55);border-radius:1px}
+#themeLight .batt i{display:block;height:100%;width:72%;background:var(--c92);border-radius:1.5px}
+#themeLight .views{position:absolute;inset:0;z-index:5}
+#themeLight .view{position:absolute;inset:0;opacity:0;pointer-events:none;transform:translateY(8px);
+    transition:opacity .28s ease,transform .28s ease;
+    overflow-y:auto;scrollbar-width:none}
+#themeLight .view::-webkit-scrollbar{display:none}
+#themeLight .view.on{opacity:1;pointer-events:auto;transform:none}
+#themeLight .eyebrow{margin-top:110px;text-align:center;font-size:10px;letter-spacing:4px;
+    color:rgba(24,21,26,.66);text-shadow:0 0 6px rgba(255,255,255,.9),0 0 16px rgba(255,255,255,.7);text-transform:uppercase;flex:none}
+#themeLight .balance{margin-top:16px;text-align:center;font-family:var(--num);font-size:46px;font-weight:500;
+    font-variant-numeric:tabular-nums;letter-spacing:-.5px;flex:none;
+    color:var(--c92);text-shadow:0 1px 18px rgba(255,255,255,.75),0 1px 40px rgba(255,255,255,.5)}
+#themeLight .balance .u{margin-right:3px}
+#themeLight .fiat{margin-top:12px;text-align:center;font-family:var(--num);font-size:12px;
+    color:rgba(24,21,26,.72);text-shadow:0 0 6px rgba(255,255,255,.9),0 0 16px rgba(255,255,255,.7);flex:none}
+#themeLight .acts{display:flex;gap:12px;margin:54px 26px 0;flex:none}
+#themeLight .pill{flex:1;height:52px;border-radius:26px;display:flex;align-items:center;justify-content:center;
+    gap:8px;font-size:14px;font-weight:500;color:var(--c92);cursor:pointer;
+    background:rgba(255,255,255,.6);
+    backdrop-filter:blur(20px) saturate(165%);-webkit-backdrop-filter:blur(20px) saturate(165%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.85),
+      0 0 0 .5px rgba(0,0,0,.06),0 12px 26px rgba(90,55,45,.16);
+    transition:transform .12s ease}
+#themeLight .pill:active{transform:scale(.96)}
+#themeLight .pill svg{opacity:.7}
+#themeLight .listwrap{margin-top:22px;padding:12px 20px 132px}
+#themeLight .tx{display:flex;align-items:center;gap:13px;padding:10px 0}
+#themeLight .tx .m{flex:1;min-width:0}
+#themeLight .ava{width:40px;height:40px;border-radius:50%;flex:none;display:flex;align-items:center;
+    justify-content:center;font-size:14px;font-weight:600;color:var(--c68);
+    position:relative;overflow:hidden;
+    background:rgba(24,21,26,.05);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 2px rgba(255,255,255,.85),
+      0 1px 5px rgba(60,35,30,.14)}
+#themeLight .ava svg{display:block}
+#themeLight .ava img.face{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#themeLight .ava img.logo{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;padding:6px}
+#themeLight .ava.duo{background:none;box-shadow:none;overflow:visible}
+#themeLight .ava.duo .c1, #themeLight .ava.duo .c2{position:absolute;width:26px;height:26px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 0 0 2px rgba(255,255,255,.85),
+      0 1px 4px rgba(60,35,30,.12)}
+#themeLight .ava.duo .c1{top:0;left:0;background:#E7F0ED;color:#256B60}
+#themeLight .ava.duo .c2{bottom:0;right:0;background:#FBEDEF;color:#C0537A}
+#themeLight .ava.cw{color:var(--c92)}
+#themeLight .ava.cg{background:rgba(96,190,112,.16);color:#2C8A47}
+#themeLight .ava.cg2{background:rgba(46,140,104,.15);color:#1F7D58}
+#themeLight .ava.cv{background:rgba(139,124,246,.15);color:#6A58D6}
+#themeLight .ava.cr{background:rgba(226,110,100,.14);color:#B5473C}
+#themeLight .ava.cb{background:rgba(96,150,240,.15);color:#3564C4}
+#themeLight .ava.ca{background:rgba(238,180,90,.18);color:#9A6E24}
+#themeLight .tx .n{font-size:13.5px;font-weight:440;color:var(--c68)}
+#themeLight .tx .d{font-size:11.5px;color:var(--c42);margin-top:3px}
+#themeLight .tx .r{text-align:right}
+#themeLight .tx .v{font-family:var(--num);font-size:13px;font-weight:500;font-variant-numeric:tabular-nums;color:var(--c68)}
+#themeLight .tx .v.in{color:var(--in)}
+#themeLight .tx .v.nt{color:var(--c42)}
+#themeLight .tx .fv{font-family:var(--num);font-size:11px;color:var(--c42);margin-top:3px}
+#themeLight .tx.pend{border:1px dashed rgba(255,255,255,.85);border-radius:14px;
+    padding:9px 14px;margin:0 -14px 6px;position:relative}
+#themeLight .px{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;cursor:pointer;
+    background:#F0E8E6;color:var(--c55);display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 0 2px var(--paper),0 1px 4px rgba(0,0,0,.12);transition:transform .12s ease}
+#themeLight .px:active{transform:scale(.85)}
+#themeLight .tx.pend .n{color:var(--c55)}
+#themeLight .tx.pend .ava{opacity:.8}
+#themeLight .srows{margin:48px 30px 0}
+#themeLight .srow{display:flex;justify-content:space-between;align-items:center;padding:15px 0;cursor:pointer}
+#themeLight .srow .sl{font-size:13.5px;color:var(--c68)}
+#themeLight .srow .sr{display:flex;align-items:center;gap:8px}
+#themeLight .srow .sv{font-size:12px;color:var(--c42)}
+#themeLight .srow .sv.mono{font-family:var(--mono)}
+#themeLight .srow .ch{color:var(--c30);font-size:15px}
+#themeLight .srow .gd{width:5px;height:5px;border-radius:50%;background:var(--in);
+    box-shadow:0 0 5px rgba(18,140,86,.45)}
+#themeLight .sfoot{margin-top:44px;text-align:center;font-family:var(--mono);font-size:9.5px;
+    letter-spacing:1px;color:var(--c30)}
+#themeLight .scrim{position:absolute;inset:0;background:rgba(30,20,25,.35);opacity:0;pointer-events:none;
+    transition:opacity .26s ease;z-index:40}
+#themeLight .scrim.on{opacity:1;pointer-events:auto}
+#themeLight .qrsheet, #themeLight .wsheet, #themeLight .rsheet, #themeLight .ssheet, #themeLight .csheet{position:absolute;left:10px;right:10px;bottom:10px;z-index:45;border-radius:38px;
+    background:rgba(253,247,246,.85);
+    backdrop-filter:blur(30px) saturate(170%);-webkit-backdrop-filter:blur(30px) saturate(170%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 0 0 .5px rgba(0,0,0,.07),
+      0 -12px 44px rgba(60,40,30,.28);
+    padding:12px 22px 26px;transform:translateY(115%);
+    transition:transform .32s cubic-bezier(.3,.9,.3,1)}
+#themeLight .qrsheet.on, #themeLight .wsheet.on, #themeLight .rsheet.on, #themeLight .ssheet.on, #themeLight .csheet.on{transform:translateY(0)}
+#themeLight .cbody{margin:20px 34px 0;text-align:center;font-size:12.5px;line-height:1.75;color:var(--c55)}
+#themeLight .cbtns{display:flex;gap:12px;margin:24px 6px 4px}
+#themeLight .cbtns .pill{height:48px;font-size:13px;background:rgba(24,21,26,.05);
+    backdrop-filter:none;-webkit-backdrop-filter:none;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 0 0 .5px rgba(0,0,0,.05)}
+#themeLight .pill.danger{color:#B5473C}
+#themeLight .wopts{margin:22px 6px 4px;display:flex;flex-direction:column;gap:10px}
+#themeLight .wopt{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:24px;cursor:pointer;
+    background:rgba(24,21,26,.045);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 .5px rgba(0,0,0,.05);
+    transition:transform .12s ease}
+#themeLight .wopt:active{transform:scale(.97)}
+#themeLight .wic{width:38px;height:38px;border-radius:50%;flex:none;display:flex;align-items:center;
+    justify-content:center;color:var(--c68);
+    background:rgba(24,21,26,.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.5)}
+#themeLight .wopt .m{flex:1}
+#themeLight .wopt .n{font-size:13.5px;font-weight:500;color:var(--c92)}
+#themeLight .wopt .d{font-size:11.5px;color:var(--c42);margin-top:3px}
+#themeLight .wopt .ch{color:var(--c30);font-size:16px}
+#themeLight .grab{width:36px;height:4px;border-radius:2px;background:var(--c30);margin:4px auto 0}
+#themeLight .qeyebrow{text-align:center;font-size:9.5px;letter-spacing:3px;color:var(--c42);
+    text-transform:uppercase;margin-top:16px}
+#themeLight .qrbox{display:flex;justify-content:center;margin-top:18px;position:relative}
+#themeLight .qrbadge{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    display:flex;align-items:center;justify-content:center;color:var(--c92)}
+#themeLight .samt{margin-top:26px;text-align:center;font-family:var(--num);font-size:38px;font-weight:500;
+    font-variant-numeric:tabular-nums;color:var(--c42)}
+#themeLight .sfx{margin-top:8px;text-align:center;font-family:var(--num);font-size:12px;color:var(--c30)}
+#themeLight .sfield{margin:24px 6px 0;display:flex;align-items:center;gap:10px;padding:15px 18px;border-radius:26px;
+    background:rgba(24,21,26,.045);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 .5px rgba(0,0,0,.05);
+    color:var(--c42);font-size:12.5px}
+#themeLight .sfield svg{flex:none;opacity:.55}
+#themeLight .sfield .ft{flex:1}
+#themeLight .addr{margin:18px auto 0;text-align:center;font-family:var(--mono);font-size:11.5px;
+    letter-spacing:.5px;line-height:1.75;color:var(--c42)}
+#themeLight .addr b{color:var(--c92);font-weight:500}
+#themeLight .cpyrow{display:flex;justify-content:center;margin-top:16px}
+#themeLight .cpy{height:40px;padding:0 22px;border-radius:20px;display:flex;align-items:center;gap:7px;
+    font-size:12.5px;font-weight:500;color:var(--c92);cursor:pointer;
+    background:rgba(24,21,26,.06);
+    backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 0 0 .5px rgba(0,0,0,.05);
+    transition:transform .12s ease}
+#themeLight .cpy:active{transform:scale(.95)}
+#themeLight .cpy svg{opacity:.7}
+#themeLight .qnote{margin-top:14px;text-align:center;font-size:10.5px;color:var(--c42)}
+#themeLight .tabbar{position:absolute;left:20px;right:20px;bottom:28px;z-index:25;
+    height:60px;border-radius:30px;
+    background:rgba(255,255,255,.55);
+    backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 0 0 .5px rgba(0,0,0,.06),
+      0 16px 36px rgba(80,50,40,.18);
+    display:flex;align-items:center;justify-content:space-between;padding:5px}
+#themeLight .tab{flex:1;height:50px;border-radius:25px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;color:var(--c30);cursor:pointer;
+    transition:background .18s ease,color .18s ease}
+#themeLight .tab.on{color:var(--c92);background:rgba(24,21,26,.07);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 0 0 .5px rgba(0,0,0,.04)}
+#themeLight .tab i{font-style:normal;font-size:10.5px;font-weight:500;letter-spacing:.2px}
+#themeLight .me{position:absolute;top:56px;left:26px;width:34px;height:34px;border-radius:50%;overflow:hidden;
+    z-index:15;cursor:pointer;
+    box-shadow:0 0 0 2px rgba(255,255,255,.75),0 4px 12px rgba(60,35,30,.3);
+    transition:transform .12s ease}
+#themeLight .me:active{transform:scale(.92)}
+#themeLight .me img{width:100%;height:100%;object-fit:cover;display:block}
+#themeLight .homebar{position:absolute;bottom:9px;left:50%;transform:translateX(-50%);z-index:50;
+    width:134px;height:5px;border-radius:3px;background:rgba(0,0,0,.28)}
+#themeLight .caption{font-size:9px;letter-spacing:3px;color:#8A8880}
+</style>
+</head>
+<body>
+<div id="themeDark">
+<div class="ph"><div class="screen">
+    <div class="glow"></div>
+    <div class="island"></div>
+    <div class="status">
+      <div class="time">4:20</div>
+      <div class="sig">
+        <div class="bars"><i style="height:4px"></i><i style="height:6px"></i><i style="height:8px"></i><i style="height:10px"></i></div>
+        <div class="batt"><i></i></div>
+      </div>
+    </div>
+
+    <div class="topfade"><i></i><i></i><i></i></div>
+    <div class="me" id="meBtn"><img src="assets/luke.png" alt=""></div>
+
+    <div class="views">
+      <!-- WALLET -->
+      <div class="view flex on" data-v="wallet">
+        <div class="mark"><svg width="190" height="190" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="#FFFFFF"/></svg></div>
+        <div class="eyebrow">Wallet</div>
+        <div class="balance"><span class="u">&#8383;</span>0.069</div>
+        <div class="fiat">$7,560</div>
+        <div class="acts">
+          <div class="pill" id="sndBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6.5 11.5 12 6l5.5 5.5"/></svg>
+            Send
+          </div>
+          <div class="pill" id="rcvBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13"/><path d="M6.5 12.5 12 18l5.5-5.5"/></svg>
+            Receive
+          </div>
+        </div>
+
+        <div class="listwrap">
+          <div class="tx pend"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">From Vault · Sep 3 · in 18 days</div></div>
+            <div class="r"><div class="v nt">+&#8383;0.1000</div><div class="fv">&#8776; $10,970</div></div></div>
+          <div class="tx"><div class="ava ca">M<img class="logo" style="background:#192E45" src="assets/mullvad.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">VPN</div><div class="d">To Mullvad · Aug 14</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0005</div><div class="fv">$56</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">From Vault · Aug 3</div></div>
+            <div class="r"><div class="v in"><span class="s">+</span>&#8383;0.1000</div><div class="fv">$10,960</div></div></div>
+          <div class="tx"><div class="ava cg2">L<img class="logo" style="background:#11B67A" src="assets/lloyds.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Coldcard Entropy Insurance</div><div class="d">To Lloyd's of London · Jul 29</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0009</div><div class="fv">$99</div></div></div>
+          <div class="tx"><div class="ava cb">B<img class="logo" style="background:#03211E" src="assets/bitrefill.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Gift cards</div><div class="d">To Bitrefill · Jul 24</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0027</div><div class="fv">$295</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">From Vault · Jul 3</div></div>
+            <div class="r"><div class="v in"><span class="s">+</span>&#8383;0.1000</div><div class="fv">$11,240</div></div></div>
+          <div class="tx"><div class="ava cv">M<img class="face" src="assets/mayankchhabra.jpg" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Won bet</div><div class="d">From Mayank Chhabra · Jun 28</div></div>
+            <div class="r"><div class="v in"><span class="s">+</span>&#8383;0.0018</div><div class="fv">$197</div></div></div>
+        </div>
+      </div>
+
+      <!-- VAULT -->
+      <div class="view flex" data-v="vault">
+        <div class="mark"><svg width="190" height="190" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="#FFFFFF"/></svg></div>
+        <div class="eyebrow">Vault</div>
+        <div class="balance"><span class="u">&#8383;</span>2.1000</div>
+        <div class="fiat">$230,400</div>
+        <div class="acts">
+          <div class="pill" id="depBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13"/><path d="M6.5 12.5 12 18l5.5-5.5"/></svg>
+            Deposit
+          </div>
+          <div class="pill" id="wdBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6.5 11.5 12 6l5.5 5.5"/></svg>
+            Withdraw
+          </div>
+        </div>
+
+        <div class="listwrap">
+          <div class="tx pend"><div class="ava"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2"/></svg></div><div class="m"><div class="n">Annual rollover</div><div class="d">Aug 1, 2027 · in 11 months</div></div>
+            <div class="r"><div class="v nt">&#8776; &#8383;1.0000</div><div class="fv">&#8776; $109,700</div></div></div>
+          <div class="tx pend"><div class="ava"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M12 18h.01"/></svg></div><div class="m"><div class="n">Emergency access</div><div class="d">Anytime &#183; 1 week cooldown</div></div>
+            <div class="r"><div class="v nt">&#8804; &#8383;0.5000</div><div class="fv">&#8776; $54,850</div></div>
+            <div class="px" data-c="emergency"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div></div>
+          <div class="tx pend"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Sep 3 · in 18 days</div></div>
+            <div class="r"><div class="v nt">&#8722;&#8383;0.1000</div><div class="fv">&#8776; $10,970</div></div>
+            <div class="px" data-c="allowance"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Aug 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,960</div></div></div>
+          <div class="tx"><div class="ava cw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 12a6.5 6.5 0 1 1-2-4.7"/><path d="M18.5 4.5V8H15"/></svg></div><div class="m"><div class="n">Annual rollover</div><div class="d">Re-signed 12 · Aug 1</div></div>
+            <div class="r"><div class="v nt">&#8383;2.2000</div><div class="fv">$240,900</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Jul 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$11,240</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Jun 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,730</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · May 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,380</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Apr 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,870</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Mar 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,410</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Feb 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,720</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Jan 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,580</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Dec 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,270</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Nov 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,660</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Oct 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,640</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.2 5.4h3a1.6 1.6 0 0 1 0 3.2h-3a1.6 1.6 0 0 1 0-3.2z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Sep 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$11,020</div></div></div>
+          <div class="tx"><div class="ava cw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 12a6.5 6.5 0 1 1-2-4.7"/><path d="M18.5 4.5V8H15"/></svg></div><div class="m"><div class="n">Annual rollover</div><div class="d">Re-signed 12 · Aug 2, 2025</div></div>
+            <div class="r"><div class="v nt">&#8383;3.3000</div><div class="fv">$376,200</div></div></div>
+
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="view" data-v="settings">
+        <div class="mark"><svg width="190" height="190" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="#FFFFFF"/></svg></div>
+        <div class="eyebrow">Settings</div>
+        <div class="srows">
+          <div class="srow"><div class="sl">Keys</div><div class="sr"><div class="sv">Phone + Trezor</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Recovery</div><div class="sr"><div class="sv">Configured</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Next ceremony</div><div class="sr"><div class="sv mono">Aug 2027</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Node</div><div class="sr"><div class="gd"></div><div class="sv">Connected</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Currency</div><div class="sr"><div class="sv">USD</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Notifications</div><div class="sr"><div class="sv">Allowance only</div><div class="ch">&#8250;</div></div></div>
+        </div>
+        <div class="sfoot">anzen 0.1 · block 908 391</div>
+      </div>
+    </div>
+
+    <div class="tabbar">
+      <div class="tab on" data-view="wallet">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.4 5.6h2.8a1.4 1.4 0 0 1 0 2.8h-2.8a1.4 1.4 0 0 1 0-2.8z"/></svg>
+        <i>Wallet</i>
+      </div>
+      <div class="tab" data-view="vault">
+        <svg width="16" height="16" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg>
+        <i>Vault</i>
+      </div>
+    </div>
+
+    <div class="scrim" id="scrim"></div>
+    <div class="qrsheet" id="qrsheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Vault Deposit</div>
+      <div class="qrbox">
+        <svg id="qr" viewBox="0 0 25 25" width="182" height="182" fill="rgba(255,255,255,.92)"></svg>
+        <div class="qrbadge"><svg width="19" height="19" viewBox="25 30 190 180"><path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="currentColor"/></svg></div>
+      </div>
+      <div class="addr"><div>bc1p<b>vault</b>n3953ns47dw6rpm6ahfpz4</div><div>49vcnns5rpnr5v2d0u55fekxq<b>39v257</b></div></div>
+      <div class="cpyrow">
+        <div class="cpy">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg>
+          Copy address
+        </div>
+      </div>
+      <div class="qnote">Anything sent here is sealed under the vault policy.</div>
+    </div>
+
+    <div class="wsheet" id="wsheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Withdraw</div>
+      <div class="wopts">
+        <div class="wopt">
+          <div class="wic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div>
+          <div class="m"><div class="n">Instant</div><div class="d">Any amount &#183; Phone + Trezor</div></div>
+          <div class="ch">&#8250;</div>
+        </div>
+        <div class="wopt">
+          <div class="wic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M12 18h.01"/></svg></div>
+          <div class="m"><div class="n">After 1 week</div><div class="d">Up to &#8383;0.5 &#183; Phone only</div></div>
+          <div class="ch">&#8250;</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rsheet" id="rsheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Receive</div>
+      <div class="qrbox">
+        <svg id="qr2" viewBox="0 0 25 25" width="182" height="182" fill="rgba(255,255,255,.92)"></svg>
+        <div class="qrbadge"><svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M5 5h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zm10.4 5.6h2.8a1.4 1.4 0 0 1 0 2.8h-2.8a1.4 1.4 0 0 1 0-2.8z"/></svg></div>
+      </div>
+      <div class="addr"><div>bc1qq8f2tvdw0s3jn54k</div><div>hce6mua7lgkx9r4ze30w5d</div></div>
+      <div class="cpyrow">
+        <div class="cpy">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg>
+          Copy address
+        </div>
+      </div>
+      <div class="qnote">Spendable anytime from your phone.</div>
+    </div>
+
+    <div class="ssheet" id="ssheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Send</div>
+      <div class="samt">&#8383;0.0000</div>
+      <div class="sfx">$0</div>
+      <div class="sfield">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg>
+        <div class="ft">Address &#183; paste or scan</div>
+      </div>
+      <div class="cpyrow">
+        <div class="cpy">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6.5 11.5 12 6l5.5 5.5"/></svg>
+          Send
+        </div>
+      </div>
+    </div>
+
+    <div class="csheet" id="csheet">
+      <div class="grab"></div>
+      <div class="qeyebrow" id="cTitle">Cancel</div>
+      <div class="cbody" id="cBody"></div>
+      <div class="cbtns">
+        <div class="pill danger" id="cYes">Cancel it</div>
+        <div class="pill" id="cNo">Keep it</div>
+      </div>
+    </div>
+
+    <div class="homebar"></div>
+    <div class="grain"></div>
+  </div></div>
+</div>
+<div id="themeLight">
+<div class="ph"><div class="screen">
+    <div class="bloom"><img class="wash" src="assets/sakura-bold.jpg" alt=""><div class="heroframe"><img class="hero" src="assets/sakura-bold.jpg" alt=""></div><div class="veil"></div></div>
+    <div class="island"></div>
+    <div class="status">
+      <div class="time">4:20</div>
+      <div class="sig">
+        <div class="bars"><i style="height:4px"></i><i style="height:6px"></i><i style="height:8px"></i><i style="height:10px"></i></div>
+        <div class="batt"><i></i></div>
+      </div>
+    </div>
+
+    <div class="topfade"><i></i><i></i><i></i></div>
+    <div class="me" id="meBtn"><img src="assets/luke.png" alt=""></div>
+
+    <div class="views">
+      <!-- WALLET -->
+      <div class="view flex on" data-v="wallet">
+        <div class="eyebrow">Wallet</div>
+        <div class="balance"><span class="u">&#8383;</span>0.0690</div>
+        <div class="fiat">$7,560</div>
+        <div class="acts">
+          <div class="pill" id="sndBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6.5 11.5 12 6l5.5 5.5"/></svg>
+            Send
+          </div>
+          <div class="pill" id="rcvBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13"/><path d="M6.5 12.5 12 18l5.5-5.5"/></svg>
+            Receive
+          </div>
+        </div>
+
+        <div class="listwrap">
+          <div class="tx pend"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">From Vault · Sep 3 · in 18 days</div></div>
+            <div class="r"><div class="v nt">+&#8383;0.1000</div><div class="fv">&#8776; $10,970</div></div></div>
+          <div class="tx"><div class="ava ca">M<img class="logo" style="background:#192E45" src="assets/mullvad.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">VPN</div><div class="d">To Mullvad · Aug 14</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0005</div><div class="fv">$56</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">From Vault · Aug 3</div></div>
+            <div class="r"><div class="v in"><span class="s">+</span>&#8383;0.1000</div><div class="fv">$10,960</div></div></div>
+          <div class="tx"><div class="ava cg2">L<img class="logo" style="background:#11B67A" src="assets/lloyds.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Coldcard Entropy Insurance</div><div class="d">To Lloyd's of London · Jul 29</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0009</div><div class="fv">$99</div></div></div>
+          <div class="tx"><div class="ava cb">B<img class="logo" style="background:#03211E" src="assets/bitrefill.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Gift cards</div><div class="d">To Bitrefill · Jul 24</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0027</div><div class="fv">$295</div></div></div>
+          <div class="tx"><div class="ava cv">M<img class="face" src="assets/mayankchhabra.jpg" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Lost bet</div><div class="d">To Mayank Chhabra · Jun 28</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0018</div><div class="fv">$197</div></div></div>
+<div class="tx"><div class="ava ca">M<img class="logo" style="background:#192E45" src="assets/mullvad.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">VPN</div><div class="d">To Mullvad · Aug 14</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0005</div><div class="fv">$56</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">From Vault · Aug 3</div></div>
+            <div class="r"><div class="v in"><span class="s">+</span>&#8383;0.1000</div><div class="fv">$10,960</div></div></div>
+          <div class="tx"><div class="ava cg2">L<img class="logo" style="background:#11B67A" src="assets/lloyds.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Coldcard Entropy Insurance</div><div class="d">To Lloyd's of London · Jul 29</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0009</div><div class="fv">$99</div></div></div>
+          <div class="tx"><div class="ava cb">B<img class="logo" style="background:#03211E" src="assets/bitrefill.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Gift cards</div><div class="d">To Bitrefill · Jul 24</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0027</div><div class="fv">$295</div></div></div>
+          <div class="tx"><div class="ava cv">M<img class="face" src="assets/mayankchhabra.jpg" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Lost bet</div><div class="d">To Mayank Chhabra · Jun 28</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0018</div><div class="fv">$197</div></div></div>
+<div class="tx"><div class="ava ca">M<img class="logo" style="background:#192E45" src="assets/mullvad.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">VPN</div><div class="d">To Mullvad · Aug 14</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0005</div><div class="fv">$56</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">From Vault · Aug 3</div></div>
+            <div class="r"><div class="v in"><span class="s">+</span>&#8383;0.1000</div><div class="fv">$10,960</div></div></div>
+          <div class="tx"><div class="ava cg2">L<img class="logo" style="background:#11B67A" src="assets/lloyds.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Coldcard Entropy Insurance</div><div class="d">To Lloyd's of London · Jul 29</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0009</div><div class="fv">$99</div></div></div>
+          <div class="tx"><div class="ava cb">B<img class="logo" style="background:#03211E" src="assets/bitrefill.png" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Gift cards</div><div class="d">To Bitrefill · Jul 24</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0027</div><div class="fv">$295</div></div></div>
+          <div class="tx"><div class="ava cv">M<img class="face" src="assets/mayankchhabra.jpg" onerror="this.remove()" alt=""></div><div class="m"><div class="n">Lost bet</div><div class="d">To Mayank Chhabra · Jun 28</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.0018</div><div class="fv">$197</div></div></div>
+        </div>
+      </div>
+
+      <!-- VAULT -->
+      <div class="view flex" data-v="vault">
+        <div class="eyebrow">Vault</div>
+        <div class="balance"><span class="u">&#8383;</span>2.1000</div>
+        <div class="fiat">$230,400</div>
+        <div class="acts">
+          <div class="pill" id="depBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13"/><path d="M6.5 12.5 12 18l5.5-5.5"/></svg>
+            Deposit
+          </div>
+          <div class="pill" id="wdBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6.5 11.5 12 6l5.5 5.5"/></svg>
+            Withdraw
+          </div>
+        </div>
+
+        <div class="listwrap">
+          <div class="tx pend"><div class="ava"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2"/></svg></div><div class="m"><div class="n">Annual rollover</div><div class="d">Aug 1, 2027 · in 11 months</div></div>
+            <div class="r"><div class="v nt">&#8776; &#8383;1.0000</div><div class="fv">&#8776; $109,700</div></div></div>
+          <div class="tx pend"><div class="ava"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M12 18h.01"/></svg></div><div class="m"><div class="n">Emergency access</div><div class="d">Anytime &#183; 1 week cooldown</div></div>
+            <div class="r"><div class="v nt">&#8804; &#8383;0.5000</div><div class="fv">&#8776; $54,850</div></div>
+            <div class="px" data-c="emergency"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div></div>
+          <div class="tx pend"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Sep 3 · in 18 days</div></div>
+            <div class="r"><div class="v nt">&#8722;&#8383;0.1000</div><div class="fv">&#8776; $10,970</div></div>
+            <div class="px" data-c="allowance"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Aug 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,960</div></div></div>
+          <div class="tx"><div class="ava cw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 12a6.5 6.5 0 1 1-2-4.7"/><path d="M18.5 4.5V8H15"/></svg></div><div class="m"><div class="n">Annual rollover</div><div class="d">Re-signed 12 · Aug 1</div></div>
+            <div class="r"><div class="v nt">&#8383;2.2000</div><div class="fv">$240,900</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Jul 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$11,240</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Jun 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,730</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · May 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,380</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Apr 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,870</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Mar 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,410</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Feb 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,720</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Jan 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,580</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Dec 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,270</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Nov 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$9,660</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Oct 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$10,640</div></div></div>
+          <div class="tx"><div class="ava duo"><div class="c1"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div><div class="c2"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div></div><div class="m"><div class="n">Monthly allowance</div><div class="d">To Wallet · Sep 3</div></div>
+            <div class="r"><div class="v"><span class="s">&#8722;</span>&#8383;0.1000</div><div class="fv">$11,020</div></div></div>
+          <div class="tx"><div class="ava cw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 12a6.5 6.5 0 1 1-2-4.7"/><path d="M18.5 4.5V8H15"/></svg></div><div class="m"><div class="n">Annual rollover</div><div class="d">Re-signed 12 · Aug 2, 2025</div></div>
+            <div class="r"><div class="v nt">&#8383;3.3000</div><div class="fv">$376,200</div></div></div>
+
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="view" data-v="settings">
+        <div class="eyebrow">Settings</div>
+        <div class="srows">
+          <div class="srow"><div class="sl">Keys</div><div class="sr"><div class="sv">Phone + Trezor</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Recovery</div><div class="sr"><div class="sv">Configured</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Next ceremony</div><div class="sr"><div class="sv mono">Aug 2027</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Node</div><div class="sr"><div class="gd"></div><div class="sv">Connected</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Currency</div><div class="sr"><div class="sv">USD</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Notifications</div><div class="sr"><div class="sv">Allowance only</div><div class="ch">&#8250;</div></div></div>
+        </div>
+        <div class="sfoot">anzen 0.1 · block 908 391</div>
+      </div>
+    </div>
+
+    <div class="tabbar">
+      <div class="tab on" data-view="wallet">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg>
+        <i>Wallet</i>
+      </div>
+      <div class="tab" data-view="vault">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg>
+        <i>Vault</i>
+      </div>
+    </div>
+
+    <div class="scrim" id="scrim"></div>
+    <div class="qrsheet" id="qrsheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Vault Deposit</div>
+      <div class="qrbox">
+        <svg id="qr" viewBox="0 0 25 25" width="182" height="182" fill="rgba(24,21,26,.9)"></svg>
+        <div class="qrbadge"><svg width="33" height="33" viewBox="0 0 24 24" fill="currentColor"><path fill="currentColor" opacity=".42" fill-rule="evenodd" d="M3.2 9.4C2.33 8.75 1.97 7.63 2.2 6.8C2.43 5.97 3.63 4.77 4.6 4.4C5.57 4.03 7.17 4.85 8 4.6C8.83 4.35 8.7 3.27 9.6 2.9C10.5 2.53 12.33 2.22 13.4 2.4C14.47 2.58 15 3.67 16 4C17 4.33 18.43 3.92 19.4 4.4C20.37 4.88 21.6 6.07 21.8 6.9C22 7.73 21.33 8.78 20.6 9.4C19.87 10.02 18.77 10.52 17.4 10.6C16.03 10.68 14.07 9.88 12.4 9.9C10.73 9.92 8.93 10.78 7.4 10.7C5.87 10.62 4.07 10.05 3.2 9.4ZM21.9 14.3a1.1 .85 0 1 0 -2.2 0a1.1 .85 0 1 0 2.2 0ZM19.1 17.9a.85 .65 0 1 0 -1.7 0a.85 .65 0 1 0 1.7 0Z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M11.7 21.6c.3-2.2-.1-4 .1-6M11.8 15.6c-1.1-1.9-2.7-3.2-4.7-4.5M9.4 13.2c-.5-1.4-.6-2.8-.3-4.4M7.1 11.1c-1.1-.8-2-1.9-2.5-3.2M11.8 15.6c1-2.1 2.6-3.6 4.9-4.8M14.3 12.7c.3-1.6.4-3 .2-4.7M16.7 10.8c1.1-.6 2-1.5 2.7-2.7"/></svg></div>
+      </div>
+      <div class="addr"><div>bc1p<b>vault</b>n3953ns47dw6rpm6ahfpz4</div><div>49vcnns5rpnr5v2d0u55fekxq<b>39v257</b></div></div>
+      <div class="cpyrow">
+        <div class="cpy">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg>
+          Copy address
+        </div>
+      </div>
+      <div class="qnote">Anything sent here is sealed under the vault policy.</div>
+    </div>
+
+    <div class="wsheet" id="wsheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Withdraw</div>
+      <div class="wopts">
+        <div class="wopt">
+          <div class="wic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div>
+          <div class="m"><div class="n">Instant</div><div class="d">Any amount &#183; Phone + Trezor</div></div>
+          <div class="ch">&#8250;</div>
+        </div>
+        <div class="wopt">
+          <div class="wic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M12 18h.01"/></svg></div>
+          <div class="m"><div class="n">After 1 week</div><div class="d">Up to &#8383;0.5000 &#183; Phone only</div></div>
+          <div class="ch">&#8250;</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rsheet" id="rsheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Receive</div>
+      <div class="qrbox">
+        <svg id="qr2" viewBox="0 0 25 25" width="182" height="182" fill="rgba(24,21,26,.9)"></svg>
+        <div class="qrbadge"><svg width="33" height="33" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.3 8.28C9.79 7.92 8.94 6.07 9.19 5.05C9.44 4.02 10.32 2.46 10.79 2.12C11.26 1.79 11.6 3.05 12 3.05C12.4 3.05 12.74 1.79 13.21 2.12C13.68 2.46 14.56 4.02 14.81 5.05C15.06 6.07 14.21 7.92 14.7 8.28C15.19 8.63 16.69 7.26 17.75 7.18C18.8 7.1 20.56 7.45 21.02 7.79C21.48 8.14 20.39 8.85 20.51 9.23C20.64 9.62 21.94 9.55 21.77 10.1C21.6 10.65 20.38 11.97 19.48 12.52C18.58 13.08 16.56 12.85 16.37 13.42C16.19 14 17.96 15 18.36 15.97C18.76 16.95 18.97 18.73 18.79 19.28C18.6 19.82 17.59 19 17.26 19.24C16.93 19.48 17.4 20.7 16.82 20.7C16.25 20.71 14.62 19.96 13.81 19.28C13.01 18.59 12.6 16.6 12 16.6C11.4 16.6 10.99 18.59 10.19 19.28C9.38 19.96 7.75 20.71 7.18 20.7C6.6 20.7 7.07 19.48 6.74 19.24C6.41 19 5.4 19.82 5.21 19.28C5.03 18.73 5.24 16.95 5.64 15.97C6.04 15 7.81 14 7.63 13.42C7.44 12.85 5.42 13.08 4.52 12.52C3.62 11.97 2.4 10.65 2.23 10.1C2.06 9.55 3.36 9.62 3.49 9.23C3.61 8.85 2.52 8.14 2.98 7.79C3.44 7.45 5.2 7.1 6.25 7.18C7.31 7.26 8.81 8.63 9.3 8.28ZM12.6 10.4L12.6 7L11.4 7L11.4 10.4ZM13.71 12.08L16.94 11.03L16.57 9.88L13.34 10.93ZM12.46 13.65L14.45 16.4L15.42 15.69L13.43 12.94ZM10.57 12.94L8.58 15.69L9.55 16.4L11.54 13.65ZM10.66 10.93L7.43 9.88L7.06 11.03L10.29 12.08Z"/></svg></div>
+      </div>
+      <div class="addr"><div>bc1pf9uk97y9a6k69c7q8k9m6pzfwj2</div><div>f64s89kx63yqq88hu8r00f2ks<b>hqjxd3</b></div></div>
+      <div class="cpyrow">
+        <div class="cpy">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg>
+          Copy address
+        </div>
+      </div>
+      <div class="qnote">Spendable anytime from your phone.</div>
+    </div>
+
+    <div class="ssheet" id="ssheet">
+      <div class="grab"></div>
+      <div class="qeyebrow">Send</div>
+      <div class="samt">&#8383;0.0000</div>
+      <div class="sfx">$0</div>
+      <div class="sfield">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/></svg>
+        <div class="ft">Address &#183; paste or scan</div>
+      </div>
+      <div class="cpyrow">
+        <div class="cpy">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6.5 11.5 12 6l5.5 5.5"/></svg>
+          Send
+        </div>
+      </div>
+    </div>
+
+    <div class="csheet" id="csheet">
+      <div class="grab"></div>
+      <div class="qeyebrow" id="cTitle">Cancel</div>
+      <div class="cbody" id="cBody"></div>
+      <div class="cbtns">
+        <div class="pill danger" id="cYes">Cancel it</div>
+        <div class="pill" id="cNo">Keep it</div>
+      </div>
+    </div>
+
+    <div class="homebar"></div>
+    <div class="grain"></div>
+  </div></div>
+</div>
+<script>
+(function(){
+const root=document.getElementById('themeDark');
+const $$=s=>root.querySelectorAll(s);
+const $id=i=>root.querySelector('#'+i);
+
+  const views=$$('.view');
+  const tabs=$$('.tab');
+  tabs.forEach(t=>t.addEventListener('click',()=>{
+    tabs.forEach(x=>x.classList.remove('on'));t.classList.add('on');
+    views.forEach(v=>v.classList.toggle('on',v.dataset.v===t.dataset.view));
+  }));
+
+  // avatar opens settings
+  $id('meBtn').addEventListener('click',()=>{
+    tabs.forEach(x=>x.classList.remove('on'));
+    views.forEach(v=>v.classList.toggle('on',v.dataset.v==='settings'));
+  });
+
+  // deposit sheet
+  const scrim=$id('scrim');
+  const qrsheet=$id('qrsheet');
+  const sheets={depBtn:'qrsheet',wdBtn:'wsheet',rcvBtn:'rsheet',sndBtn:'ssheet'};
+  Object.entries(sheets).forEach(([btn,sheet])=>{
+    $id(btn).addEventListener('click',()=>{
+      scrim.classList.add('on');$id(sheet).classList.add('on');
+    });
+  });
+  const closeAll=()=>{
+    scrim.classList.remove('on');
+    $$('.qrsheet,.wsheet,.rsheet,.ssheet,.csheet')
+      .forEach(s=>s.classList.remove('on'));
+  };
+  scrim.addEventListener('click',closeAll);
+
+  // cancel pending policy tx
+  const cCopy={
+    allowance:{t:'Cancel monthly allowance',
+      b:'Nothing will move to your Wallet automatically.<br>To set it up again, you’ll approve a new vault policy with your hardware wallet.'},
+    emergency:{t:'Cancel emergency access',
+      b:'Your phone alone will no longer be able to withdraw.<br>To set it up again, you’ll approve a new vault policy with your hardware wallet.'}
+  };
+  $$('.px').forEach(x=>x.addEventListener('click',()=>{
+    const c=cCopy[x.dataset.c];
+    $id('cTitle').textContent=c.t;
+    $id('cBody').innerHTML=c.b;
+    scrim.classList.add('on');$id('csheet').classList.add('on');
+  }));
+  $id('cYes').addEventListener('click',closeAll);
+  $id('cNo').addEventListener('click',closeAll);
+
+  // decorative QRs (mockup pattern)
+  (function(){
+    const draw=(svg,seed)=>{
+      const N=25;let s=seed;
+      const rnd=()=>{s^=s<<13;s^=s>>>17;s^=s<<5;return ((s>>>0)/4294967296)};
+      const inF=(x,y)=>(x<8&&y<8)||(x>=N-8&&y<8)||(x<8&&y>=N-8);
+      const inC=(x,y)=>x>=10&&x<=14&&y>=10&&y<=14;
+      let d='';
+      for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+        if(inF(x,y)||inC(x,y))continue;
+        if(rnd()<0.46)d+='<rect x="'+x+'" y="'+y+'" width="0.86" height="0.86" rx="0.26"/>';
+      }
+      const f=(ox,oy)=>'<path fill-rule="evenodd" d="M'+ox+' '+oy+'h7v7h-7z M'+(ox+1)+' '+(oy+1)+'h5v5h-5z"/>'+
+        '<rect x="'+(ox+2)+'" y="'+(oy+2)+'" width="3" height="3" rx="0.4"/>';
+      svg.innerHTML=d+f(0,0)+f(N-7,0)+f(0,N-7);
+    };
+    draw($id('qr'),1337);
+    draw($id('qr2'),4242);
+  })();
+
+})();
+(function(){
+const root=document.getElementById('themeLight');
+const $$=s=>root.querySelectorAll(s);
+const $id=i=>root.querySelector('#'+i);
+
+  const views=$$('.view');
+  const tabs=$$('.tab');
+  // fixed hero: photo defocuses and washes toward paper as content scrolls over it
+  const bloomImg=root.querySelector('.bloom img.hero');
+  const bloomVeil=root.querySelector('.bloom .veil');
+  const tfLayers=[...$$('.topfade i')];
+  const tfBase=[2,6,12];
+  const syncBloom=()=>{
+    const v=root.querySelector('.view.on');
+    const s=v?v.scrollTop:0;
+    const t=Math.min(s/200,1);
+    bloomImg.style.filter='blur('+(t*22).toFixed(1)+'px)';
+    bloomVeil.style.opacity=(t*.32).toFixed(3);
+    const r=Math.min(s/100,1);
+    tfLayers.forEach((el,i)=>{
+      const b='blur('+(tfBase[i]*r).toFixed(2)+'px)';
+      el.style.backdropFilter=b;el.style.webkitBackdropFilter=b;
+    });
+  };
+  views.forEach(v=>v.addEventListener('scroll',syncBloom));
+
+  // per-view backgrounds: hero image with its framing, wash behind the list
+  const bloomWash=root.querySelector('.bloom img.wash');
+  const viewBg={
+    wallet:{hero:'assets/sakura-soft.jpg',wash:'assets/sakura-bold.jpg',t:'translate(101px,30px) scale(1.75)'},
+    vault:{hero:'assets/sakura-tree.jpg',wash:'assets/sakura-tree.jpg',t:'translate(-76px,6px) scale(1.77)'},
+    settings:{hero:'assets/sakura-soft.jpg',wash:'assets/sakura-bold.jpg',t:'translate(101px,30px) scale(1.75)'}
+  };
+  const setViewBg=name=>{
+    const c=viewBg[name];if(!c)return;
+    bloomImg.src=c.hero;bloomWash.src=c.wash;
+    bloomImg.style.transform=c.t;
+  };
+  setViewBg('wallet');syncBloom();
+
+  tabs.forEach(t=>t.addEventListener('click',()=>{
+    tabs.forEach(x=>x.classList.remove('on'));t.classList.add('on');
+    views.forEach(v=>v.classList.toggle('on',v.dataset.v===t.dataset.view));
+    setViewBg(t.dataset.view);syncBloom();
+  }));
+
+  // avatar opens settings
+  $id('meBtn').addEventListener('click',()=>{
+    tabs.forEach(x=>x.classList.remove('on'));
+    views.forEach(v=>v.classList.toggle('on',v.dataset.v==='settings'));
+    setViewBg('settings');syncBloom();
+  });
+
+  // deposit sheet
+  const scrim=$id('scrim');
+  const qrsheet=$id('qrsheet');
+  const sheets={depBtn:'qrsheet',wdBtn:'wsheet',rcvBtn:'rsheet',sndBtn:'ssheet'};
+  Object.entries(sheets).forEach(([btn,sheet])=>{
+    $id(btn).addEventListener('click',()=>{
+      scrim.classList.add('on');$id(sheet).classList.add('on');
+    });
+  });
+  const closeAll=()=>{
+    scrim.classList.remove('on');
+    $$('.qrsheet,.wsheet,.rsheet,.ssheet,.csheet')
+      .forEach(s=>s.classList.remove('on'));
+  };
+  scrim.addEventListener('click',closeAll);
+
+  // cancel pending policy tx
+  const cCopy={
+    allowance:{t:'Cancel monthly allowance',
+      b:'Nothing will move to your Wallet automatically.<br>To set it up again, you’ll approve a new vault policy with your hardware wallet.'},
+    emergency:{t:'Cancel emergency access',
+      b:'Your phone alone will no longer be able to withdraw.<br>To set it up again, you’ll approve a new vault policy with your hardware wallet.'}
+  };
+  $$('.px').forEach(x=>x.addEventListener('click',()=>{
+    const c=cCopy[x.dataset.c];
+    $id('cTitle').textContent=c.t;
+    $id('cBody').innerHTML=c.b;
+    scrim.classList.add('on');$id('csheet').classList.add('on');
+  }));
+  $id('cYes').addEventListener('click',closeAll);
+  $id('cNo').addEventListener('click',closeAll);
+
+  // decorative QRs (mockup pattern)
+  (function(){
+    const draw=(svg,seed)=>{
+      const N=25;let s=seed;
+      const rnd=()=>{s^=s<<13;s^=s>>>17;s^=s<<5;return ((s>>>0)/4294967296)};
+      const inF=(x,y)=>(x<8&&y<8)||(x>=N-8&&y<8)||(x<8&&y>=N-8);
+      const inC=(x,y)=>x>=10&&x<=14&&y>=10&&y<=14;
+      let d='';
+      for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+        if(inF(x,y)||inC(x,y))continue;
+        if(rnd()<0.46)d+='<rect x="'+x+'" y="'+y+'" width="0.86" height="0.86" rx="0.26"/>';
+      }
+      const f=(ox,oy)=>'<path fill-rule="evenodd" d="M'+ox+' '+oy+'h7v7h-7z M'+(ox+1)+' '+(oy+1)+'h5v5h-5z"/>'+
+        '<rect x="'+(ox+2)+'" y="'+(oy+2)+'" width="3" height="3" rx="0.4"/>';
+      svg.innerHTML=d+f(0,0)+f(N-7,0)+f(0,N-7);
+    };
+    draw($id('qr'),1337);
+    draw($id('qr2'),4242);
+  })();
+
+})();
+</script>
+
+<script>
+// mirror interactions between the two designs
+(function(){
+const A=document.getElementById('themeDark'),B=document.getElementById('themeLight');
+const other=r=>r===A?B:A;
+const rootFor=el=>A.contains(el)?A:(B.contains(el)?B:null);
+
+document.addEventListener('click',e=>{
+  if(e._mirror)return;
+  const r=rootFor(e.target);if(!r)return;
+  const o=other(r);
+  const t=e.target.closest('[id],.tab,.px,.pill,.wopt,.cpy');
+  if(!t||!r.contains(t))return;
+  let target=null;
+  if(t.id)target=o.querySelector('#'+t.id);
+  if(!target&&t.classList.contains('px')&&t.dataset.c)
+    target=o.querySelector('.px[data-c="'+t.dataset.c+'"]');
+  if(!target){
+    for(const cls of ['tab','pill','wopt','cpy']){
+      if(t.classList.contains(cls)){
+        const i=[...r.querySelectorAll('.'+cls)].indexOf(t);
+        const olist=o.querySelectorAll('.'+cls);
+        if(i>-1&&olist[i])target=olist[i];
+        break;
+      }
+    }
+  }
+  if(target){
+    const ev=new MouseEvent('click',{bubbles:true});
+    ev._mirror=true;
+    target.dispatchEvent(ev);
+  }
+});
+
+document.addEventListener('scroll',e=>{
+  const el=e.target;
+  if(!(el instanceof Element)||!el.classList.contains('view'))return;
+  if(el._sync){el._sync--;return}
+  const r=rootFor(el);if(!r)return;
+  const twin=other(r).querySelector('.view[data-v="'+el.dataset.v+'"]');
+  if(twin&&Math.abs(twin.scrollTop-el.scrollTop)>1){
+    twin._sync=(twin._sync||0)+1;
+    twin.scrollTop=el.scrollTop;
+  }
+},true);
+})();
+</script>
+</body>
+</html>
