@@ -5,8 +5,8 @@ provides a native Ledger home screen and a deterministic benchmark of the
 complete annual vault-policy signing workload. The benchmark constructs real
 Bitcoin transactions and BIP341 sighashes, derives a reserved key from the
 Ledger seed, and creates real BIP340 signatures. All outpoints and amounts
-belong to an isolated fake fixture; generated signatures are committed to a
-transcript and discarded.
+belong to an isolated fake fixture; the benchmark returns only non-secret
+commitments to the generated values.
 
 The firmware depends on the platform-independent `anzen-cold-signer` crate and
 does not depend on the Anzen CLI, hot wallet, chain backends, or filesystem
@@ -60,16 +60,19 @@ For accurate timing, use a physical Flex and run the host benchmark while Anzen
 is open:
 
 ```sh
-python3 ledger-app/tools/signing-benchmark.py --inputs 12
+ledger-app/tools/run-signing-benchmark.sh --inputs 12
 ```
 
-The host measures only the signing APDU, reports the duration on the Flex
-completion screen, and does not ask the device to verify its own signatures.
-`--inputs` accepts `1`, `2`, or `12`; the rollover requires one signature per
-input, while every other policy transaction has one input. Speculos can
-exercise the same protocol for correctness, but its timing is not
-representative of physical hardware:
+The wrapper creates an isolated Python environment and installs the pinned
+Ledger USB transport automatically. The host separately measures BIP32 key
+derivation, construction of every real BIP341 policy sighash, and repeated
+BIP340 signing of one fixed digest. It
+reports each phase and their sum on the Flex completion screen. The device does
+not verify its own signatures. `--inputs` accepts `1`, `2`, or `12`; the
+rollover requires one signature per input, while every other policy transaction
+has one input. Speculos can exercise the same protocol for correctness, but its
+timing is not representative of physical hardware:
 
 ```sh
-python3 ledger-app/tools/signing-benchmark.py --speculos 127.0.0.1:9999 --inputs 12
+ledger-app/tools/run-signing-benchmark.sh --speculos 127.0.0.1:9999 --inputs 12
 ```

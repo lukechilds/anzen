@@ -1,6 +1,6 @@
 use anzen_cold_signer::benchmark::{
-    BenchmarkConfig, BenchmarkError as GraphError, PolicyCommitment, Sha256, VisitError,
-    WorkloadSummary, normalize_bip340_public_key, transcript_hash,
+    BenchmarkConfig, BenchmarkError as GraphError, FIXED_SIGNING_DIGEST, PolicyCommitment, Sha256,
+    VisitError, WorkloadSummary, normalize_bip340_public_key,
 };
 use ledger_device_sdk::{
     ecc::{ECPrivateKey, Secp256k1, SeedDerive, make_bip32_path},
@@ -70,13 +70,13 @@ impl Sha256 for LedgerSha256 {
 pub struct BenchmarkContext {
     config: BenchmarkConfig,
     summary: WorkloadSummary,
+    hww_private_key: ECPrivateKey<32, 'W'>,
     hww_public_key: [u8; 65],
-    transcript: [u8; 32],
 }
 
 impl BenchmarkContext {
     pub fn prepare(rollover_inputs: u8) -> Result<Self, BenchmarkError> {
-        let (_hww_private_key, hww_public_key) = derive_benchmark_key()?;
+        let (hww_private_key, hww_public_key) = derive_benchmark_key()?;
         let hww_xonly = xonly(hww_public_key)?;
 
         let mut hasher = LedgerSha256;
@@ -92,8 +92,8 @@ impl BenchmarkContext {
         Ok(Self {
             config,
             summary,
+            hww_private_key,
             hww_public_key,
-            transcript: [0_u8; 32],
         })
     }
 
@@ -105,35 +105,45 @@ impl BenchmarkContext {
         xonly(self.hww_public_key).expect("prepared benchmark public key is valid")
     }
 
-    /// Derive the Ledger key, rebuild every BIP341 message, and produce every HWW signature.
-    /// Signatures are committed to the transcript and then discarded.
-    pub fn run(&mut self) -> Result<[u8; 32], BenchmarkError> {
-        let (hww_private_key, hww_public_key) = derive_benchmark_key()?;
+    /// Repeat the complete BIP32 derivation and public-key construction.
+    pub fn benchmark_key_derivation(&self) -> Result<[u8; 32], BenchmarkError> {
+        let (_hww_private_key, hww_public_key) = derive_benchmark_key()?;
         if hww_public_key != self.hww_public_key {
             return Err(BenchmarkError::PublicKeyMismatch);
         }
+        xonly(hww_public_key)
+    }
+
+    /// Construct every transaction and BIP341 signature message without signing it.
+    pub fn benchmark_graph(&self) -> Result<[u8; 32], BenchmarkError> {
         let config = &self.config;
         let mut hasher = LedgerSha256;
-        let mut transcript_hasher = LedgerSha256;
-        let mut transcript = [0_u8; 32];
+        let mut last_sighash = [0_u8; 32];
         let mut generated = 0_u8;
         config.for_each_signature_job(&mut hasher, |job| {
-            let hww_signature = schnorr_sign_derived(&hww_private_key, job.sighash)
-                .map_err(|_| BenchmarkError::SignatureCreation)?;
-            transcript = transcript_hash(
-                &mut transcript_hasher,
-                transcript,
-                job.sighash,
-                hww_signature,
-            );
+            last_sighash = job.sighash;
             generated += 1;
-            Ok(())
+            Ok::<(), BenchmarkError>(())
         })?;
         if generated != self.summary.signature_jobs {
             return Err(BenchmarkError::SignatureCountMismatch);
         }
-        self.transcript = transcript;
-        Ok(transcript)
+        Ok(last_sighash)
+    }
+
+    /// Sign one fixed digest once per graph signature job.
+    ///
+    /// Keeping graph construction out of this loop makes this phase directly
+    /// comparable with other hardware implementations.
+    pub fn benchmark_fixed_digest_signing(&self) -> Result<[u8; 32], BenchmarkError> {
+        let mut last_signature = [0_u8; 64];
+        for _ in 0..self.summary.signature_jobs {
+            last_signature = schnorr_sign_derived(&self.hww_private_key, FIXED_SIGNING_DIGEST)
+                .map_err(|_| BenchmarkError::SignatureCreation)?;
+        }
+        let mut signature_commitment = [0_u8; 32];
+        signature_commitment.copy_from_slice(&last_signature[..32]);
+        Ok(signature_commitment)
     }
 }
 

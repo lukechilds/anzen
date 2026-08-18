@@ -13,6 +13,14 @@ pub const MONTHLY_STEPS: usize = 12;
 pub const TRANSACTION_COUNT: u8 = 28;
 pub const MAX_ROLLOVER_INPUTS: usize = 12;
 pub const MAX_SIGNATURE_JOBS: usize = MAX_ROLLOVER_INPUTS + 27;
+/// SHA256("Anzen benchmark fixed BIP340 digest v1").
+///
+/// Hardware integrations sign this same digest repeatedly so signing time is
+/// measured independently from transaction-graph and BIP341 hashing time.
+pub const FIXED_SIGNING_DIGEST: [u8; 32] = [
+    0x56, 0xe2, 0xdd, 0x75, 0xad, 0x8f, 0xc8, 0xc9, 0xf8, 0xf5, 0x8c, 0x2a, 0xdf, 0x74, 0x5f, 0xd3,
+    0xf4, 0x66, 0x69, 0xab, 0x38, 0x1c, 0x53, 0x00, 0xa7, 0x1e, 0xb6, 0xa7, 0xa2, 0xac, 0xb5, 0x25,
+];
 pub const MONTHLY_DELAY_SEQUENCE: u32 = (1 << 22) | 5_063;
 pub const EMERGENCY_DELAY_SEQUENCE: u32 = (1 << 22) | 1_182;
 pub const PHONE_RECOVERY_BLOCKS: u16 = 61_200;
@@ -779,6 +787,14 @@ mod tests {
         );
         assert_eq!(policy.merkle_root, merkle_root.to_byte_array());
         assert_eq!(policy.output_key_tweak, tweak.to_byte_array());
+    }
+
+    #[test]
+    fn fixed_signing_digest_matches_its_named_preimage() {
+        assert_eq!(
+            FIXED_SIGNING_DIGEST,
+            <[u8; 32]>::from(Sha2::digest(b"Anzen benchmark fixed BIP340 digest v1"))
+        );
     }
 
     #[test]

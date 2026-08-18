@@ -13,8 +13,10 @@ from dataclasses import dataclass
 
 CLA = 0xE0
 PREPARE = 0x20
-RUN = 0x21
-COMPLETE = 0x22
+KEY_DERIVATION = 0x21
+GRAPH = 0x22
+SIGNING = 0x23
+COMPLETE = 0x24
 BENCHMARK_ERRORS = {
     0x6F10: "transaction graph construction failed",
     0x6F11: "Ledger cryptography operation failed",
@@ -58,22 +60,32 @@ class SpeculosTransport(Transport):
         self.socket.close()
 
 
-class LedgerBlueTransport(Transport):
+class LedgerCommTransport(Transport):
     def __init__(self) -> None:
         try:
-            from ledgerblue.comm import getDongle
+            from ledgercomm import Transport as LedgerTransport
         except ImportError as error:
             raise RuntimeError(
-                "ledgerblue is required for a physical device; install it with "
-                "`python -m pip install ledgerblue`"
+                "ledgercomm HID support is required for a physical device; run "
+                "`ledger-app/tools/run-signing-benchmark.sh`"
             ) from error
-        self.dongle = getDongle(False)
+        try:
+            self.transport = LedgerTransport(interface="hid")
+        except Exception as error:
+            raise RuntimeError(
+                "could not connect to a Ledger over USB; connect and unlock it, "
+                "then open Anzen"
+            ) from error
 
     def exchange(self, apdu: bytes) -> bytes:
-        return bytes(self.dongle.exchange(apdu))
+        try:
+            status, response = self.transport.exchange_raw(apdu)
+        except Exception as error:
+            raise RuntimeError("Ledger USB exchange failed") from error
+        return parse_response(response + status.to_bytes(2, "big"))
 
     def close(self) -> None:
-        self.dongle.close()
+        self.transport.close()
 
 
 @dataclass(frozen=True)
@@ -89,7 +101,7 @@ class Workload:
         if len(response) != 36:
             raise RuntimeError(f"unexpected benchmark response length: {len(response)}")
         workload = cls(*response[:4], response[4:])
-        if workload.version != 2:
+        if workload.version != 3:
             raise RuntimeError(f"unsupported benchmark version: {workload.version}")
         return workload
 
@@ -136,26 +148,49 @@ def run(transport: Transport, rollover_inputs: int) -> None:
         f"  {prepared.rollover_inputs} rollover inputs, "
         f"{prepared.transactions} transactions, {prepared.signatures} signatures"
     )
-    print("\nRunning the timed physical signing workload…")
-    signing_started = time.perf_counter()
-    completed = Workload.parse(transport.exchange(apdu(RUN)))
-    signing_elapsed = time.perf_counter() - signing_started
-    if not prepared.same_shape(completed):
-        raise RuntimeError("device changed the benchmark workload after approval")
+    def timed_phase(label: str, instruction: int) -> tuple[Workload, float]:
+        print(f"\n{label}…")
+        started = time.perf_counter()
+        result = Workload.parse(transport.exchange(apdu(instruction)))
+        elapsed = time.perf_counter() - started
+        if not prepared.same_shape(result):
+            raise RuntimeError("device changed the benchmark workload after approval")
+        return result, elapsed
 
-    signing_milliseconds = min(round(signing_elapsed * 1000), 0xFFFFFFFF)
-    completion = transport.exchange(
-        apdu(COMPLETE, data=signing_milliseconds.to_bytes(4, "big"))
+    derived, key_derivation_elapsed = timed_phase(
+        "Timing BIP32 key derivation and public-key creation", KEY_DERIVATION
     )
-    if completion != b"\x02":
+    if derived.trailing != prepared.trailing:
+        raise RuntimeError("re-derived HWW public key changed")
+    _graph, graph_elapsed = timed_phase(
+        "Timing transaction graph and BIP341 sighash construction", GRAPH
+    )
+    completed, signing_elapsed = timed_phase(
+        "Timing repeated fixed-digest BIP340 signing", SIGNING
+    )
+
+    elapsed_phases = (key_derivation_elapsed, graph_elapsed, signing_elapsed)
+    encoded_timings = b"".join(
+        min(round(elapsed * 1000), 0xFFFFFFFF).to_bytes(4, "big")
+        for elapsed in elapsed_phases
+    )
+    completion = transport.exchange(
+        apdu(COMPLETE, data=encoded_timings)
+    )
+    if completion != b"\x03":
         raise RuntimeError("unexpected benchmark-completion response")
 
     per_signature_ms = signing_elapsed * 1000 / completed.signatures
-    print(f"\n✓ Created {completed.signatures} HWW signatures.")
-    print(f"\nSigning time:      {signing_elapsed:.3f} s")
+    full_workload_elapsed = sum(elapsed_phases)
+    print(f"\n✓ Completed {completed.signatures} fixed-digest HWW signatures.")
+    print(f"\nKey derivation:    {key_derivation_elapsed:.3f} s")
+    print(f"Transaction graph: {graph_elapsed:.3f} s")
+    print(f"Signing:           {signing_elapsed:.3f} s")
     print(f"Per signature:     {per_signature_ms:.1f} ms")
+    print(f"Full workload:     {full_workload_elapsed:.3f} s")
     print(f"Fixture + review:  {prepare_elapsed:.3f} s (includes human approval)")
-    print(f"Transcript:        {completed.trailing.hex()}")
+    print(f"Last sighash:      {_graph.trailing.hex()}")
+    print(f"Last signature R:  {completed.trailing.hex()}")
 
 
 def main() -> int:
@@ -181,7 +216,7 @@ def main() -> int:
         transport = (
             SpeculosTransport(args.speculos)
             if args.speculos
-            else LedgerBlueTransport()
+            else LedgerCommTransport()
         )
         try:
             run(transport, args.inputs)
