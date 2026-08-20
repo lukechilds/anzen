@@ -9,7 +9,7 @@ use core::cmp::Ordering;
 pub const VAULT_BALANCE_SATS: u64 = 210_000_000;
 pub const MONTHLY_ALLOWANCE_SATS: u64 = 10_000_000;
 pub const EMERGENCY_ACCESS_SATS: u64 = 50_000_000;
-pub const CONNECTOR_VALUE_SATS: u64 = 10_000;
+pub const CONNECTOR_VALUE_SATS: u64 = 1_000;
 pub const MONTHLY_STEPS: usize = 12;
 pub const TRANSACTION_COUNT: u8 = 15;
 pub const MAX_ROLLOVER_INPUTS: usize = 12;
@@ -1058,15 +1058,15 @@ mod tests {
         );
         assert_eq!(
             jobs[0],
-            hex_literal::hex!("46dd6d700aa4bf754e6f1480f96d7023f3dcf7a1b2621a1a27095e926a867e01")
+            hex_literal::hex!("f8822d0163062def93d76aff8ff68e310e9b5ff74cf7b01da0ab24dc79b19cf7")
         );
         assert_eq!(
             jobs[jobs.len() - 1],
-            hex_literal::hex!("079ca96c653a171ef2cf1d5adb82b031f1b1ef1d9b9a57fd345e70aea289943c")
+            hex_literal::hex!("b747e0da869f4d3b063d43486fabb53da892b4ab7029f4045b12fa22f0d74c31")
         );
         assert_eq!(
             <[u8; 32]>::from(digest.finalize()),
-            hex_literal::hex!("fe4c60fab14873c3b7d9eb25a1d51d11c368b28d047150b636851ac53085da75")
+            hex_literal::hex!("46214a1b16f883aa7f668262078e52ed415bfae0c6a554ad125d42752c713afa")
         );
     }
 }

@@ -114,7 +114,7 @@ Until such a change is activated, block-based CSV is the only stateless single-o
 
 ## Revocable policy connectors
 
-The vault script remains the only script that controls principal. Revocable policy state is represented by small 10,000-sat connector UTXOs under this fixed Taproot policy:
+The vault script remains the only script that controls principal. Revocable policy state is represented by small 1,000-sat connector UTXOs under this fixed Taproot policy:
 
 ```text
 tr(NUMS,{pk(M),pk(H)})
@@ -133,7 +133,7 @@ Revocation is constructed dynamically and spends only the current connector. It 
 
 Annual rollover consumes every live old connector and creates exactly one replacement for each enabled independent chain. An intermediate action rolls its connector to the same controller address; a terminal action consumes it without replacement. Phone-key rotation consumes all old-controller outputs before installing the replacement key, then a renewed policy creates connectors under the new keys.
 
-The MVP fixes connector value and fees at 10,000 sats and 1 sat/vB. Production requires a current-feerate strategy, optional fee inputs, and RBF/CPFP support. Until revocation confirms, it can race a mature policy action that spends the same connector.
+The MVP fixes connector value at 1,000 sats and fees at 1 sat/vB. A standalone 137-vbyte revocation therefore leaves 863 sats of non-dust P2TR change. Production requires a current-feerate strategy, optional fee inputs, and RBF/CPFP support. Until revocation confirms, it can race a mature policy action that spends the same connector.
 
 ## Monthly mobile spending
 

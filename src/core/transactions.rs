@@ -481,7 +481,9 @@ pub fn keypair_pubkey(keypair: &Keypair, _secp: &Secp256k1<All>) -> XOnlyPublicK
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS, keys::DeviceKeys};
+    use crate::core::{
+        CONNECTOR_VALUE_SATS, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS, keys::DeviceKeys,
+    };
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, TxIn, absolute, transaction::Version};
 
     fn fixture(sequence: Sequence) -> (VaultPolicy, DeviceKeys, DeviceKeys, Psbt) {
@@ -583,7 +585,7 @@ mod tests {
                 script_pubkey: vault.address.script_pubkey(),
             },
             TxOut {
-                value: Amount::from_sat(10_000),
+                value: Amount::from_sat(CONNECTOR_VALUE_SATS),
                 script_pubkey: controller.address.script_pubkey(),
             },
         ];
@@ -660,7 +662,7 @@ mod tests {
         let utxo = VaultUtxo {
             outpoint: OutPoint::null(),
             txout: TxOut {
-                value: Amount::from_sat(10_000),
+                value: Amount::from_sat(CONNECTOR_VALUE_SATS),
                 script_pubkey: controller.address.script_pubkey(),
             },
             confirmation_height: 1,
@@ -684,7 +686,7 @@ mod tests {
         );
         assert_eq!(
             unsigned.unsigned_tx.output[0].value.to_sat() + fee_sats,
-            10_000
+            CONNECTOR_VALUE_SATS
         );
         for (path, keypair) in [
             (ControllerPath::Phone, &phone.vault_keypair),

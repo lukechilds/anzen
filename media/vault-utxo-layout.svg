@@ -7,7 +7,7 @@
   aria-labelledby="title description"
 >
   <title id="title">Anzen annual vault transaction graph</title>
-  <desc id="description">The simplified on-chain structure of a 2.1 bitcoin vault after annual rollover, with fees omitted. A confirmed 1.2 bitcoin allowance vault output and 10,000 sat connector feed twelve sequential presigned authorizations. Each releases 0.1 bitcoin after a relative 30-day delay and rolls both vault and connector state. Revocation spends only the connector, leaving vault principal in place. A separate 0.9 bitcoin remainder and connector fund a 0.5 bitcoin emergency withdrawal with a one-week delay; cancellation likewise spends only its connector.</desc>
+  <desc id="description">The simplified on-chain structure of a 2.1 bitcoin vault after annual rollover, with fees omitted. A confirmed 1.2 bitcoin allowance vault output and 1,000 sat connector feed twelve sequential presigned authorizations. Each releases 0.1 bitcoin after a relative 30-day delay and rolls both vault and connector state. Revocation spends only the connector, leaving vault principal in place. A separate 0.9 bitcoin remainder and connector fund a 0.5 bitcoin emergency withdrawal with a one-week delay; cancellation likewise spends only its connector.</desc>
   <style>
     :root {
       --bg: #fafafa;
@@ -112,7 +112,7 @@
   </g>
   <g class="d-utxo">
     <rect x="18" y="305" width="116" height="53" rx="17" />
-    <text x="76" y="335">10k connector</text>
+    <text x="76" y="335">1k connector</text>
   </g>
   <path class="d-branchline" d="M134 64 H142 M134 331 H142 V64 M142 64 L170 52 M142 64 L170 78" />
   <g class="d-tx">
@@ -197,7 +197,7 @@
   </g>
   <g class="d-utxo">
     <rect x="18" y="690" width="116" height="53" rx="17" />
-    <text x="76" y="720">10k connector</text>
+    <text x="76" y="720">1k connector</text>
   </g>
   <path class="d-branchline" d="M134 583 H154 V618 H170 M134 716 H154 V618" />
   <g class="d-tx">
@@ -236,7 +236,7 @@
   <text class="d-step" x="252" y="817">Future withdrawal controller</text>
   <g class="d-utxo future">
     <rect x="194" y="825" width="116" height="38" rx="17" />
-    <text x="252" y="848">10k connector</text>
+    <text x="252" y="848">1k connector</text>
   </g>
   <path class="d-branchline" d="M310 844 H322 V750 H338" />
 

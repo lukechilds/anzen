@@ -50,7 +50,7 @@ tr(
 
 This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
 
-Revocable authorization state lives in separate 10,000-sat connector outputs. They reuse the same device keys under a fixed 1-of-2 Taproot policy:
+Revocable authorization state lives in separate 1,000-sat connector outputs. They reuse the same device keys under a fixed 1-of-2 Taproot policy:
 
 ```text
 tr(NUMS,{pk(phone),pk(hww)})
@@ -127,7 +127,7 @@ $ anzen policy
 Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
 Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
 Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
-Policy controller reserve: 10000 sats per active chain
+Policy controller reserve: 1000 sats per active chain
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
@@ -146,7 +146,7 @@ PHONE POLICY PROPOSAL
 Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
 Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
 Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
-Policy controller reserve: 10000 sats per active chain
+Policy controller reserve: 1000 sats per active chain
 Monthly limit: 10000000 sats
 Emergency access limit: 50000000 sats
 Emergency access delay: 605184 seconds (~1 week)
@@ -170,7 +170,7 @@ PHONE POLICY PROPOSAL
 Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
 Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
 Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
-Policy controller reserve: 10000 sats per active chain
+Policy controller reserve: 1000 sats per active chain
 Monthly limit: 10000000 sats
 Emergency access limit: 50000000 sats
 Emergency access delay: 605184 seconds (~1 week)
@@ -200,7 +200,7 @@ $ anzen policy
 Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
 Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
 Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
-Policy controller reserve: 10000 sats per active chain
+Policy controller reserve: 1000 sats per active chain
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly limit: 10000000 sats
@@ -221,7 +221,7 @@ $ anzen phone authorize 1
 Broadcast Authorization for allowance step 1: 7261aad194701449239640b059f6a77ba926c2a82e4e18a23947fddb14bd9428
 ```
 
-The authorization releases the approved amount at output 0, creates step 2's vault output at output 1, and rolls the 10,000-sat connector to output 2. The phone adds only the controller signature at execution. Step 2 cannot mature before step 1 confirms, even if the phone waited much longer than 30 days before using step 1.
+The authorization releases the approved amount at output 0, creates step 2's vault output at output 1, and rolls the 1,000-sat connector to output 2. The phone adds only the controller signature at execution. Step 2 cannot mature before step 1 confirms, even if the phone waited much longer than 30 days before using step 1.
 
 To keep only a 0.01 BTC soft limit from a 0.1 BTC authorization, immediately return the difference to cold storage:
 

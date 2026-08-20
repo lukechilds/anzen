@@ -4,10 +4,10 @@ This file records implementation decisions and unforeseen constraints that were 
 
 ## 2026-08-20
 
-- Replace policy package version 4's presigned revocation/cancellation pairs with version 5 connector state. Every future action combines a phone+HWW-presigned vault input with an unsigned 10,000-sat `tr(NUMS,{pk(phone),pk(hww)})` controller input. The phone signs the controller only at execution; either device can revoke by spending only that connector, leaving principal in its existing vault output.
+- Replace policy package version 4's presigned revocation/cancellation pairs with version 5 connector state. Every future action combines a phone+HWW-presigned vault input with an unsigned 1,000-sat `tr(NUMS,{pk(phone),pk(hww)})` controller input. The phone signs the controller only at execution; either device can revoke by spending only that connector, leaving principal in its existing vault output.
 - Identify controller state by exact outpoint while reusing the same two fixed vault keys and controller address for the key epoch. Intermediate actions reproduce one connector, terminal actions consume it, annual rollover consumes all old connectors and creates one per enabled independent chain, and phone rotation consumes old-key connectors before activating the new epoch. Revocation change goes to fresh phone-wallet change or an HWW-verified explicit destination and never back to the controller.
 - Reduce a fully funded monthly-plus-emergency policy to 15 annual PSBTs and 26 HWW vault signatures for a twelve-input rollover. Revocation and emergency cancellation are dynamic controller spends. Update the Rust, Ledger, and Trezor deterministic workloads to the same transaction graph and pin cross-implementation BIP341 digest commitments.
-- Keep 10,000-sat connectors and 1 sat/vB fees as explicit MVP constants. Production still requires current-feerate selection, optional fee inputs, and RBF/CPFP handling for execution and revocation.
+- Keep 1,000-sat connectors and 1 sat/vB fees as explicit MVP constants. Production still requires current-feerate selection, optional fee inputs, and RBF/CPFP handling for execution and revocation.
 
 ## 2026-08-10
 
