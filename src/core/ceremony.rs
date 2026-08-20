@@ -235,6 +235,7 @@ pub fn build_policy_proposal(
     utxos: &[VaultUtxo],
     now: DateTime<Utc>,
     limits: PolicyLimits,
+    fee_rate_sat_vb: u64,
     batch_dir: &Path,
     phone: &DeviceKeys,
     hot: &mut impl HotAddressProvider,
@@ -280,6 +281,7 @@ pub fn build_policy_proposal(
                 emergency_access_limit_sats,
                 emergency_delay_sequence,
                 address.script_pubkey(),
+                fee_rate_sat_vb,
             )?;
             emergency_access_limit_sats
                 .checked_add(withdrawal_fee)
@@ -297,6 +299,7 @@ pub fn build_policy_proposal(
             emergency_staging_value_sats,
             minimum_vault_change,
             vault_script.clone(),
+            fee_rate_sat_vb,
         )?;
         emergency_staging_value_sats
             .checked_add(trigger_fee)
@@ -319,6 +322,7 @@ pub fn build_policy_proposal(
                 monthly_delay_sequence,
                 vault_script.clone(),
                 Some(vault_script.clone()),
+                fee_rate_sat_vb,
             )?,
             authorization_fee(
                 &policy,
@@ -327,6 +331,7 @@ pub fn build_policy_proposal(
                 monthly_delay_sequence,
                 vault_script.clone(),
                 None,
+                fee_rate_sat_vb,
             )?,
         )
     };
@@ -349,7 +354,7 @@ pub fn build_policy_proposal(
                 vault_script.clone(),
             );
             let fee = estimate_vault_vsize(&template, &policy, SpendPath::Cooperative)?
-                * DEFAULT_FEE_RATE_SAT_VB;
+                * fee_rate_sat_vb;
             let required = fee
                 .checked_add(allowance_value)
                 .and_then(|value| value.checked_add(minimum_remainder_value))
@@ -369,7 +374,7 @@ pub fn build_policy_proposal(
                 let template =
                     rollover_template(input_template.clone(), None, 1, vault_script.clone());
                 let fee = estimate_vault_vsize(&template, &policy, SpendPath::Cooperative)?
-                    * DEFAULT_FEE_RATE_SAT_VB;
+                    * fee_rate_sat_vb;
                 let remainder = total_input_sats
                     .checked_sub(fee)
                     .context("vault balance cannot pay the rollover fee")?;
@@ -422,6 +427,7 @@ pub fn build_policy_proposal(
             monthly_delay_sequence,
             hot_address.script_pubkey(),
             has_next.then(|| vault_script.clone()),
+            fee_rate_sat_vb,
         )?;
         let next_chain_value = source_txout
             .value
@@ -460,6 +466,7 @@ pub fn build_policy_proposal(
             source_outpoint,
             chain_value_sats,
             vault_script.clone(),
+            fee_rate_sat_vb,
         )?;
         let revocation_tx = revocation_template(
             source_outpoint,
@@ -524,6 +531,7 @@ pub fn build_policy_proposal(
                 vault_script.clone(),
                 batch_dir,
                 phone,
+                fee_rate_sat_vb,
             )?)
         }
         None => None,
@@ -537,7 +545,7 @@ pub fn build_policy_proposal(
         vault_address: config.vault_address.clone(),
         monthly_limit_sats,
         emergency_access_limit_sats,
-        fee_rate_sat_vb: DEFAULT_FEE_RATE_SAT_VB,
+        fee_rate_sat_vb,
         total_input_sats,
         allowance_count,
         rollover: BatchTransaction {
@@ -582,8 +590,8 @@ pub fn validate_batch(
     {
         bail!("invalid ceremony allowance count");
     }
-    if manifest.fee_rate_sat_vb != DEFAULT_FEE_RATE_SAT_VB {
-        bail!("MVP ceremony must use the fixed 1 sat/vB fee rate");
+    if manifest.fee_rate_sat_vb == 0 {
+        bail!("ceremony fee rate must be at least 1 sat/vB");
     }
     let policy = VaultPolicy::from_descriptor_for_network(
         &config.vault_descriptor,
@@ -620,7 +628,7 @@ pub fn validate_batch(
         bail!("rollover amount or fee does not match its manifest");
     }
     let expected_rollover_fee = estimate_vault_vsize(rollover_tx, &policy, SpendPath::Cooperative)?
-        * DEFAULT_FEE_RATE_SAT_VB;
+        * manifest.fee_rate_sat_vb;
     if manifest.rollover.fee_sats != expected_rollover_fee {
         bail!("rollover does not pay the approved fixed fee rate");
     }
@@ -723,10 +731,10 @@ pub fn validate_batch(
         }
         let expected_authorization_fee =
             estimate_vault_vsize(auth_tx, &policy, SpendPath::Cooperative)?
-                * DEFAULT_FEE_RATE_SAT_VB;
+                * manifest.fee_rate_sat_vb;
         let expected_revocation_fee =
             estimate_vault_vsize(revoke_tx, &policy, SpendPath::Cooperative)?
-                * DEFAULT_FEE_RATE_SAT_VB;
+                * manifest.fee_rate_sat_vb;
         if allowance.authorization.fee_sats != expected_authorization_fee
             || allowance.revocation.fee_sats != expected_revocation_fee
         {
@@ -794,7 +802,7 @@ fn validate_emergency_access(
         bail!("emergency access trigger violates the approved policy");
     }
     let expected_trigger_fee =
-        estimate_vault_vsize(trigger_tx, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB;
+        estimate_vault_vsize(trigger_tx, policy, SpendPath::Cooperative)? * manifest.fee_rate_sat_vb;
     if emergency.trigger.fee_sats != expected_trigger_fee {
         bail!("emergency access trigger does not pay the approved fixed fee rate");
     }
@@ -824,7 +832,7 @@ fn validate_emergency_access(
     }
     let expected_withdrawal_fee =
         estimate_vault_vsize(withdrawal_tx, policy, SpendPath::Cooperative)?
-            * DEFAULT_FEE_RATE_SAT_VB;
+            * manifest.fee_rate_sat_vb;
     if emergency.withdrawal.fee_sats != expected_withdrawal_fee {
         bail!("emergency access withdrawal does not pay the approved fixed fee rate");
     }
@@ -853,7 +861,7 @@ fn validate_emergency_access(
     }
     let expected_cancellation_fee =
         estimate_vault_vsize(cancellation_tx, policy, SpendPath::Cooperative)?
-            * DEFAULT_FEE_RATE_SAT_VB;
+            * manifest.fee_rate_sat_vb;
     if emergency.cancellation.fee_sats != expected_cancellation_fee {
         bail!("emergency access cancellation does not pay the approved fixed fee rate");
     }
@@ -896,6 +904,7 @@ fn build_emergency_access(
     vault_script: ScriptBuf,
     batch_dir: &Path,
     phone: &DeviceKeys,
+    fee_rate_sat_vb: u64,
 ) -> Result<EmergencyAccessPolicy> {
     let withdrawal_fee = emergency_withdrawal_fee(
         policy,
@@ -903,6 +912,7 @@ fn build_emergency_access(
         amount_sats,
         delay_sequence,
         hot_address.script_pubkey(),
+        fee_rate_sat_vb,
     )?;
     let staging_value_sats = amount_sats
         .checked_add(withdrawal_fee)
@@ -913,6 +923,7 @@ fn build_emergency_access(
         staging_value_sats,
         vault_script.minimal_non_dust().to_sat(),
         vault_script.clone(),
+        fee_rate_sat_vb,
     )?;
     let vault_change_value_sats = source_txout
         .value
@@ -966,6 +977,7 @@ fn build_emergency_access(
         staging_outpoint,
         staging_value_sats,
         vault_script.clone(),
+        fee_rate_sat_vb,
     )?;
     let cancellation_tx = revocation_template(
         staging_outpoint,
@@ -1059,6 +1071,7 @@ fn emergency_trigger_fee(
     staging_value_sats: u64,
     vault_change_value_sats: u64,
     vault_script: ScriptBuf,
+    fee_rate_sat_vb: u64,
 ) -> Result<u64> {
     let template = emergency_trigger_template(
         outpoint,
@@ -1066,7 +1079,7 @@ fn emergency_trigger_fee(
         vault_change_value_sats,
         vault_script,
     );
-    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB)
+    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * fee_rate_sat_vb)
 }
 
 fn emergency_trigger_template(
@@ -1098,9 +1111,10 @@ fn emergency_withdrawal_fee(
     amount_sats: u64,
     delay_sequence: Sequence,
     hot_script: ScriptBuf,
+    fee_rate_sat_vb: u64,
 ) -> Result<u64> {
     let template = emergency_withdrawal_template(outpoint, amount_sats, delay_sequence, hot_script);
-    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB)
+    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * fee_rate_sat_vb)
 }
 
 fn emergency_withdrawal_template(
@@ -1125,8 +1139,9 @@ fn emergency_cancellation_fee(
     outpoint: OutPoint,
     staging_value_sats: u64,
     vault_script: ScriptBuf,
+    fee_rate_sat_vb: u64,
 ) -> Result<u64> {
-    revocation_fee(policy, outpoint, staging_value_sats, vault_script)
+    revocation_fee(policy, outpoint, staging_value_sats, vault_script, fee_rate_sat_vb)
 }
 
 fn authorization_fee(
@@ -1136,6 +1151,7 @@ fn authorization_fee(
     delay_sequence: Sequence,
     hot_script: ScriptBuf,
     next_chain_script: Option<ScriptBuf>,
+    fee_rate_sat_vb: u64,
 ) -> Result<u64> {
     let template = authorization_template(
         outpoint,
@@ -1144,7 +1160,7 @@ fn authorization_fee(
         hot_script,
         next_chain_script.map(|script| (1, script)),
     );
-    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB)
+    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * fee_rate_sat_vb)
 }
 
 fn authorization_template(
@@ -1202,9 +1218,10 @@ fn revocation_fee(
     outpoint: OutPoint,
     chunk_value: u64,
     vault_script: ScriptBuf,
+    fee_rate_sat_vb: u64,
 ) -> Result<u64> {
     let template = revocation_template(outpoint, chunk_value, vault_script, 0)?;
-    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * DEFAULT_FEE_RATE_SAT_VB)
+    Ok(estimate_vault_vsize(&template, policy, SpendPath::Cooperative)? * fee_rate_sat_vb)
 }
 
 fn revocation_template(
@@ -1341,6 +1358,7 @@ mod tests {
                 monthly_limit_sats,
                 emergency_access_limit_sats,
             },
+            DEFAULT_FEE_RATE_SAT_VB,
             batch_dir,
             &phone,
             &mut hot,

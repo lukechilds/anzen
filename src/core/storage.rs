@@ -198,6 +198,7 @@ pub fn load_device_keys(data_dir: &Path, relative_path: &str) -> Result<DeviceKe
 pub fn network_name(network: Network) -> &'static str {
     match network {
         Network::Bitcoin => "mainnet",
+        Network::Testnet => "testnet",
         Network::Regtest => "regtest",
         _ => "unsupported",
     }
@@ -206,6 +207,7 @@ pub fn network_name(network: Network) -> &'static str {
 pub fn parse_network_name(name: &str) -> Result<Network> {
     match name {
         "mainnet" | "bitcoin" => Ok(Network::Bitcoin),
+        "testnet" | "testnet4" => Ok(Network::Testnet),
         "regtest" => Ok(Network::Regtest),
         _ => bail!("unsupported vault network: {name}"),
     }
@@ -213,7 +215,7 @@ pub fn parse_network_name(name: &str) -> Result<Network> {
 
 pub fn validate_supported_network(network: Network) -> Result<()> {
     match network {
-        Network::Bitcoin | Network::Regtest => Ok(()),
+        Network::Bitcoin | Network::Testnet | Network::Regtest => Ok(()),
         other => bail!("unsupported vault network: {other}"),
     }
 }

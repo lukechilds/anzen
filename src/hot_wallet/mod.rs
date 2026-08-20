@@ -103,6 +103,7 @@ where
 pub fn vanity_address_prefix(network: Network) -> Result<&'static str> {
     match network {
         Network::Bitcoin => Ok("bc1pvault"),
+        Network::Testnet => Ok("tb1pvault"),
         Network::Regtest => Ok("bcrt1pvault"),
         other => bail!("vanity initialization is unsupported on {other}"),
     }
@@ -232,6 +233,7 @@ where
         template.address(&Secp256k1::verification_only(), phone.vault_pubkey, network);
     let expected_prefix = match network {
         Network::Bitcoin => format!("bc1p{suffix}"),
+        Network::Testnet => format!("tb1p{suffix}"),
         Network::Regtest => format!("bcrt1p{suffix}"),
         other => bail!("vanity initialization is unsupported on {other}"),
     };
@@ -331,6 +333,7 @@ pub fn propose_policy(
     now: DateTime<Utc>,
     monthly_limit_sats: u64,
     emergency_access_limit_sats: u64,
+    fee_rate_sat_vb: u64,
     batch_dir: &Path,
 ) -> Result<BatchManifest> {
     let config = load_config(data_dir)?;
@@ -346,6 +349,7 @@ pub fn propose_policy(
             monthly_limit_sats,
             emergency_access_limit_sats,
         },
+        fee_rate_sat_vb,
         batch_dir,
         &phone,
         &mut wallet,
