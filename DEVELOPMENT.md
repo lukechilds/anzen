@@ -64,6 +64,19 @@ cargo ledger build flex
 
 The Docker integration and end-to-end commands are documented in the main README. The Trezor submodule is excluded from the root Docker build context so local firmware checkouts do not invalidate or enlarge CLI images.
 
+## Hardware signing benchmark
+
+The Ledger and Trezor benchmarks reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.
+
+The resulting workload is 15 transactions and 26 HWW signatures: twelve rollover-input signatures plus one for each of fourteen future actions. Dynamic revocation and cancellation are deliberately excluded because either device constructs and signs those controller-only transactions only when requested. `cold-signer` checks every BIP341 sighash against `rust-bitcoin` and pins the controller script, first and last sighashes, and aggregate digest. Trezor independently pins those same values, preventing the two firmware implementations from silently benchmarking different graphs.
+
+Build Ledger Flex with the command above. From a configured Trezor Nix environment, run its focused compatibility test with:
+
+```bash
+make -C trezor-firmware/core test \
+  TESTOPTS=test_apps.homescreen.anzen_benchmark.py
+```
+
 ## The Trezor firmware submodule
 
 `.gitmodules` records two pieces of routing information:
@@ -168,7 +181,7 @@ The protocol specification and deterministic fixtures in the Anzen repository ar
 - policy serialization and versioning;
 - Taproot scripts, control blocks, and output keys;
 - every input, output, amount, fee, sequence, and timelock;
-- conflicting authorization/revocation and emergency-withdrawal/cancellation transactions;
+- vault/controller input roles, connector continuity, and dynamic revocation/cancellation spends;
 - all BIP341 signature messages; and
 - rejection of altered or incomplete policy packages.
 

@@ -32,19 +32,45 @@ Presigned policy artifacts are permissions, not essential custody state. Losing 
 
 The annual rollover creates one allowance-chain output rather than twelve independently spendable calendar outputs. Each authorization waits for a time-based BIP68 delay of at least 30 days, releases the fixed limit, and creates the next smaller chain output. The next delay cannot begin until that authorization confirms, so unused allowances do not accumulate and the phone cannot release several missed months at once.
 
-Every live hop has an immediate conflicting revocation that returns the entire remaining chain to the vault. Confirming it invalidates both the current authorization and every descendant that depended on that authorization's txid. The resulting trade-off is deliberate: individual future allowances cannot be revoked selectively, but one phone action can cancel all remaining mobile access for the epoch.
+The chain is deliberately all-or-nothing from its current hop onward. Revoking its one live authorization also makes every descendant impossible because those descendants depend on transaction outputs that the current authorization would have created. Individual future allowances cannot be revoked selectively, but one device action can cancel all remaining mobile access for the epoch.
 
 Relative delays also avoid embedding calendar dates and absolute timestamps into the annual policy. “Monthly” means a minimum 30-day cadence, encoded as 5,063 BIP68 time units (2,592,256 seconds), rather than the first day of each calendar month. This makes the security property relative to actual on-chain confirmation while keeping the transaction graph independent of wall-clock policy creation time.
+
+## Why revocation uses connector outputs
+
+If an authorization and its revocation were both fully presigned against the vault UTXO, revoking would require moving the entire remaining allowance or emergency balance on-chain. Anzen instead gives every independently revocable policy chain a small **connector UTXO**. A policy action is a two-input transaction:
+
+```text
+presigned 2-of-2 vault input + live 1-of-2 controller input
+```
+
+The annual ceremony signs only the vault input. The controller input deliberately remains unsigned and prevents the PSBT from being finalized. When the user executes the action, the phone signs that one input and broadcasts the completed transaction. A revocation spends only the same connector, so the vault principal remains in its existing vault output while the presigned action becomes permanently invalid.
+
+The controller policy is fixed for one key epoch and reuses the same vault public keys:
+
+```text
+tr(NUMS,{pk(phone),pk(hww)})
+```
+
+Either device can therefore revoke independently. Reusing the two fixed device keys avoids controller xpubs, controller derivation state, and connector-index keys. A connector's identity is its outpoint, not a derived key or address: every connector in the epoch uses the same controller address, and every presigned action commits to one exact outpoint with Taproot `SIGHASH_DEFAULT`.
+
+The current protocol reserves 10,000 sats in each live connector. The annual rollover consumes every old connector and every live vault UTXO, then creates exactly one new connector for each enabled independent chain: one for monthly allowances and one for emergency access. Intermediate monthly authorizations and the emergency trigger reproduce a 10,000-sat connector at the same address for the next action. The final monthly authorization and emergency withdrawal consume their connector without replacing it.
+
+Phone revocation constructs a controller-only transaction dynamically and sends the connector value left after fees to a fresh hot-wallet change address. HWW revocation likewise spends one or all live connectors, but sends the remainder to a destination that the hardware wallet explicitly displays and approves. Revocation never sends change back to the controller address: doing so would accidentally create new authorization state. Phone-key rotation consumes every old-key controller before installing the replacement key.
+
+This construction reduces a full annual policy from 28 presigned PSBTs to 15: one rollover, twelve monthly authorizations, one emergency trigger, and one emergency withdrawal. Revocation and emergency cancellation are dynamic controller spends and require no presigned vault transaction. It also reduces the HWW workload for a twelve-input rollover from 39 vault signatures to 26, because controller inputs are signed only at execution or revocation.
+
+The connector reserve and fixed 1 sat/vB fee are MVP parameters, not production fee policy. A production implementation needs current-feerate selection plus explicit fee inputs and RBF/CPFP handling for both execution and revocation. Until a revocation confirms, it can still race a now-valid action spending the same connector; the wallet should revoke early and fee competitively.
 
 ## Why the vault address is static
 
 Every ordinary vault output reuses the same keys, descriptor, and address until a key rotation. This deliberately trades address-level privacy for a durable receive address, simpler backup and recovery, and easier verification. Annual rollovers already link the vault's UTXOs, so rotating addresses without rotating keys would add operational complexity with limited privacy benefit. A key rotation creates a new descriptor and address.
 
-## Why rotation and policy rollover are separate transactions
+## Why rotation uses separate revocation, sweep, and rollover transactions
 
-Phone-key rotation first sweeps every old-policy UTXO into one output under the new keys. If programmable policy is active, the ordinary rollover transaction then splits that output into one allowance-chain output and a remainder. This gives the two transactions clear responsibilities: the old keys authorize leaving the old policy, while the new keys authorize the renewed policy and its presigned children.
+Phone-key rotation first uses a dynamic controller-only transaction to consume all old-key connectors and return their remainder to replacement-phone change. It then sweeps every old-policy vault UTXO into one output under the new keys. If programmable policy is active, the ordinary rollover transaction splits that output into an allowance-chain output, a remainder, and fresh connectors under the replacement controller policy. This gives the transactions clear responsibilities: the first transaction revokes old policy authority without moving principal, the second authorizes leaving the old vault, and the third lets the new keys authorize the renewed policy and its presigned children.
 
-The separation also lets rotation use the same validation path whether monthly and emergency features are enabled or disabled, and lets renewed policy reuse the normal rollover machinery. It is not a Bitcoin requirement. A future format could make the cooperative rotation create the policy outputs directly, saving one transaction and one unconfirmed ancestor at the cost of coupling rotation validation to the policy layout.
+The separation also lets rotation use the same validation path whether monthly and emergency features are enabled or disabled, and lets renewed policy reuse the normal rollover machinery. It is not a Bitcoin requirement. A future format could combine connector revocation with the cooperative sweep and make that sweep create the policy outputs directly, saving transactions and unconfirmed ancestors at the cost of coupling rotation validation to the policy layout. Because the MVP broadcasts these state transitions separately, production rotation must persist and rebroadcast each accepted transaction crash-safely before installing replacement state.
 
 ## Trust and interoperability
 

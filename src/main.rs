@@ -161,6 +161,13 @@ enum HwwCommand {
     },
     /// Sweep mature vault outputs using the HWW-only recovery path.
     Recover { destination: String },
+    /// Immediately invalidate every live programmable-policy state.
+    RevokePolicy {
+        /// Verified safe destination for the small controller-output remainder.
+        destination: String,
+        #[arg(long)]
+        yes: bool,
+    },
     /// Validate and sign a phone-created cooperative sweep.
     ConfirmSweep {
         proposal: PathBuf,
@@ -530,6 +537,9 @@ fn run_phone(
                 "Emergency phone-key rotation broadcast: {}",
                 result.sweep.txid
             );
+            if let Some(txid) = result.controller_revocation_txid {
+                println!("Old policy controllers revoked: {txid}");
+            }
             println!("Old vault address: {}", result.old_address);
             println!("New vault address: {}", result.new_address);
             println!("New phone mnemonic: {}", result.new_phone_mnemonic);
@@ -541,7 +551,7 @@ fn run_phone(
                     );
                     println!("Policy rollover broadcast: {}", schedule.rollover_txid);
                     println!(
-                        "Encrypted allowance transaction pairs: {}",
+                        "Encrypted allowance authorizations: {}",
                         schedule.entries.len()
                     );
                     if let Some(emergency) = &schedule.emergency_access {
@@ -608,6 +618,29 @@ fn run_hww(
                 bail!("chain backend returned an unexpected HWW recovery transaction ID");
             }
             print_sweep_result("HWW recovery sweep broadcast", &result);
+        }
+        HwwCommand::RevokePolicy { destination, yes } => {
+            let destination = configured_address(data_dir, &destination)?;
+            let config = core::storage::load_config(data_dir)?;
+            let backend = rpc_args.connect_chain(data_dir)?;
+            let connectors = backend.scan_connectors(&config)?;
+            if connectors.is_empty() {
+                bail!("no live policy controller outputs are available to revoke");
+            }
+            eprintln!("SIMULATED HWW — REVOKE ACTIVE VAULT POLICY");
+            eprintln!("Controller outputs: {}", connectors.len());
+            eprintln!("Change destination: {destination}");
+            eprintln!("All policy transactions committed to these states will be invalidated");
+            require_hww_approval(yes, Path::new("controller-revocation"), "policy revocation")?;
+            let transaction =
+                cold_wallet::revoke_policy(data_dir, &config, &connectors, &destination)?;
+            let expected_txid = transaction.compute_txid();
+            let txid = backend.broadcast(&transaction)?;
+            if txid != expected_txid {
+                bail!("chain backend returned an unexpected policy revocation transaction ID");
+            }
+            println!("HWW policy revocation broadcast: {txid}");
+            println!("Revoked controller outputs: {}", connectors.len());
         }
         HwwCommand::ConfirmSweep {
             proposal,
@@ -816,13 +849,13 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path)
     println!("Rollover broadcast: {}", schedule.rollover_txid);
     println!("Active monthly limit: {} sats", schedule.monthly_limit_sats);
     println!(
-        "Encrypted allowance transaction pairs: {}",
+        "Encrypted allowance authorizations: {}",
         schedule.entries.len()
     );
     match &schedule.emergency_access {
         Some(emergency) => {
             println!("Active emergency access: {} sats", emergency.amount_sats);
-            println!("Encrypted emergency transaction set: trigger, withdrawal, cancellation");
+            println!("Encrypted emergency transaction set: trigger, withdrawal");
         }
         None => println!("Emergency access: disabled"),
     }
@@ -893,8 +926,18 @@ fn phone_send(
 
 fn print_active_policy(data_dir: &Path) -> Result<()> {
     let config = core::storage::load_config(data_dir)?;
+    let controller = core::policy::ControllerPolicy::new_for_network(
+        config.phone_vault_pubkey.parse()?,
+        config.hww_vault_pubkey.parse()?,
+        config.bitcoin_network()?,
+    )?;
     println!("Cold storage descriptor: {}", config.vault_descriptor);
     println!("Vault address: {}", config.vault_address);
+    println!("Policy controller address: {}", controller.address);
+    println!(
+        "Policy controller reserve: {} sats per active chain",
+        core::CONNECTOR_VALUE_SATS
+    );
     println!(
         "Phone recovery: {} blocks (~14 months)",
         format_number(u64::from(config.phone_recovery_blocks))
@@ -909,7 +952,7 @@ fn print_active_policy(data_dir: &Path) -> Result<()> {
         println!("Monthly limit: {} sats", config.monthly_limit_sats);
         if let Ok(schedule) = hot_wallet::load_schedule(data_dir) {
             println!(
-                "Presigned allowance transaction pairs: {}",
+                "Presigned allowance authorizations: {}",
                 schedule.entries.len()
             );
             println!(
@@ -938,6 +981,7 @@ fn print_status(data_dir: &Path, rpc_args: &ChainArgs) -> Result<()> {
     let backend = rpc_args.connect_chain(data_dir)?;
     let tip = backend.chain_tip()?;
     let utxos = backend.scan_vault(&config)?;
+    let connectors = backend.scan_connectors(&config)?;
     let balance = utxos
         .iter()
         .map(|utxo| utxo.txout.value.to_sat())
@@ -950,6 +994,7 @@ fn print_status(data_dir: &Path, rpc_args: &ChainArgs) -> Result<()> {
     println!("Median time past: {}", tip.median_time);
     println!("Vault UTXOs: {}", utxos.len());
     println!("Vault balance: {} sats", balance);
+    println!("Live policy controller outputs: {}", connectors.len());
     println!(
         "Monthly spending: {}",
         if config.monthly_limit_sats == 0 {
@@ -1028,6 +1073,16 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
         manifest.vault_descriptor
     )?;
     writeln!(output, "Vault address: {}", manifest.vault_address)?;
+    writeln!(
+        output,
+        "Policy controller address: {}",
+        manifest.controller_address
+    )?;
+    writeln!(
+        output,
+        "Policy controller reserve: {} sats per active chain",
+        manifest.connector_value_sats
+    )?;
     if manifest.monthly_limit_sats == 0 {
         writeln!(output, "Monthly spending: disabled")?;
     } else {
@@ -1093,11 +1148,6 @@ fn print_manifest(manifest: &core::ceremony::BatchManifest, stderr: bool) -> Res
             output,
             "Emergency withdrawal txid: {}",
             emergency.withdrawal.unsigned_txid
-        )?;
-        writeln!(
-            output,
-            "Emergency cancellation txid: {}",
-            emergency.cancellation.unsigned_txid
         )?;
         writeln!(output, "Emergency hot address: {}", emergency.hot_address)?;
     }

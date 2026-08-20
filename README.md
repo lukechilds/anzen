@@ -48,20 +48,32 @@ tr(
 )
 ```
 
-This is Anzen's only vault script. All other behavior—including monthly allowances, revocations, emergency access, and annual renewal—is implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
+This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
+
+Revocable authorization state lives in separate 10,000-sat connector outputs. They reuse the same device keys under a fixed 1-of-2 Taproot policy:
+
+```text
+tr(NUMS,{pk(phone),pk(hww)})
+```
+
+Either device can spend a connector alone. The connector does not control vault principal; its exact outpoint is an execution token committed into a presigned policy PSBT.
 
 ### Annual vault layout and presigned transaction graph
 
-Once per year, the phone proposes a policy and the HWW approves it once. Together they sign an annual rollover plus every transaction shown below. Only the rollover is broadcast immediately. After it confirms, the vault has one allowance-chain UTXO funding up to twelve sequential withdrawals and one remainder UTXO; all other transactions remain encrypted on the phone until needed.
+Once per year, the phone proposes a policy and the HWW approves it once. They fully sign the rollover and sign only the vault input of each future action. Only the rollover is broadcast immediately. After it confirms, the vault has one allowance-chain UTXO, one remainder UTXO, and one small connector for each enabled independent action chain. Future action PSBTs remain incomplete and encrypted on the phone until it signs the current connector at execution.
 
 ![The sequential allowance chain and emergency transactions for an example 2.1 BTC annual vault policy](media/vault-utxo-layout.svg)
 
-The solid outputs are confirmed on-chain after rollover; dashed outputs exist only if their presigned parent confirms. Each authorization/revocation pair spends the same live chain output, and each emergency withdrawal/cancellation pair spends the same staging output:
+Solid outputs are confirmed after rollover; dashed outputs exist only if their parent action confirms. Each action has one vault input and one connector input:
 
-- **Authorize or revoke the chain:** after roughly 30 days, an authorization releases the fixed limit and creates the next smaller chain output, whose own delay starts when it confirms. The competing revocation is valid immediately and returns the entire remaining chain to the vault. If it confirms, the current authorization and every dependent later hop are permanently invalid.
-- **Withdraw or cancel:** the emergency withdrawal becomes valid one week after the trigger confirms. Cancellation is valid immediately and returns the staged funds to the vault. If cancellation confirms first, the withdrawal is permanently invalid.
+- **Execute monthly spending:** after roughly 30 days, the phone signs the connector input. The transaction releases the fixed limit and, except at the final step, creates both a smaller vault output and the next connector.
+- **Revoke monthly spending:** either device spends only the live connector. Vault principal stays in its existing output, while the current and every dependent future authorization become permanently invalid.
+- **Execute emergency access:** the trigger rolls its connector while creating a staging vault output and cold change. After one week, the withdrawal spends the staging output plus that connector to the hot wallet.
+- **Cancel emergency access:** either device spends only the withdrawal connector. The staged principal remains under the vault script and the withdrawal becomes permanently invalid.
 
-The phone can broadcast any of these approved actions without reconnecting the HWW. Presigned transactions are convenience permissions, not custody: losing them does not lose the bitcoin, because every unspent output still has the three vault-script paths above. A later annual rollover spends all remaining cold UTXOs, resets their recovery delays, and invalidates the previous epoch's unused presigned transactions.
+Connector change never returns to the controller address: phone revocation sends it to a fresh hot-wallet change address, while HWW revocation requires an explicitly displayed destination. A later annual rollover spends every live vault and connector output, resets recovery delays, creates only the renewed policy's connectors, and invalidates the old epoch.
+
+Presigned transactions are convenience permissions, not custody. Losing them cannot lose the bitcoin because every principal output still has the three vault-script paths above.
 
 For a concrete byte-level example of this graph—including txids, outpoints, locktimes, sequences, values, addresses, and scripts—see the checked-in [vault output test vector](test-vectors/vault-output-graph.json).
 
@@ -92,19 +104,19 @@ For mainnet, pass `--dangerously-enable-mainnet` to every command. Select a chai
 ```console
 $ anzen phone init
 Simulated phone initialized (REGTEST ONLY)
-Phone mnemonic: aware pear frame napkin satisfy success stove velvet increase style answer chat trash bamboo all omit shield enforce antique brick talent equip else roast
-Phone vault key: 1fd91c3103d72ee97da949697d2b71d45e43f8ea4d2437466afaad1911c19f80
+Phone mnemonic: hospital suit remain guard kidney trial task hope arrow catch shoe ceiling pole tattoo space fatigue lens wrist narrow guess cruise rail riot concert
+Phone vault key: b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0
 
 $ anzen hww init
 Simulated HWW initialized (REGTEST ONLY)
-HWW mnemonic: gasp cricket sword blast unfold like garlic syrup tree hover discover twin win gold crisp solar vote logic iron sting face retreat collect knife
-HWW vault key: f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32
+HWW mnemonic: switch announce harsh welcome cotton bike grace polar rug welcome scatter exercise lounge couch box parrot orchard ship execute dolphin defy fuel quick girl
+HWW vault key: e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f
 HWW ready to wrap the descriptor-bound cloud backup at anzen init
 
 $ anzen init
 Vault initialized (REGTEST ONLY)
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,1fd91c3103d72ee97da949697d2b71d45e43f8ea4d2437466afaad1911c19f80,f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32),{and_v(v:older(61200),pk(1fd91c3103d72ee97da949697d2b71d45e43f8ea4d2437466afaad1911c19f80)),and_v(v:older(65535),pk(f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32))}})#lwqlwu4c
-Vault address: bcrt1p0j6cwkqng7y7weum5sqln5573deqvu9ycxxf92k98mvzmd0k3zzq4skpuc
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
+Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
@@ -112,8 +124,10 @@ Emergency access: disabled
 Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
 
 $ anzen policy
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,1fd91c3103d72ee97da949697d2b71d45e43f8ea4d2437466afaad1911c19f80,f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32),{and_v(v:older(61200),pk(1fd91c3103d72ee97da949697d2b71d45e43f8ea4d2437466afaad1911c19f80)),and_v(v:older(65535),pk(f900571d8f6936e6c178d775406f78356c1492864078b0133233d7f05c98be32))}})#lwqlwu4c
-Vault address: bcrt1p0j6cwkqng7y7weum5sqln5573deqvu9ycxxf92k98mvzmd0k3zzq4skpuc
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
+Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
+Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
+Policy controller reserve: 10000 sats per active chain
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly spending: disabled
@@ -124,13 +138,15 @@ The new vault starts with monthly spending and emergency access disabled. `anzen
 
 ### Set or replace the vault policy
 
-The phone proposes the policy and signs its side of every PSBT. The HWW independently validates the high-level policy, asks for one approval, and signs the complete batch. The rollover creates one allowance-chain UTXO plus one cold remainder. Every successful hop releases 0.1 BTC and creates the next smaller chain output after a fresh relative delay; every competing revocation cancels the entire remaining chain. The phone stores each transaction as an individually encrypted artifact. This real regtest policy combines a 0.1 BTC monthly limit with one cancellable 0.5 BTC emergency withdrawal:
+The phone proposes the policy and signs its side of each vault input. The HWW independently reconstructs the graph, asks for one approval, and signs the other vault side. Future controller inputs stay unsigned until the phone executes an action, so neither device commits revocation authority into the annual package. This real regtest policy combines a 0.1 BTC monthly limit with one cancellable 0.5 BTC emergency withdrawal:
 
 ```console
 $ anzen phone set-policy --monthly-limit 10000000 --emergency-access-limit 50000000 --output policy.json
 PHONE POLICY PROPOSAL
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,d7ee64997426f39e65e8a94d0ab51f8a9c166012014ec523a6faddeb0dd8ca1e,83676364fb1856e57822370ef6f4514487aa62297b8b28afd371b10fc8354be7),{and_v(v:older(61200),pk(d7ee64997426f39e65e8a94d0ab51f8a9c166012014ec523a6faddeb0dd8ca1e)),and_v(v:older(65535),pk(83676364fb1856e57822370ef6f4514487aa62297b8b28afd371b10fc8354be7))}})#apd43954
-Vault address: bcrt1pjdns6u50wdgrn748e8jdvup4g3xn7qe43cf3myeq5fghn70hehzszljk6h
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
+Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
+Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
+Policy controller reserve: 10000 sats per active chain
 Monthly limit: 10000000 sats
 Emergency access limit: 50000000 sats
 Emergency access delay: 605184 seconds (~1 week)
@@ -138,22 +154,23 @@ Fee rate: 1 sat/vB
 Total input: 200000000 sats
 Allowance steps: 12
 Allowance hop delay: 2592256 seconds (~30 days)
-Rollover txid: 0c7ad7657257c4eb3e782921dd787dd806eba5a2e27d5fe96633859f24675b20
-Rollover fee: 205 sats
-Initial allowance-chain UTXO: 120002417 sats
-Rollover remainder: 79997378 sats
-Emergency trigger txid: 830bad271fa213eea0c92c84729f2ce3c0b1878e5317a4f74c9337d1771f9504
-Emergency withdrawal txid: b99360d008858fccf8fa8028e747342b050bb3404d644e0db78ab55a867bb6c4
-Emergency cancellation txid: c58d49702f06ace3b136f06e5a3fe1173582a687e42e689bdf6eb43d7d3b5eff
-Emergency hot address: bcrt1plm54pf09x6ynzvgd25d0x9hxe54fquut50qmc8kr2a2rr746lfwss7g845
-Phone signed PSBTs: 28
+Rollover txid: 12e6e10746c37364348396b10b1865d0109a98c8cc58d68826903235fdc147d3
+Rollover fee: 291 sats
+Initial allowance-chain UTXO: 119993886 sats
+Rollover remainder: 79985823 sats
+Emergency trigger txid: d13232941c779472ac175bc6587c7b674e975e2f859efe5a32b810ec4637dd30
+Emergency withdrawal txid: df9a8ae1d948d7876f3a5db2e0fb1e5529a94f383ec291649f4302b1abeb94c3
+Emergency hot address: bcrt1p7yj6se5q6crpqasfpn3f6v37qh7agejts65q3tj5mtfrfjlk6fsqh42e9p
+Phone signed PSBTs: 15
 Phone-signed policy proposal: policy.json
 
-$ anzen hww confirm-policy policy.json --output approved-policy.json
+$ anzen hww confirm-policy policy.json --output approved-policy.json --yes
 SIMULATED HWW — ONE HIGH-LEVEL POLICY APPROVAL
 PHONE POLICY PROPOSAL
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,d7ee64997426f39e65e8a94d0ab51f8a9c166012014ec523a6faddeb0dd8ca1e,83676364fb1856e57822370ef6f4514487aa62297b8b28afd371b10fc8354be7),{and_v(v:older(61200),pk(d7ee64997426f39e65e8a94d0ab51f8a9c166012014ec523a6faddeb0dd8ca1e)),and_v(v:older(65535),pk(83676364fb1856e57822370ef6f4514487aa62297b8b28afd371b10fc8354be7))}})#apd43954
-Vault address: bcrt1pjdns6u50wdgrn748e8jdvup4g3xn7qe43cf3myeq5fghn70hehzszljk6h
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
+Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
+Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
+Policy controller reserve: 10000 sats per active chain
 Monthly limit: 10000000 sats
 Emergency access limit: 50000000 sats
 Emergency access delay: 605184 seconds (~1 week)
@@ -161,39 +178,39 @@ Fee rate: 1 sat/vB
 Total input: 200000000 sats
 Allowance steps: 12
 Allowance hop delay: 2592256 seconds (~30 days)
-Rollover txid: 0c7ad7657257c4eb3e782921dd787dd806eba5a2e27d5fe96633859f24675b20
-Rollover fee: 205 sats
-Initial allowance-chain UTXO: 120002417 sats
-Rollover remainder: 79997378 sats
-Emergency trigger txid: 830bad271fa213eea0c92c84729f2ce3c0b1878e5317a4f74c9337d1771f9504
-Emergency withdrawal txid: b99360d008858fccf8fa8028e747342b050bb3404d644e0db78ab55a867bb6c4
-Emergency cancellation txid: c58d49702f06ace3b136f06e5a3fe1173582a687e42e689bdf6eb43d7d3b5eff
-Emergency hot address: bcrt1plm54pf09x6ynzvgd25d0x9hxe54fquut50qmc8kr2a2rr746lfwss7g845
-Phone signed PSBTs: 28
-Type `approve` to confirm the complete vault policy: approve
-HWW validated and signed all 28 PSBTs after one approval
+Rollover txid: 12e6e10746c37364348396b10b1865d0109a98c8cc58d68826903235fdc147d3
+Rollover fee: 291 sats
+Initial allowance-chain UTXO: 119993886 sats
+Rollover remainder: 79985823 sats
+Emergency trigger txid: d13232941c779472ac175bc6587c7b674e975e2f859efe5a32b810ec4637dd30
+Emergency withdrawal txid: df9a8ae1d948d7876f3a5db2e0fb1e5529a94f383ec291649f4302b1abeb94c3
+Emergency hot address: bcrt1p7yj6se5q6crpqasfpn3f6v37qh7agejts65q3tj5mtfrfjlk6fsqh42e9p
+Phone signed PSBTs: 15
+HWW validated and signed all 15 PSBTs after one approval
 HWW-approved policy: approved-policy.json
 
 $ anzen phone activate-policy approved-policy.json
-Rollover broadcast: 0c7ad7657257c4eb3e782921dd787dd806eba5a2e27d5fe96633859f24675b20
+Rollover broadcast: 12e6e10746c37364348396b10b1865d0109a98c8cc58d68826903235fdc147d3
 Active monthly limit: 10000000 sats
-Encrypted allowance transaction pairs: 12
+Encrypted allowance authorizations: 12
 Active emergency access: 50000000 sats
-Encrypted emergency transaction set: trigger, withdrawal, cancellation
+Encrypted emergency transaction set: trigger, withdrawal
 
 $ anzen policy
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,d7ee64997426f39e65e8a94d0ab51f8a9c166012014ec523a6faddeb0dd8ca1e,83676364fb1856e57822370ef6f4514487aa62297b8b28afd371b10fc8354be7),{and_v(v:older(61200),pk(d7ee64997426f39e65e8a94d0ab51f8a9c166012014ec523a6faddeb0dd8ca1e)),and_v(v:older(65535),pk(83676364fb1856e57822370ef6f4514487aa62297b8b28afd371b10fc8354be7))}})#apd43954
-Vault address: bcrt1pjdns6u50wdgrn748e8jdvup4g3xn7qe43cf3myeq5fghn70hehzszljk6h
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0,e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f),{and_v(v:older(61200),pk(b336b46856b0c7dd2e2a2d4ffde1d1e7788707cfd246ebb72bebd395a19fdaf0)),and_v(v:older(65535),pk(e905d6034668f206e34cbba40808f94dfc676f88a19930160239ee14aaef445f))}})#ezseuq69
+Vault address: bcrt1pk2xcl2m8p2kkwde8gq3tazx94ln8e9wxj49llakmz50zfg9md90qwug5ge
+Policy controller address: bcrt1pvn6qsn0t7u4q02vaf2wku8cnfrfns29qetz743fgvwhmuk3akers6ca203
+Policy controller reserve: 10000 sats per active chain
 Phone recovery: 61,200 blocks (~14 months)
 HWW recovery:   65,535 blocks (~15 months)
 Monthly limit: 10000000 sats
-Presigned allowance transaction pairs: 12
+Presigned allowance authorizations: 12
 Allowance hop delay: 2592256 seconds (~30 days)
 Emergency access limit: 50000000 sats
 Emergency access delay: 605184 seconds (~1 week)
 ```
 
-`10000000` sats is 0.1 BTC and `50000000` sats is 0.5 BTC. The initial chain output funds twelve 0.1 BTC releases plus every authorization fee. Set either limit to zero through the same three-step protocol to disable that feature. Policy JSON may also be piped with `--output -`; file handoff is clearer for the interactive HWW approval.
+`10000000` sats is 0.1 BTC and `50000000` sats is 0.5 BTC. The policy contains 15 PSBTs: rollover, twelve allowance authorizations, emergency trigger, and emergency withdrawal. It does not contain presigned revocations or cancellation. Set either limit to zero through the same three-step protocol to disable that feature. Policy JSON may also be piped with `--output -`; file handoff is clearer for the interactive HWW approval.
 
 ### Execute a monthly spend
 
@@ -201,30 +218,42 @@ Allowances are numbered sequentially. Step 1 becomes valid roughly 30 days after
 
 ```console
 $ anzen phone authorize 1
-Broadcast Authorization for allowance step 1: 091329eb090e25b2bd2b90778e747d65c27065e15d02c6b5a479ff56a7b234b1
+Broadcast Authorization for allowance step 1: 7261aad194701449239640b059f6a77ba926c2a82e4e18a23947fddb14bd9428
 ```
 
-The authorization releases the approved amount at output 0 and creates step 2's chain output at output 1. Step 2 cannot mature before step 1 confirms, even if the phone waited much longer than 30 days before using step 1.
+The authorization releases the approved amount at output 0, creates step 2's vault output at output 1, and rolls the 10,000-sat connector to output 2. The phone adds only the controller signature at execution. Step 2 cannot mature before step 1 confirms, even if the phone waited much longer than 30 days before using step 1.
 
 To keep only a 0.01 BTC soft limit from a 0.1 BTC authorization, immediately return the difference to cold storage:
 
 ```console
 $ anzen phone apply-soft-limit 1 --limit 1000000
-Soft limit applied for allowance step 1: retained at most 1000000 sats hot; cold-return txid=a5e76a5e9d294c45ac6f8e25ac420e0e5794a4b1720acf1576f9156fdb5fe200
+Soft limit applied for allowance step 1: retained at most 1000000 sats hot; cold-return txid=a24f6d06790f3ac08d5649f8820b14da9d0bd7aba108ce321ee552e2d7fae865
 ```
 
 The signed monthly limit is the security boundary. The adjustable soft limit is a phone-side action and may be any value from zero through the signed monthly limit.
 
 ### Revoke all remaining monthly spends
 
-Once a hop's source output exists, the phone can broadcast its conflicting presigned revocation without the HWW:
+Once a hop's source output exists, the phone can revoke it without the HWW. This transaction is built dynamically, spends only that hop's connector, and sends its remaining connector value to fresh hot-wallet change:
 
 ```console
 $ anzen phone revoke 2
-Broadcast Revocation for allowance step 2: 5289189883b2f3a875af8684ada6b644e807df643eadd2dc815ed5162a893538
+Broadcast Revocation for allowance step 2: 8abf7bd7d1d6d0372c23329a00011d5c6bdb0ba75f079afba02ffe675cdaabba
 ```
 
-Once the revocation confirms, step 2 cannot spend the live chain output. Steps 3–12 are also invalid because they depend on transaction outputs that step 2 can no longer create. Revocation is therefore deliberately whole-chain rather than per-allowance.
+The step 2 vault output does not move. Once revocation confirms, its authorization cannot spend the already-consumed connector. Steps 3–12 are also invalid because they depend on outputs that step 2 can no longer create. Revocation is therefore deliberately whole-chain rather than per-allowance.
+
+The HWW can invalidate every live policy chain in one action and sends the small connector remainder to an address shown for explicit approval:
+
+```console
+$ anzen hww revoke-policy bcrt1py8xc780ra4cads2lt4e9pawdy9hqlkmu8kzt58tqqgq9x7u7perqf7n0x9 --yes
+SIMULATED HWW — REVOKE ACTIVE VAULT POLICY
+Controller outputs: 2
+Change destination: bcrt1py8xc780ra4cads2lt4e9pawdy9hqlkmu8kzt58tqqgq9x7u7perqf7n0x9
+All policy transactions committed to these states will be invalidated
+HWW policy revocation broadcast: 0a1cfab1fc7be1f337430a95b2274315fc0abef4d000369735d4bd967c5f5564
+Revoked controller outputs: 2
+```
 
 ### Use or cancel emergency access
 
@@ -232,7 +261,7 @@ The policy authorizes one emergency trigger per vault epoch. Starting it spends 
 
 ```console
 $ anzen phone emergency initiate
-Emergency access initiated: 830bad271fa213eea0c92c84729f2ce3c0b1878e5317a4f74c9337d1771f9504
+Emergency access initiated: d13232941c779472ac175bc6587c7b674e975e2f859efe5a32b810ec4637dd30
 Amount after delay: 50000000 sats
 Cancellation window: 605184 seconds
 
@@ -244,25 +273,25 @@ After the trigger confirms and the one-week BIP68 delay elapses, the same comman
 
 ```console
 $ anzen phone emergency withdraw
-Emergency access withdrawal broadcast: b99360d008858fccf8fa8028e747342b050bb3404d644e0db78ab55a867bb6c4
+Emergency access withdrawal broadcast: df9a8ae1d948d7876f3a5db2e0fb1e5529a94f383ec291649f4302b1abeb94c3
 ```
 
 Alternatively, the phone can cancel before maturity. These outputs are from the isolated cancellation test's own vault epoch:
 
 ```console
 $ anzen phone emergency initiate
-Emergency access initiated: 55df7b5e30f0cc52da85510798fa5f0b89c3edea00957589df41e045bc2ebcd7
+Emergency access initiated: 85fe845dfb9967b0468e32b012dcc4ea93329a952ee707fd9d1e1af67d9d58cd
 Amount after delay: 50000000 sats
 Cancellation window: 605184 seconds
 
 $ anzen phone emergency cancel
-Emergency access cancelled: a369bfbbfece58206e081f459574ef441e64f151359a96637467f656548d5b08
+Emergency access cancelled: 22e3f2066b72042c8975b26debca1f048aea3f0682ca3504ee0b0b756c7b1e55
 
 $ anzen phone emergency withdraw
 Error: failed to broadcast emergency access Withdrawal
 ```
 
-Once cancellation confirms, the delayed withdrawal remains invalid even after its timelock expires because the two transactions spend the same staging output. BIP68 uses 512-second units, so the enforced minimum is 605,184 seconds—seven days plus 6 minutes 24 seconds.
+Cancellation is constructed dynamically and spends only the withdrawal connector to fresh hot-wallet change. The staged 0.5 BTC remains in its existing vault output. Once cancellation confirms, the delayed withdrawal remains invalid even after its timelock expires because it committed to that exact connector outpoint. BIP68 uses 512-second units, so the enforced minimum is 605,184 seconds—seven days plus 6 minutes 24 seconds.
 
 ### Replace a lost phone
 
@@ -276,51 +305,52 @@ Decrypted phone recovery package: phone-recovery.json
 
 $ anzen phone restore phone-recovery.json
 Phone key restored from authenticated recovery package
-Recovered phone mnemonic: surge inflict wasp egg input chase regret reduce thank air loud satoshi frame train thank crack surge accuse hawk shop base shrug live frown
+Recovered phone mnemonic: fade note doctor brass obey increase foam surprise volcano coin cliff square have effort cover own ride ghost poem exact hungry kick lounge minute
 
 $ anzen phone rotate-key --output phone-rotation.json
 PHONE-KEY ROTATION
-New phone vault key: f9c8ae08ff6e0a7f48d584f8bfee382901ea9c9d12baab5b1163372ccf740205
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,f9c8ae08ff6e0a7f48d584f8bfee382901ea9c9d12baab5b1163372ccf740205,18d4137264204041e2ac7bcc814d1b89b225269b8b2fb7b3d958bbf47142ff2b),{and_v(v:older(61200),pk(f9c8ae08ff6e0a7f48d584f8bfee382901ea9c9d12baab5b1163372ccf740205)),and_v(v:older(65535),pk(18d4137264204041e2ac7bcc814d1b89b225269b8b2fb7b3d958bbf47142ff2b))}})#4wfwncyz
-New vault address: bcrt1pmdc3g35t8q4kmvj8vytcqswxwaz6djma8v9gl67upg4enkqwsmeq3qfmx3
+New phone vault key: d3e1b1147aabd479268dc03c34c9ce3ca9f9265f050b14de50df6dfaaf00d52c
+New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,d3e1b1147aabd479268dc03c34c9ce3ca9f9265f050b14de50df6dfaaf00d52c,026f7045ba3eef34e191d16e0a18dcaec240d876b76e9f5f683ab9e685eeb034),{and_v(v:older(61200),pk(d3e1b1147aabd479268dc03c34c9ce3ca9f9265f050b14de50df6dfaaf00d52c)),and_v(v:older(65535),pk(026f7045ba3eef34e191d16e0a18dcaec240d876b76e9f5f683ab9e685eeb034))}})#jge8gjrv
+New vault address: bcrt1pzpkjnt5v2csz9xslg5yacu4qtnqaxlctngdavztryfm2t2hd7gfqhe7a39
 Inputs: 2
-Sent: 199999525 sats
+Sent: 199979439 sats
 Fee: 270 sats (1 sat/vB)
 Monthly policy preserved: 10000000 sats
 Renewed allowance steps: 12
-Renewed policy PSBTs: 28
+Renewed policy PSBTs: 15
 Emergency access preserved: 50000000 sats
 Phone-key rotation proposal: phone-rotation.json
 
 $ anzen hww confirm-rotation phone-rotation.json \
   --output approved-phone-rotation.json
 PHONE-KEY ROTATION
-New phone vault key: f9c8ae08ff6e0a7f48d584f8bfee382901ea9c9d12baab5b1163372ccf740205
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,f9c8ae08ff6e0a7f48d584f8bfee382901ea9c9d12baab5b1163372ccf740205,18d4137264204041e2ac7bcc814d1b89b225269b8b2fb7b3d958bbf47142ff2b),{and_v(v:older(61200),pk(f9c8ae08ff6e0a7f48d584f8bfee382901ea9c9d12baab5b1163372ccf740205)),and_v(v:older(65535),pk(18d4137264204041e2ac7bcc814d1b89b225269b8b2fb7b3d958bbf47142ff2b))}})#4wfwncyz
-New vault address: bcrt1pmdc3g35t8q4kmvj8vytcqswxwaz6djma8v9gl67upg4enkqwsmeq3qfmx3
+New phone vault key: d3e1b1147aabd479268dc03c34c9ce3ca9f9265f050b14de50df6dfaaf00d52c
+New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,d3e1b1147aabd479268dc03c34c9ce3ca9f9265f050b14de50df6dfaaf00d52c,026f7045ba3eef34e191d16e0a18dcaec240d876b76e9f5f683ab9e685eeb034),{and_v(v:older(61200),pk(d3e1b1147aabd479268dc03c34c9ce3ca9f9265f050b14de50df6dfaaf00d52c)),and_v(v:older(65535),pk(026f7045ba3eef34e191d16e0a18dcaec240d876b76e9f5f683ab9e685eeb034))}})#jge8gjrv
+New vault address: bcrt1pzpkjnt5v2csz9xslg5yacu4qtnqaxlctngdavztryfm2t2hd7gfqhe7a39
 Inputs: 2
-Sent: 199999525 sats
+Sent: 199979439 sats
 Fee: 270 sats (1 sat/vB)
 Monthly policy preserved: 10000000 sats
 Renewed allowance steps: 12
-Renewed policy PSBTs: 28
+Renewed policy PSBTs: 15
 Emergency access preserved: 50000000 sats
 Type `approve` to confirm the phone-key rotation: approve
-HWW validated and signed the phone-key rotation plus 28 renewed-policy PSBTs
+HWW validated and signed the phone-key rotation plus 15 renewed-policy PSBTs
 HWW-approved phone-key rotation: approved-phone-rotation.json
 
 $ anzen phone activate-rotation approved-phone-rotation.json
-Emergency phone-key rotation broadcast: 9a69e75861130dc229c2c047cb01682476a1a5dfda5293ad07c270c8044cbc4d
-Old vault address: bcrt1pttgv9t0kfkrkfqfj6l3uu3gm5u5snu8w8a04zvqlkjd8meh3ugdqg3wsrw
-New vault address: bcrt1pmdc3g35t8q4kmvj8vytcqswxwaz6djma8v9gl67upg4enkqwsmeq3qfmx3
-New phone mnemonic: tragic diagram company search photo luggage claim manage element half border end rapid eagle solve brass off mesh pass select choice nice wing dune
+Emergency phone-key rotation broadcast: 6be491fa9422a51e2bf9a95e750d3e365c7834e3d6313fffdfdaa7b241828233
+Old policy controllers revoked: 1451a65930c91233c2650aa563f7821bd63e12f97aa1698feed6cfb7a1372bc8
+Old vault address: bcrt1p546pmuhh7f25ra5pcvrt83kmuq6jcgn98jag5ns7tjnzf2zceezq0nt38x
+New vault address: bcrt1pzpkjnt5v2csz9xslg5yacu4qtnqaxlctngdavztryfm2t2hd7gfqhe7a39
+New phone mnemonic: border video ice witness wash abstract genuine artefact pioneer zoo exile seat panel dutch chapter you swallow horse attitude damp legal six spray desk
 Monthly policy preserved: 10000000 sats
-Policy rollover broadcast: 77dd21c82ca5a349359464d073a39d21e2ed12d22e0c8459c1de50645081b596
-Encrypted allowance transaction pairs: 12
+Policy rollover broadcast: 9a2982f112b2e522ae70141732de9b70ab46b641e2ccbacdd225e436d35d622a
+Encrypted allowance authorizations: 12
 Emergency access preserved: 50000000 sats
 ```
 
-The rotation preserves the HWW key, every configured recovery friend, and the active monthly and emergency-access limits. It creates a new phone seed and descriptor-bound cloud envelope, then sweeps the old vault cooperatively. The same proposal chains a fresh annual policy to that sweep; one HWW prompt approves both, and all replacement artifacts are encrypted to the new phone key. A disabled feature remains disabled after rotation.
+The rotation preserves the HWW key, every configured recovery friend, and the active monthly and emergency-access limits. Before installing the new phone key it spends every old controller to replacement-phone change, so no old-key policy authority survives. It then creates a new phone seed and descriptor-bound cloud envelope and sweeps the old vault cooperatively. The same proposal chains a fresh annual policy to that sweep; one HWW prompt approves both, and all replacement artifacts and connectors use the new phone key. A disabled feature remains disabled after rotation.
 
 ### Configure social recovery
 

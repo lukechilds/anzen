@@ -108,6 +108,24 @@ fn phone_cli_addresses_allowances_by_sequential_step() {
 }
 
 #[test]
+fn hww_cli_exposes_blanket_controller_revocation() {
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["hww", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("revoke-policy"));
+
+    Command::cargo_bin("anzen")
+        .unwrap()
+        .args(["hww", "revoke-policy", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--yes"))
+        .stdout(predicate::str::contains("destination"));
+}
+
+#[test]
 fn hww_can_be_initialized_first_for_a_future_vanity_phone() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_str().unwrap();

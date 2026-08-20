@@ -28,11 +28,11 @@ use crate::core::{
         PolicyPackage, SCHEDULE_FILE, Schedule, ScheduleEntry, TransactionKind,
     },
     chain::{BitcoinCoreBackend, Blockchain, ElectrumBackend},
-    policy::VaultAddressTemplate,
+    policy::{ControllerPath, ControllerPolicy, VaultAddressTemplate},
     recovery::{self, CooperativeSweepPackage, PhoneRecoveryPackage, SweepPath, SweepResult},
 };
 use anyhow::{Context, Result, bail};
-use bitcoin::{Address, Network, OutPoint, Psbt, Transaction, Txid, consensus, key::Secp256k1};
+use bitcoin::{Address, Amount, Network, OutPoint, Psbt, Transaction, TxOut, Txid, key::Secp256k1};
 use chrono::{DateTime, Utc};
 use std::{
     fs,
@@ -47,13 +47,17 @@ use std::{
 };
 
 use crate::core::{
+    DEFAULT_FEE_RATE_SAT_VB,
     keys::DeviceKeys,
     storage::{
         DeviceFile, HWW_DEVICE_FILE, HWW_PUBLIC_FILE, InitializedDevice, PHONE_DEVICE_FILE,
         VaultConfig, load_config, load_device_keys, load_public_device, network_name, read_json,
         validate_supported_network, write_json,
     },
-    transactions::finalize_vault_psbt,
+    transactions::{
+        build_controller_revocation_psbt, finalize_vault_psbt, sign_controller_psbt_inputs,
+    },
+    types::VaultUtxo,
 };
 
 /// Initialize the phone key material and its BDK wallet state.
@@ -336,11 +340,13 @@ pub fn propose_policy(
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let utxos = backend.scan_vault(&config)?;
+    let connectors = backend.scan_connectors(&config)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     let mut wallet = HotWallet::open_or_create(data_dir)?;
-    ceremony::build_policy_proposal(
+    ceremony::build_policy_proposal_with_connectors(
         &config,
         &utxos,
+        &connectors,
         now,
         PolicyLimits {
             monthly_limit_sats,
@@ -369,15 +375,9 @@ pub fn activate_policy(
     let rollover = finalize_vault_psbt(read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?)?;
     let mut entries = Vec::with_capacity(manifest.allowances.len());
     for allowance in &manifest.allowances {
-        let authorization = finalize_vault_psbt(read_psbt(
-            &batch_dir.join(&allowance.authorization.psbt_file),
-        )?)?;
-        let revocation =
-            finalize_vault_psbt(read_psbt(&batch_dir.join(&allowance.revocation.psbt_file))?)?;
+        let authorization = read_psbt(&batch_dir.join(&allowance.authorization.psbt_file))?;
         let authorization_path =
             encrypted_transaction_path(data_dir, allowance.step, TransactionKind::Authorization);
-        let revocation_path =
-            encrypted_transaction_path(data_dir, allowance.step, TransactionKind::Revocation);
         write_encrypted_transaction(
             &authorization_path,
             &phone.seed,
@@ -385,47 +385,30 @@ pub fn activate_policy(
             TransactionKind::Authorization,
             &authorization,
         )?;
-        write_encrypted_transaction(
-            &revocation_path,
-            &phone.seed,
-            allowance.step,
-            TransactionKind::Revocation,
-            &revocation,
-        )?;
         entries.push(ScheduleEntry {
             step: allowance.step,
             hot_address: allowance.hot_address.clone(),
             authorization_file: relative_to(data_dir, &authorization_path)?,
-            authorization_txid: authorization.compute_txid().to_string(),
-            revocation_file: relative_to(data_dir, &revocation_path)?,
-            revocation_txid: revocation.compute_txid().to_string(),
+            authorization_txid: authorization.unsigned_tx.compute_txid().to_string(),
+            connector: allowance.connector.clone(),
+            next_connector: allowance.next_connector.clone(),
         });
     }
     let emergency_access = manifest
         .emergency_access
         .as_ref()
         .map(|emergency| {
-            let trigger =
-                finalize_vault_psbt(read_psbt(&batch_dir.join(&emergency.trigger.psbt_file))?)?;
-            let withdrawal =
-                finalize_vault_psbt(read_psbt(&batch_dir.join(&emergency.withdrawal.psbt_file))?)?;
-            let cancellation = finalize_vault_psbt(read_psbt(
-                &batch_dir.join(&emergency.cancellation.psbt_file),
-            )?)?;
+            let trigger = read_psbt(&batch_dir.join(&emergency.trigger.psbt_file))?;
+            let withdrawal = read_psbt(&batch_dir.join(&emergency.withdrawal.psbt_file))?;
             let trigger_path = emergency_transaction_path(
                 data_dir,
                 EmergencyTransactionKind::Trigger,
-                trigger.compute_txid(),
+                trigger.unsigned_tx.compute_txid(),
             );
             let withdrawal_path = emergency_transaction_path(
                 data_dir,
                 EmergencyTransactionKind::Withdrawal,
-                withdrawal.compute_txid(),
-            );
-            let cancellation_path = emergency_transaction_path(
-                data_dir,
-                EmergencyTransactionKind::Cancellation,
-                cancellation.compute_txid(),
+                withdrawal.unsigned_tx.compute_txid(),
             );
             write_encrypted_emergency_transaction(
                 &trigger_path,
@@ -439,28 +422,25 @@ pub fn activate_policy(
                 EmergencyTransactionKind::Withdrawal,
                 &withdrawal,
             )?;
-            write_encrypted_emergency_transaction(
-                &cancellation_path,
-                &phone.seed,
-                EmergencyTransactionKind::Cancellation,
-                &cancellation,
-            )?;
             Ok::<EmergencyAccessSchedule, anyhow::Error>(EmergencyAccessSchedule {
                 amount_sats: emergency.amount_sats,
                 delay_seconds: emergency.delay_seconds,
                 hot_address: emergency.hot_address.clone(),
                 trigger_file: relative_to(data_dir, &trigger_path)?,
-                trigger_txid: trigger.compute_txid().to_string(),
+                trigger_txid: trigger.unsigned_tx.compute_txid().to_string(),
                 withdrawal_file: relative_to(data_dir, &withdrawal_path)?,
-                withdrawal_txid: withdrawal.compute_txid().to_string(),
-                cancellation_file: relative_to(data_dir, &cancellation_path)?,
-                cancellation_txid: cancellation.compute_txid().to_string(),
+                withdrawal_txid: withdrawal.unsigned_tx.compute_txid().to_string(),
+                trigger_connector: emergency.trigger_connector.clone(),
+                withdrawal_connector: emergency.withdrawal_connector.clone(),
             })
         })
         .transpose()?;
     let schedule = Schedule {
-        version: 4,
+        version: 5,
         rollover_txid: rollover.compute_txid().to_string(),
+        controller_descriptor: manifest.controller_descriptor.clone(),
+        controller_address: manifest.controller_address.clone(),
+        connector_value_sats: manifest.connector_value_sats,
         monthly_limit_sats: manifest.monthly_limit_sats,
         monthly_delay_seconds: crate::core::MONTHLY_ALLOWANCE_DELAY_SECONDS,
         emergency_access_limit_sats: manifest.emergency_access_limit_sats,
@@ -490,7 +470,8 @@ pub fn initiate_emergency_access(
         data_dir,
         backend,
         &schedule,
-        &phone.seed,
+        &config,
+        &phone,
         EmergencyTransactionKind::Trigger,
     )?;
     Ok(EmergencyBroadcastResult { transaction_txid })
@@ -505,7 +486,8 @@ pub fn withdraw_emergency_access(data_dir: &Path, backend: &dyn HotWalletBackend
         data_dir,
         backend,
         &schedule,
-        &phone.seed,
+        &config,
+        &phone,
         EmergencyTransactionKind::Withdrawal,
     )
 }
@@ -515,50 +497,67 @@ pub fn cancel_emergency_access(data_dir: &Path, backend: &dyn HotWalletBackend) 
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-    // TODO(production): emergency cancellations need a phone-available fee-bump path so they can
-    // confirm reliably before the delayed withdrawal matures.
-    broadcast_emergency_transaction(
-        data_dir,
-        backend,
-        &schedule,
-        &phone.seed,
-        EmergencyTransactionKind::Cancellation,
-    )
+    let connector = schedule
+        .emergency_access
+        .as_ref()
+        .context("emergency access is disabled for the active vault epoch")?
+        .withdrawal_connector
+        .clone();
+    revoke_connector_to_phone(data_dir, backend, &config, &phone, &connector)
 }
 
 fn broadcast_emergency_transaction(
     data_dir: &Path,
     backend: &dyn HotWalletBackend,
     schedule: &Schedule,
-    phone_seed: &[u8],
+    config: &VaultConfig,
+    phone: &DeviceKeys,
     kind: EmergencyTransactionKind,
 ) -> Result<Txid> {
     let emergency = schedule
         .emergency_access
         .as_ref()
         .context("emergency access is disabled for the active vault epoch")?;
-    let (file, expected_txid) = match kind {
-        EmergencyTransactionKind::Trigger => (&emergency.trigger_file, &emergency.trigger_txid),
-        EmergencyTransactionKind::Withdrawal => {
-            (&emergency.withdrawal_file, &emergency.withdrawal_txid)
-        }
-        EmergencyTransactionKind::Cancellation => {
-            (&emergency.cancellation_file, &emergency.cancellation_txid)
-        }
+    let (file, expected_txid, connector) = match kind {
+        EmergencyTransactionKind::Trigger => (
+            &emergency.trigger_file,
+            &emergency.trigger_txid,
+            &emergency.trigger_connector,
+        ),
+        EmergencyTransactionKind::Withdrawal => (
+            &emergency.withdrawal_file,
+            &emergency.withdrawal_txid,
+            &emergency.withdrawal_connector,
+        ),
+        EmergencyTransactionKind::Cancellation => bail!(
+            "emergency cancellation is constructed dynamically from the live controller output"
+        ),
     };
     let artifact: EncryptedEmergencyTransaction = read_json(&data_dir.join(file))?;
-    if artifact.version != 1 || artifact.kind != kind || artifact.txid != *expected_txid {
+    if artifact.version != 2 || artifact.kind != kind || artifact.txid != *expected_txid {
         bail!("encrypted emergency transaction metadata does not match the requested action");
     }
     let purpose = emergency_transaction_purpose(kind, &artifact.txid);
-    let plaintext =
-        crate::core::crypto::decrypt(phone_seed, &purpose, &artifact.encrypted_transaction)?;
-    let transaction: Transaction = consensus::deserialize(&plaintext)
-        .context("decrypted emergency transaction was invalid")?;
-    let txid = transaction.compute_txid();
+    let plaintext = crate::core::crypto::decrypt(&phone.seed, &purpose, &artifact.encrypted_psbt)?;
+    let mut psbt = Psbt::from_str(
+        std::str::from_utf8(&plaintext).context("decrypted emergency PSBT was not UTF-8")?,
+    )
+    .context("decrypted emergency PSBT was invalid")?;
+    let txid = psbt.unsigned_tx.compute_txid();
     if txid.to_string() != artifact.txid {
-        bail!("decrypted emergency transaction ID does not match its metadata");
+        bail!("decrypted emergency PSBT ID does not match its metadata");
     }
+    ensure_connector_input(&psbt, connector)?;
+    let controller = controller_policy(config)?;
+    validate_schedule_controller(schedule, &controller)?;
+    sign_controller_psbt_inputs(
+        &mut psbt,
+        &controller,
+        ControllerPath::Phone,
+        &phone.vault_keypair,
+        &[1],
+    )?;
+    let transaction = finalize_vault_psbt(psbt)?;
     let broadcast_txid = backend
         .broadcast(&transaction)
         .with_context(|| format!("failed to broadcast emergency access {kind:?}"))?;
@@ -580,40 +579,134 @@ pub fn broadcast_monthly(
         .iter()
         .find(|entry| entry.step == step)
         .with_context(|| format!("no allowance exists for step {step}"))?;
-    let (file, expected_txid) = match kind {
-        TransactionKind::Authorization => (&entry.authorization_file, &entry.authorization_txid),
-        TransactionKind::Revocation => (&entry.revocation_file, &entry.revocation_txid),
-    };
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-    let artifact: EncryptedTransaction = read_json(&data_dir.join(file))?;
-    if artifact.version != 2
+    if kind == TransactionKind::Revocation {
+        let transaction_txid =
+            revoke_connector_to_phone(data_dir, backend, &config, &phone, &entry.connector)?;
+        return Ok(MonthlyBroadcastResult { transaction_txid });
+    }
+    let artifact: EncryptedTransaction = read_json(&data_dir.join(&entry.authorization_file))?;
+    if artifact.version != 3
         || artifact.step != step
         || artifact.kind != kind
-        || artifact.txid != *expected_txid
+        || artifact.txid != entry.authorization_txid
     {
         bail!("encrypted allowance transaction metadata does not match the requested action");
     }
     let purpose = transaction_purpose(step, kind, &artifact.txid);
-    let plaintext =
-        crate::core::crypto::decrypt(&phone.seed, &purpose, &artifact.encrypted_transaction)?;
-    let transaction: Transaction = consensus::deserialize(&plaintext)
-        .context("decrypted allowance transaction was invalid")?;
-    if transaction.compute_txid().to_string() != artifact.txid {
-        bail!("decrypted allowance transaction ID does not match its metadata");
+    let plaintext = crate::core::crypto::decrypt(&phone.seed, &purpose, &artifact.encrypted_psbt)?;
+    let mut psbt = Psbt::from_str(
+        std::str::from_utf8(&plaintext).context("decrypted allowance PSBT was not UTF-8")?,
+    )
+    .context("decrypted allowance PSBT was invalid")?;
+    if psbt.unsigned_tx.compute_txid().to_string() != artifact.txid {
+        bail!("decrypted allowance PSBT ID does not match its metadata");
     }
-    // TODO(production): revocations need a phone-available CPFP path. The fixed 1 sat/vB MVP fee
-    // is deterministic on regtest and explicitly unsafe under dangerously enabled mainnet mode.
+    ensure_connector_input(&psbt, &entry.connector)?;
+    let controller = controller_policy(&config)?;
+    validate_schedule_controller(&schedule, &controller)?;
+    sign_controller_psbt_inputs(
+        &mut psbt,
+        &controller,
+        ControllerPath::Phone,
+        &phone.vault_keypair,
+        &[1],
+    )?;
+    let transaction = finalize_vault_psbt(psbt)?;
     let transaction_txid = backend
         .broadcast(&transaction)
         .with_context(|| format!("failed to broadcast {kind:?} for allowance step {step}"))?;
     Ok(MonthlyBroadcastResult { transaction_txid })
 }
 
+fn revoke_connector_to_phone(
+    data_dir: &Path,
+    backend: &dyn HotWalletBackend,
+    config: &VaultConfig,
+    phone: &DeviceKeys,
+    connector: &ceremony::ConnectorState,
+) -> Result<Txid> {
+    let controller = controller_policy(config)?;
+    let mut wallet = HotWallet::open_or_create(data_dir)?;
+    let destination = wallet.next_change_address()?.script_pubkey();
+    let connector_utxo = VaultUtxo {
+        outpoint: connector.outpoint,
+        txout: TxOut {
+            value: Amount::from_sat(connector.value_sats),
+            script_pubkey: controller.address.script_pubkey(),
+        },
+        // The dynamic transaction can validly spend an unconfirmed connector output. Chain
+        // acceptance, rather than this local placeholder, determines whether that state is live.
+        confirmation_height: 0,
+    };
+    // TODO(production): select current-feerate phone inputs and expose RBF/CPFP controls. The MVP
+    // intentionally uses its fixed 1 sat/vB fee and pays it from the controller output.
+    let (mut psbt, _fee_sats) = build_controller_revocation_psbt(
+        &[connector_utxo],
+        destination,
+        DEFAULT_FEE_RATE_SAT_VB,
+        &controller,
+    )?;
+    sign_controller_psbt_inputs(
+        &mut psbt,
+        &controller,
+        ControllerPath::Phone,
+        &phone.vault_keypair,
+        &[0],
+    )?;
+    let transaction = finalize_vault_psbt(psbt)?;
+    let txid = transaction.compute_txid();
+    let broadcast_txid = backend
+        .broadcast(&transaction)
+        .context("failed to broadcast dynamic policy revocation")?;
+    if broadcast_txid != txid {
+        bail!("chain backend returned an unexpected revocation transaction ID");
+    }
+    Ok(txid)
+}
+
+fn ensure_connector_input(psbt: &Psbt, connector: &ceremony::ConnectorState) -> Result<()> {
+    if psbt
+        .unsigned_tx
+        .input
+        .get(1)
+        .map(|input| input.previous_output)
+        != Some(connector.outpoint)
+        || psbt
+            .inputs
+            .get(1)
+            .and_then(|input| input.witness_utxo.as_ref())
+            .map(|output| output.value.to_sat())
+            != Some(connector.value_sats)
+    {
+        bail!("encrypted policy PSBT does not consume the scheduled controller state");
+    }
+    Ok(())
+}
+
+fn controller_policy(config: &VaultConfig) -> Result<ControllerPolicy> {
+    let phone = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)
+        .context("invalid configured phone vault key")?;
+    let hww = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.hww_vault_pubkey)
+        .context("invalid configured HWW vault key")?;
+    ControllerPolicy::new_for_network(phone, hww, config.bitcoin_network()?)
+}
+
+fn validate_schedule_controller(schedule: &Schedule, controller: &ControllerPolicy) -> Result<()> {
+    if schedule.controller_descriptor != controller.descriptor_string()
+        || schedule.controller_address != controller.address.to_string()
+        || schedule.connector_value_sats != crate::core::CONNECTOR_VALUE_SATS
+    {
+        bail!("active schedule controller does not match the configured vault keys");
+    }
+    Ok(())
+}
+
 pub fn load_schedule(data_dir: &Path) -> Result<Schedule> {
     let schedule: Schedule = read_json(&data_dir.join(SCHEDULE_FILE))?;
-    if schedule.version != 4 {
+    if schedule.version != 5 {
         bail!("unsupported active policy version; approve a new vault policy");
     }
     Ok(schedule)
@@ -825,20 +918,20 @@ fn write_encrypted_transaction(
     phone_seed: &[u8],
     step: u8,
     kind: TransactionKind,
-    transaction: &Transaction,
+    psbt: &Psbt,
 ) -> Result<()> {
-    let txid = transaction.compute_txid().to_string();
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
     let purpose = transaction_purpose(step, kind, &txid);
-    let encrypted_transaction =
-        crate::core::crypto::encrypt(phone_seed, &purpose, &consensus::serialize(transaction))?;
+    let encrypted_psbt =
+        crate::core::crypto::encrypt(phone_seed, &purpose, psbt.to_string().as_bytes())?;
     write_json(
         path,
         &EncryptedTransaction {
-            version: 2,
+            version: 3,
             step,
             kind,
             txid,
-            encrypted_transaction,
+            encrypted_psbt,
         },
     )
 }
@@ -847,19 +940,19 @@ fn write_encrypted_emergency_transaction(
     path: &Path,
     phone_seed: &[u8],
     kind: EmergencyTransactionKind,
-    transaction: &Transaction,
+    psbt: &Psbt,
 ) -> Result<()> {
-    let txid = transaction.compute_txid().to_string();
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
     let purpose = emergency_transaction_purpose(kind, &txid);
-    let encrypted_transaction =
-        crate::core::crypto::encrypt(phone_seed, &purpose, &consensus::serialize(transaction))?;
+    let encrypted_psbt =
+        crate::core::crypto::encrypt(phone_seed, &purpose, psbt.to_string().as_bytes())?;
     write_json(
         path,
         &EncryptedEmergencyTransaction {
-            version: 1,
+            version: 2,
             kind,
             txid,
-            encrypted_transaction,
+            encrypted_psbt,
         },
     )
 }

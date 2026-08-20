@@ -66,6 +66,8 @@ pub struct SweepResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RotationResult {
     pub sweep: SweepResult,
+    #[serde(default)]
+    pub controller_revocation_txid: Option<Txid>,
     pub old_address: String,
     pub new_address: String,
     pub new_phone_mnemonic: String,

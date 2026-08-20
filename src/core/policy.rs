@@ -32,6 +32,13 @@ pub enum SpendPath {
     HwwRecovery,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerPath {
+    Phone,
+    Hww,
+}
+
 #[derive(Debug, Clone)]
 pub struct VaultLeaf {
     pub path: SpendPath,
@@ -39,6 +46,28 @@ pub struct VaultLeaf {
     pub script: ScriptBuf,
     pub leaf_hash: TapLeafHash,
     pub control_block: ControlBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct ControllerLeaf {
+    pub path: ControllerPath,
+    pub depth: u8,
+    pub script: ScriptBuf,
+    pub leaf_hash: TapLeafHash,
+    pub control_block: ControlBlock,
+}
+
+/// The fixed 1-of-2 Taproot policy used by every connector UTXO in one vault.
+///
+/// It deliberately reuses the vault's phone and HWW public keys. Connector state is represented
+/// by an outpoint, not by a derived key: every connector is sent to this same address until the
+/// vault keys rotate.
+#[derive(Debug, Clone)]
+pub struct ControllerPolicy {
+    pub descriptor: Descriptor<DescriptorPublicKey>,
+    pub address: Address,
+    phone: XOnlyPublicKey,
+    hww: XOnlyPublicKey,
 }
 
 /// Fast encoder for the fixed Anzen script tree used while grinding phone vault keys.
@@ -220,6 +249,79 @@ impl VaultPolicy {
     }
 }
 
+impl ControllerPolicy {
+    pub fn new(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> Result<Self> {
+        Self::new_for_network(phone, hww, Network::Regtest)
+    }
+
+    pub fn new_for_network(
+        phone: XOnlyPublicKey,
+        hww: XOnlyPublicKey,
+        network: Network,
+    ) -> Result<Self> {
+        let descriptor_text = format!("tr({BIP341_NUMS_KEY},{{pk({phone}),pk({hww})}})");
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_text)
+            .with_context(|| format!("invalid controller descriptor: {descriptor_text}"))?;
+        let address = descriptor
+            .derived_descriptor(&Secp256k1::verification_only(), 0)?
+            .address(network)?;
+        Ok(Self {
+            descriptor,
+            address,
+            phone,
+            hww,
+        })
+    }
+
+    pub fn definite_descriptor(&self) -> Result<Descriptor<DefiniteDescriptorKey>> {
+        self.descriptor
+            .at_derivation_index(0)
+            .context("controller descriptor could not be made definite")
+    }
+
+    pub fn leaf(&self, path: ControllerPath) -> Result<ControllerLeaf> {
+        let key = match path {
+            ControllerPath::Phone => self.phone,
+            ControllerPath::Hww => self.hww,
+        };
+        let target_script = Builder::new()
+            .push_x_only_key(&key)
+            .push_opcode(OP_CHECKSIG)
+            .into_script();
+        let derived = self
+            .descriptor
+            .derived_descriptor(&Secp256k1::verification_only(), 0)?;
+        let tr = match derived {
+            Descriptor::Tr(tr) => tr,
+            _ => bail!("controller descriptor is not Taproot"),
+        };
+        let spend_info = tr.spend_info();
+        for (depth, miniscript) in tr.iter_scripts() {
+            let script = miniscript.encode();
+            if script != target_script {
+                continue;
+            }
+            let leaf_version = LeafVersion::TapScript;
+            let leaf_hash = TapLeafHash::from_script(&script, leaf_version);
+            let control_block = spend_info
+                .control_block(&(script.clone(), leaf_version))
+                .context("controller leaf has no Taproot control block")?;
+            return Ok(ControllerLeaf {
+                path,
+                depth,
+                script,
+                leaf_hash,
+                control_block,
+            });
+        }
+        bail!("controller descriptor does not contain the requested {path:?} leaf")
+    }
+
+    pub fn descriptor_string(&self) -> String {
+        self.descriptor.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +389,30 @@ mod tests {
                 policy.leaf(SpendPath::HwwRecovery).unwrap().script
             );
         }
+    }
+
+    #[test]
+    fn controller_reuses_vault_keys_with_two_single_signature_paths() {
+        let secp = Secp256k1::new();
+        let phone = DeviceKeys::generate(&secp).unwrap();
+        let hww = DeviceKeys::generate(&secp).unwrap();
+        let controller = ControllerPolicy::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
+
+        assert!(
+            controller
+                .descriptor_string()
+                .contains(&phone.vault_pubkey.to_string())
+        );
+        assert!(
+            controller
+                .descriptor_string()
+                .contains(&hww.vault_pubkey.to_string())
+        );
+        assert_ne!(
+            controller.leaf(ControllerPath::Phone).unwrap().leaf_hash,
+            controller.leaf(ControllerPath::Hww).unwrap().leaf_hash
+        );
+        assert_eq!(controller.leaf(ControllerPath::Phone).unwrap().depth, 1);
+        assert_eq!(controller.leaf(ControllerPath::Hww).unwrap().depth, 1);
     }
 }

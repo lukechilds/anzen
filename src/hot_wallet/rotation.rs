@@ -9,12 +9,13 @@ use super::{
     grind_vanity_phone_key,
 };
 use crate::core::{
+    DEFAULT_FEE_RATE_SAT_VB,
     ceremony::{
         DEFAULT_BATCH_DIR, PolicyLimits, PolicyPackage, SCHEDULE_FILE, build_policy_proposal,
         materialize_policy_package, package_from_batch, validate_batch,
     },
     keys::DeviceKeys,
-    policy::VaultPolicy,
+    policy::{ControllerPath, ControllerPolicy, VaultPolicy},
     recovery::{
         self, PhoneRotationPackage, RotationResult, validate_phone_rotation,
         validate_rotation_policy_binding,
@@ -22,6 +23,9 @@ use crate::core::{
     storage::{
         CONFIG_FILE, DeviceFile, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, VaultConfig, load_config,
         load_device_keys, read_json, write_json,
+    },
+    transactions::{
+        build_controller_revocation_psbt, finalize_vault_psbt, sign_controller_psbt_inputs,
     },
     types::VaultUtxo,
 };
@@ -225,6 +229,7 @@ pub fn activate_phone_rotation(
 ) -> Result<RotationResult> {
     let (old_config, new_config, new_phone) = validate_phone_rotation(data_dir, package)?;
     ensure_backend_network(backend, &old_config)?;
+    let old_phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
     let backup = package
         .cloud_recovery_backup
         .as_ref()
@@ -245,6 +250,49 @@ pub fn activate_phone_rotation(
         validate_rotation_hot_addresses(&new_phone, policy)?;
     }
 
+    // Controller state is fixed only for the lifetime of a key epoch. Consume every old state
+    // before replacing the phone key, and return its small remainder to the replacement phone's
+    // normal wallet rather than creating an unmanaged controller outpoint.
+    let old_connectors = backend.scan_connectors(&old_config)?;
+    let revoked_controllers = if old_connectors.is_empty() {
+        None
+    } else {
+        let mut replacement_wallet = HotWallet::ephemeral(&new_phone)?;
+        let destination = replacement_wallet.next_change_address()?;
+        let phone_pubkey = XOnlyPublicKey::from_str(&old_config.phone_vault_pubkey)?;
+        let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
+        let controller = ControllerPolicy::new_for_network(
+            phone_pubkey,
+            hww_pubkey,
+            old_config.bitcoin_network()?,
+        )?;
+        // TODO(production): use a current feerate and allow explicit fee inputs/RBF/CPFP.
+        let (mut psbt, _) = build_controller_revocation_psbt(
+            &old_connectors,
+            destination.script_pubkey(),
+            DEFAULT_FEE_RATE_SAT_VB,
+            &controller,
+        )?;
+        let indexes = (0..psbt.inputs.len()).collect::<Vec<_>>();
+        sign_controller_psbt_inputs(
+            &mut psbt,
+            &controller,
+            ControllerPath::Phone,
+            &old_phone.vault_keypair,
+            &indexes,
+        )?;
+        let transaction = finalize_vault_psbt(psbt)?;
+        let expected = transaction.compute_txid();
+        let actual = backend
+            .broadcast(&transaction)
+            .context("failed to revoke old controller states during phone rotation")?;
+        ensure!(
+            actual == expected,
+            "chain backend returned an unexpected controller revocation transaction ID"
+        );
+        Some((destination, expected))
+    };
+
     let sweep = broadcast_cooperative_sweep_for_config(backend, &old_config, &package.sweep)?;
     archive_old_epoch(data_dir, &old_config, sweep.txid)?;
     write_json(&data_dir.join(CONFIG_FILE), &new_config)?;
@@ -260,6 +308,12 @@ pub fn activate_phone_rotation(
     write_json(&data_dir.join(PHONE_BACKUP_FILE), backup)?;
 
     let mut hot = HotWallet::open_or_create(data_dir)?;
+    if let Some((expected, _)) = &revoked_controllers {
+        ensure!(
+            hot.next_change_address()? == *expected,
+            "replacement controller change does not match the new phone wallet"
+        );
+    }
     if let Some(policy) = &package.renewed_policy {
         if let Some(emergency) = &policy.manifest.emergency_access {
             ensure!(
@@ -286,6 +340,7 @@ pub fn activate_phone_rotation(
 
     Ok(RotationResult {
         sweep,
+        controller_revocation_txid: revoked_controllers.map(|(_, txid)| txid),
         old_address: old_config.vault_address,
         new_address: new_config.vault_address,
         new_phone_mnemonic: pending.mnemonic,
@@ -430,6 +485,10 @@ mod tests {
 
         fn scan_vault(&self, _config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
             Ok(self.utxos.clone())
+        }
+
+        fn scan_connectors(&self, _config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
+            Ok(Vec::new())
         }
 
         fn broadcast(&self, transaction: &Transaction) -> Result<Txid> {

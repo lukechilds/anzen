@@ -68,10 +68,13 @@ Ledger USB transport automatically. The host separately measures BIP32 key
 derivation, construction of every real BIP341 policy sighash, and repeated
 BIP340 signing of one fixed digest. It
 reports each phase and their sum on the Flex completion screen. The device does
-not verify its own signatures. `--inputs` accepts `1`, `2`, or `12`; the
-rollover requires one signature per input, while every other policy transaction
-has one input. Speculos can exercise the same protocol for correctness, but its
-timing is not representative of physical hardware:
+not verify its own signatures. `--inputs` accepts `1`, `2`, or `12`; rollover
+requires one HWW vault signature per vault input. Every later policy action has
+one vault input and one unsigned controller input, so the HWW produces one
+signature for each action during annual approval. For twelve rollover inputs,
+the connector construction benchmarks 15 transactions and 26 signatures.
+Speculos can exercise the same protocol for correctness, but its timing is not
+representative of physical hardware:
 
 ```sh
 ledger-app/tools/run-signing-benchmark.sh --speculos 127.0.0.1:9999 --inputs 12

@@ -1,13 +1,14 @@
 use anzen::{
     core::{
-        EMERGENCY_ACCESS_DELAY_SECONDS, HWW_RECOVERY_BLOCKS, MONTHLY_ALLOWANCE_DELAY_SECONDS,
-        PHONE_RECOVERY_BLOCKS,
+        DEFAULT_FEE_RATE_SAT_VB, EMERGENCY_ACCESS_DELAY_SECONDS, HWW_RECOVERY_BLOCKS,
+        MONTHLY_ALLOWANCE_DELAY_SECONDS, PHONE_RECOVERY_BLOCKS,
         ceremony::{
             BatchTransaction, PolicyLimits, build_policy_proposal, read_psbt, validate_batch,
         },
         keys::DeviceKeys,
-        policy::VaultPolicy,
+        policy::{ControllerPolicy, VaultPolicy},
         storage::VaultConfig,
+        transactions::build_controller_revocation_psbt,
         types::VaultUtxo,
     },
     hot_wallet::HotWallet,
@@ -29,6 +30,7 @@ struct VaultOutputGraphVector {
     network: String,
     scenario: VectorScenario,
     vault: VectorVault,
+    controller: VectorController,
     policy: VectorPolicy,
     transactions: Vec<VectorTransaction>,
 }
@@ -43,6 +45,14 @@ struct VectorScenario {
 struct VectorVault {
     address: String,
     descriptor: String,
+}
+
+#[derive(Serialize)]
+struct VectorController {
+    address: String,
+    descriptor: String,
+    value_sats: u64,
+    behavior: &'static str,
 }
 
 #[derive(Serialize)]
@@ -71,6 +81,7 @@ struct VectorInput {
     vout: u32,
     value_sats: u64,
     sequence: u32,
+    role: String,
 }
 
 #[derive(Serialize)]
@@ -130,11 +141,22 @@ fn vector_transaction(
         .input
         .iter()
         .zip(&psbt.inputs)
-        .map(|(input, psbt_input)| VectorInput {
+        .enumerate()
+        .map(|(index, (input, psbt_input))| VectorInput {
             txid: input.previous_output.txid.to_string(),
             vout: input.previous_output.vout,
             value_sats: psbt_input.witness_utxo.as_ref().unwrap().value.to_sat(),
             sequence: input.sequence.to_consensus_u32(),
+            role: if transaction.vault_input_indexes.contains(&(index as u32)) {
+                "vault".to_owned()
+            } else if transaction
+                .controller_input_indexes
+                .contains(&(index as u32))
+            {
+                "controller".to_owned()
+            } else {
+                panic!("test transaction input has no role")
+            },
         })
         .collect::<Vec<_>>();
     let outputs = unsigned
@@ -204,6 +226,8 @@ fn vault_output_graph_matches_checked_in_json_vector() {
         vec![
             "allowance-chain:step-1".to_owned(),
             "vault-remainder".to_owned(),
+            "monthly-controller:state-1".to_owned(),
+            "emergency-controller:trigger".to_owned(),
         ],
     )];
     for (index, allowance) in manifest.allowances.iter().enumerate() {
@@ -213,6 +237,7 @@ fn vault_output_graph_matches_checked_in_json_vector() {
         )];
         if index + 1 < manifest.allowance_count {
             authorization_outputs.push(format!("allowance-chain:step-{}", allowance.step + 1));
+            authorization_outputs.push(format!("monthly-controller:state-{}", allowance.step + 1));
         }
         transactions.push(vector_transaction(
             &format!("allowance:step-{}:authorization", allowance.step),
@@ -220,22 +245,17 @@ fn vault_output_graph_matches_checked_in_json_vector() {
             &batch,
             authorization_outputs,
         ));
-        transactions.push(vector_transaction(
-            &format!("allowance:step-{}:revoke-chain", allowance.step),
-            &allowance.revocation,
-            &batch,
-            vec![format!(
-                "vault-revocation:step-{}-and-later",
-                allowance.step
-            )],
-        ));
     }
     transactions.extend([
         vector_transaction(
             "emergency:trigger",
             &emergency.trigger,
             &batch,
-            vec!["emergency-staging".to_owned(), "vault-change".to_owned()],
+            vec![
+                "emergency-staging".to_owned(),
+                "vault-change".to_owned(),
+                "emergency-controller:withdrawal".to_owned(),
+            ],
         ),
         vector_transaction(
             "emergency:withdrawal",
@@ -243,16 +263,43 @@ fn vault_output_graph_matches_checked_in_json_vector() {
             &batch,
             vec!["hot-wallet-emergency-access".to_owned()],
         ),
-        vector_transaction(
-            "emergency:cancellation",
-            &emergency.cancellation,
-            &batch,
-            vec!["vault-emergency-cancellation".to_owned()],
-        ),
     ]);
+
+    let controller = ControllerPolicy::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
+    let monthly_connector = VaultUtxo {
+        outpoint: manifest.allowances[0].connector.outpoint,
+        txout: TxOut {
+            value: Amount::from_sat(manifest.connector_value_sats),
+            script_pubkey: controller.address.script_pubkey(),
+        },
+        confirmation_height: 1,
+    };
+    let monthly_revoke_destination = hot.next_change_address().unwrap().script_pubkey();
+    let (monthly_revoke, monthly_revoke_fee) = build_controller_revocation_psbt(
+        &[monthly_connector],
+        monthly_revoke_destination,
+        DEFAULT_FEE_RATE_SAT_VB,
+        &controller,
+    )
+    .unwrap();
+    let monthly_revoke_meta = BatchTransaction {
+        psbt_file: "dynamic-monthly-revocation.psbt".to_owned(),
+        unsigned_txid: monthly_revoke.unsigned_tx.compute_txid().to_string(),
+        fee_sats: monthly_revoke_fee,
+        vault_input_indexes: vec![],
+        controller_input_indexes: vec![0],
+    };
+    anzen::core::ceremony::write_psbt(&batch.join(&monthly_revoke_meta.psbt_file), &monthly_revoke)
+        .unwrap();
+    transactions.push(vector_transaction(
+        "dynamic-revocation:monthly-state-1",
+        &monthly_revoke_meta,
+        &batch,
+        vec!["phone-wallet-change".to_owned()],
+    ));
     let vector = VaultOutputGraphVector {
         format: "anzen-vault-output-graph",
-        version: 2,
+        version: 3,
         network: manifest.network.clone(),
         scenario: VectorScenario {
             created_at: now.to_rfc3339(),
@@ -261,6 +308,12 @@ fn vault_output_graph_matches_checked_in_json_vector() {
         vault: VectorVault {
             address: manifest.vault_address.clone(),
             descriptor: manifest.vault_descriptor.clone(),
+        },
+        controller: VectorController {
+            address: manifest.controller_address.clone(),
+            descriptor: manifest.controller_descriptor.clone(),
+            value_sats: manifest.connector_value_sats,
+            behavior: "either device may spend; execution rolls state forward; revocation sends change to a normal wallet address and creates no controller output",
         },
         policy: VectorPolicy {
             monthly_limit_sats: manifest.monthly_limit_sats,

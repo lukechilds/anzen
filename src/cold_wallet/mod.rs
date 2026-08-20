@@ -7,7 +7,7 @@ use crate::core::{
     ceremony::{self, BatchManifest},
     crypto::{self, EncryptedBlob},
     keys::DeviceKeys,
-    policy::SpendPath,
+    policy::{ControllerPath, ControllerPolicy, SpendPath},
     recovery::{
         self, CooperativeSweepPackage, PhoneRecoveryPackage, PhoneRotationPackage, SweepPath,
         SweepResult,
@@ -18,7 +18,11 @@ use crate::core::{
         PHONE_DEVICE_FILE, PublicDeviceFile, VaultConfig, load_config, load_device,
         load_device_keys, network_name, read_json, validate_supported_network, write_json,
     },
-    transactions::{sign_vault_psbt, verify_vault_psbt_signature},
+    transactions::{
+        build_controller_revocation_psbt, finalize_vault_psbt, sign_controller_psbt_inputs,
+        sign_vault_psbt, sign_vault_psbt_inputs, verify_controller_psbt_signatures,
+        verify_vault_psbt_signature, verify_vault_psbt_signatures,
+    },
     types::VaultUtxo,
 };
 use anyhow::{Context, Result};
@@ -125,6 +129,11 @@ fn approve_policy_for_config(
     let mut manifest = ceremony::load_manifest(batch_dir)?;
     let policy = ceremony::validate_batch(config, &manifest, batch_dir)?;
     let phone_pubkey = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
+    let controller = ControllerPolicy::new_for_network(
+        phone_pubkey,
+        bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?,
+        config.bitcoin_network()?,
+    )?;
     let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
     if hww.vault_pubkey.to_string() != config.hww_vault_pubkey {
         anyhow::bail!("HWW key does not match the configured vault policy");
@@ -133,12 +142,38 @@ fn approve_policy_for_config(
     for transaction in ceremony::manifest_transactions(&manifest) {
         let path = batch_dir.join(&transaction.psbt_file);
         let mut psbt = ceremony::read_psbt(&path)?;
-        verify_vault_psbt_signature(&psbt, &policy, SpendPath::Cooperative, phone_pubkey)?;
-        sign_vault_psbt(
+        let vault_indexes = transaction
+            .vault_input_indexes
+            .iter()
+            .map(|index| usize::try_from(*index).context("vault input index exceeds usize"))
+            .collect::<Result<Vec<_>>>()?;
+        let controller_indexes = transaction
+            .controller_input_indexes
+            .iter()
+            .map(|index| usize::try_from(*index).context("controller input index exceeds usize"))
+            .collect::<Result<Vec<_>>>()?;
+        verify_vault_psbt_signatures(
+            &psbt,
+            &policy,
+            SpendPath::Cooperative,
+            phone_pubkey,
+            &vault_indexes,
+        )?;
+        if !controller_indexes.is_empty() && transaction.psbt_file == manifest.rollover.psbt_file {
+            verify_controller_psbt_signatures(
+                &psbt,
+                &controller,
+                ControllerPath::Phone,
+                phone_pubkey,
+                &controller_indexes,
+            )?;
+        }
+        sign_vault_psbt_inputs(
             &mut psbt,
             &policy,
             SpendPath::Cooperative,
             &hww.vault_keypair,
+            &vault_indexes,
         )?;
         ceremony::write_psbt(&path, &psbt)?;
     }
@@ -193,6 +228,45 @@ pub fn recover(
     )?;
     let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
     recovery::sign_recovery_sweep(plan, SweepPath::HwwRecovery, &hww)
+}
+
+/// Revoke every currently live policy state with the HWW controller path.
+///
+/// The destination is explicit because the cold signer does not own a general-purpose wallet.
+/// It should normally be a replacement vault or another independently verified safe address.
+pub fn revoke_policy(
+    data_dir: &Path,
+    config: &VaultConfig,
+    controller_utxos: &[VaultUtxo],
+    destination: &Address,
+) -> Result<Transaction> {
+    let phone_pubkey = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
+    let hww = load_device_keys(data_dir, HWW_DEVICE_FILE)?;
+    if hww.vault_pubkey.to_string() != config.hww_vault_pubkey {
+        anyhow::bail!("HWW key does not match the configured vault policy");
+    }
+    let controller = ControllerPolicy::new_for_network(
+        phone_pubkey,
+        hww.vault_pubkey,
+        config.bitcoin_network()?,
+    )?;
+    // TODO(production): obtain a current feerate and support explicit fee inputs/RBF/CPFP. The
+    // MVP's connector reserve pays a deterministic 1 sat/vB revocation fee.
+    let (mut psbt, _) = build_controller_revocation_psbt(
+        controller_utxos,
+        destination.script_pubkey(),
+        crate::core::DEFAULT_FEE_RATE_SAT_VB,
+        &controller,
+    )?;
+    let indexes = (0..psbt.inputs.len()).collect::<Vec<_>>();
+    sign_controller_psbt_inputs(
+        &mut psbt,
+        &controller,
+        ControllerPath::Hww,
+        &hww.vault_keypair,
+        &indexes,
+    )?;
+    finalize_vault_psbt(psbt)
 }
 
 pub fn approve_cooperative_sweep(

@@ -1,6 +1,6 @@
 use anzen_cold_signer::benchmark::{
-    BenchmarkConfig, BenchmarkError as GraphError, FIXED_SIGNING_DIGEST, PolicyCommitment, Sha256,
-    VisitError, WorkloadSummary, normalize_bip340_public_key,
+    BenchmarkConfig, BenchmarkError as GraphError, ControllerCommitment, FIXED_SIGNING_DIGEST,
+    PolicyCommitment, Sha256, VisitError, WorkloadSummary, normalize_bip340_public_key,
 };
 use ledger_device_sdk::{
     ecc::{ECPrivateKey, Secp256k1, SeedDerive, make_bip32_path},
@@ -82,10 +82,14 @@ impl BenchmarkContext {
         let mut hasher = LedgerSha256;
         let policy = PolicyCommitment::new(&mut hasher, FIXED_PHONE_XONLY_PUBLIC_KEY, hww_xonly);
         let vault_output_key = taproot_output_key(policy.output_key_tweak)?;
+        let controller =
+            ControllerCommitment::new(&mut hasher, FIXED_PHONE_XONLY_PUBLIC_KEY, hww_xonly);
+        let controller_output_key = taproot_output_key(controller.output_key_tweak)?;
         let config = BenchmarkConfig::deterministic(
             &mut hasher,
             rollover_inputs,
             vault_output_key,
+            controller_output_key,
             policy.cooperative_leaf_hash,
         )?;
         let summary = config.summary();

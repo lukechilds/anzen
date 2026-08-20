@@ -24,6 +24,7 @@ readonly TESTS=(
     monthly-revoke
     emergency-access
     emergency-cancel
+    hww-revoke
     partial-funding
     lost-phone
     stolen-phone
@@ -195,6 +196,27 @@ node_mtp() {
     command anzen --data-dir "$MAIN" node info | awk '/^Median time past:/ {print $4}'
 }
 
+live_controller_count() {
+    command anzen --data-dir "$MAIN" status | \
+        awk '/^Live policy controller outputs:/ {print $5}'
+}
+
+vault_balance_sats() {
+    command anzen --data-dir "$MAIN" status | \
+        awk '/^Vault balance:/ {print $3}'
+}
+
+require_live_controllers() {
+    local expected=$1
+    local actual
+    actual=$(live_controller_count)
+    if [[ $actual != "$expected" ]]; then
+        printf 'ERROR: expected %s live policy controller output(s), found %s\n' \
+            "$expected" "$actual" >&2
+        exit 1
+    fi
+}
+
 format_duration() {
     local seconds=$1
     if (( seconds < 60 )); then
@@ -326,21 +348,21 @@ ceremony() {
     local proposal="${E2E_TEST}-policy.json"
     local approved="${E2E_TEST}-approved-policy.json"
     anzen_filtered '
-        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Allowance steps:|Allowance hop delay:|WARNING:|Rollover txid:|Rollover fee:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
+        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Policy controller address:|Policy controller reserve:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Allowance steps:|Allowance hop delay:|WARNING:|Rollover txid:|Rollover fee:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
     ' "$MAIN" phone set-policy --monthly-limit "$monthly_limit" \
         --emergency-access-limit "$emergency_access_limit" \
         --output "$proposal" --now "$now"
     anzen_filtered '
-        /^(SIMULATED HWW|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Allowance steps:|Allowance hop delay:|Rollover txid:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency cancellation txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
+        /^(SIMULATED HWW|Policy controller address:|Policy controller reserve:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Allowance steps:|Allowance hop delay:|Rollover txid:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
     ' "$MAIN" hww confirm-policy "$proposal" --output "$approved" --yes
     anzen_filtered '
-        /^(Rollover broadcast:|Active monthly limit:|Encrypted allowance transaction pairs:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
+        /^(Rollover broadcast:|Active monthly limit:|Encrypted allowance authorizations:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
     ' "$MAIN" phone activate-policy "$approved"
 }
 
 status_compact() {
     anzen_filtered '
-        /^(Network:|Height:|Vault UTXOs:|Vault balance:)/ { print }
+        /^(Network:|Height:|Vault UTXOs:|Vault balance:|Live policy controller outputs:)/ { print }
     ' "$MAIN" status
 }
 
@@ -434,8 +456,8 @@ test_monthly_spend() {
     confirm_transaction "Confirming the annual rollover"
     first_unlock=$((first_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
     printf 'Step 1 becomes valid about 30 days after the rollover confirms.\n'
-    printf 'Each authorization and revocation is stored as its own phone-key-encrypted artifact.\n'
-    success "Twelve sequential allowance hops presigned."
+    printf 'Each authorization is encrypted as an incomplete PSBT; the phone signs its controller input only when executing it.\n'
+    success "Twelve sequential allowance authorizations presigned."
 
     step "Attempt the first allowance before it unlocks"
     expect_failure "step 1 has not completed its relative 30-day delay" \
@@ -468,6 +490,7 @@ test_monthly_spend() {
 
 test_monthly_revoke() {
     local first_delay_base first_unlock second_delay_base second_unlock revoke_time
+    local balance_before balance_after
     setup_vault
 
     step "Approve one annual policy and presign the allowance chain"
@@ -475,7 +498,7 @@ test_monthly_revoke() {
     first_delay_base=$(node_mtp)
     confirm_transaction "Confirming the annual rollover"
     first_unlock=$((first_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
-    success "Twelve sequential allowance hops presigned."
+    success "Twelve sequential allowance authorizations presigned."
 
     advance_mtp_to "$first_unlock" "Fast-forward through the first allowance delay"
     step "Execute step 1 so step 2 becomes the live chain output"
@@ -487,9 +510,17 @@ test_monthly_revoke() {
     revoke_time=$((second_delay_base + 14 * 24 * 60 * 60))
     advance_mtp_to "$revoke_time" "Fast-forward two weeks into step 2's delay"
     step "Revoke the entire remaining allowance chain from the phone"
+    balance_before=$(vault_balance_sats)
     anzen "$MAIN" phone revoke 2
     confirm_transaction "Confirming the whole-chain revocation"
-    success "Step 2 and every descendant were revoked back to the vault."
+    require_live_controllers 0
+    balance_after=$(vault_balance_sats)
+    if [[ $balance_after != "$balance_before" ]]; then
+        printf 'ERROR: monthly revocation moved vault principal (%s -> %s sats)\n' \
+            "$balance_before" "$balance_after" >&2
+        exit 1
+    fi
+    success "The live controller was spent; cold principal remained in the vault."
 
     second_unlock=$((second_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
     advance_mtp_to "$second_unlock" "Fast-forward beyond step 2's original delay"
@@ -530,7 +561,7 @@ test_emergency_access() {
 }
 
 test_emergency_cancel() {
-    local relative_lock_base unlock_time
+    local relative_lock_base unlock_time balance_before balance_after
     setup_vault
 
     step "Approve one cancellable emergency withdrawal for this vault epoch"
@@ -547,18 +578,62 @@ test_emergency_cancel() {
     success "Emergency access started with withdrawal still locked."
 
     step "Cancel emergency access from the phone before it unlocks"
+    balance_before=$(vault_balance_sats)
     anzen "$MAIN" phone emergency cancel
     confirm_transaction "Confirming the emergency cancellation"
-    success "Staged emergency funds returned to the vault."
+    require_live_controllers 1
+    balance_after=$(vault_balance_sats)
+    if [[ $balance_after != "$balance_before" ]]; then
+        printf 'ERROR: emergency cancellation moved staged vault principal (%s -> %s sats)\n' \
+            "$balance_before" "$balance_after" >&2
+        exit 1
+    fi
+    success "The withdrawal controller was spent; staged funds remained in the vault."
 
     unlock_time=$((relative_lock_base + EMERGENCY_ACCESS_DELAY_SECONDS))
     advance_mtp_to "$unlock_time" "Fast-forward beyond the cancelled withdrawal's delay"
 
     step "Attempt the cancelled emergency withdrawal"
-    expect_failure "the cancellation already spent the staged vault output" \
+    expect_failure "the cancellation already spent the withdrawal controller" \
         "$MAIN" phone emergency withdraw
     status_compact
     success "Cancelled emergency access remained unspendable."
+}
+
+test_hww_revoke() {
+    local first_delay_base first_unlock safe_address balance_before balance_after
+    setup_vault
+
+    step "Approve monthly and emergency policy actions"
+    ceremony "$NOW" "$DEFAULT_MONTHLY_LIMIT_SATS" 50000000
+    first_delay_base=$(node_mtp)
+    confirm_transaction "Confirming the annual rollover"
+    status_compact
+    success "Both independent policy controllers became live."
+
+    make_receiver safe_address "Policy-revocation recipient"
+    step "Revoke every live policy state from the HWW"
+    balance_before=$(vault_balance_sats)
+    anzen "$MAIN" hww revoke-policy "$safe_address" --yes
+    confirm_transaction "Confirming the HWW policy revocation"
+    require_live_controllers 0
+    balance_after=$(vault_balance_sats)
+    if [[ $balance_after != "$balance_before" ]]; then
+        printf 'ERROR: HWW policy revocation moved vault principal (%s -> %s sats)\n' \
+            "$balance_before" "$balance_after" >&2
+        exit 1
+    fi
+    status_compact
+    success "HWW spent both controllers to a verified safe destination."
+
+    first_unlock=$((first_delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
+    advance_mtp_to "$first_unlock" "Fast-forward beyond the first allowance delay"
+    step "Attempt actions from the now-revoked phone policy"
+    expect_failure "the HWW already spent the monthly controller" \
+        "$MAIN" phone authorize 1
+    expect_failure "the HWW already spent the emergency controller" \
+        "$MAIN" phone emergency initiate
+    success "A surviving HWW invalidated every phone-held policy action."
 }
 
 test_partial_funding() {
@@ -598,6 +673,7 @@ test_lost_phone() {
         exit 1
     fi
     confirm_transaction "Confirming emergency key rotation"
+    require_live_controllers 2
     anzen "$MAIN" status
     if [[ $(jq -r '.monthly_limit_sats' "$MAIN/anzen.json") != "$DEFAULT_MONTHLY_LIMIT_SATS" ]]; then
         printf 'ERROR: phone-key rotation did not preserve the monthly limit\n' >&2
@@ -850,6 +926,7 @@ test_rollover_on_time() {
     step "Create the first annual schedule"
     ceremony "$NOW"
     confirm_transaction "Confirming the first annual rollover"
+    require_live_controllers 1
     initial_rollover_height=$(node_height)
     old_phone_target=$((initial_rollover_height + PHONE_RECOVERY_BLOCKS))
     old_schedule="$DEMO_ROOT/rollover-on-time-old-schedule"
@@ -875,6 +952,7 @@ test_rollover_on_time() {
     current_mtp=$(node_mtp)
     ceremony "$current_mtp"
     confirm_transaction "Confirming the on-time annual rollover"
+    require_live_controllers 1
     renewed_rollover_height=$(node_height)
     anzen "$MAIN" status
     renewed_oldest=$(command anzen --data-dir "$MAIN" status | \
@@ -941,6 +1019,7 @@ case "$E2E_TEST" in
     monthly-revoke) test_monthly_revoke ;;
     emergency-access) test_emergency_access ;;
     emergency-cancel) test_emergency_cancel ;;
+    hww-revoke) test_hww_revoke ;;
     partial-funding) test_partial_funding ;;
     lost-phone) test_lost_phone ;;
     stolen-phone) test_stolen_phone ;;

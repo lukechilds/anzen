@@ -1,6 +1,6 @@
 {
   "format": "anzen-vault-output-graph",
-  "version": 2,
+  "version": 3,
   "network": "regtest",
   "scenario": {
     "created_at": "2026-08-03T12:00:00+00:00",
@@ -9,6 +9,12 @@
   "vault": {
     "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
     "descriptor": "tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,da74a18a88e1cfc8f23aa101bc88f0381a7e86a9edd73d132a15432a1d8b0eef,a0bbe210e795419e8c1574ddc4a90e840ad64485983e7523975b937b06615ad6),{and_v(v:older(61200),pk(da74a18a88e1cfc8f23aa101bc88f0381a7e86a9edd73d132a15432a1d8b0eef)),and_v(v:older(65535),pk(a0bbe210e795419e8c1574ddc4a90e840ad64485983e7523975b937b06615ad6))}})#r2j36vtx"
+  },
+  "controller": {
+    "address": "bcrt1ppudyghxc03hu0les2yqe005qmm5avemukgsnvwyx55szxma53eysu2342c",
+    "descriptor": "tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{pk(da74a18a88e1cfc8f23aa101bc88f0381a7e86a9edd73d132a15432a1d8b0eef),pk(a0bbe210e795419e8c1574ddc4a90e840ad64485983e7523975b937b06615ad6)})#c7xlrukm",
+    "value_sats": 10000,
+    "behavior": "either device may spend; execution rolls state forward; revocation sends change to a normal wallet address and creates no controller output"
   },
   "policy": {
     "monthly_limit_sats": 10000000,
@@ -20,47 +26,70 @@
   "transactions": [
     {
       "name": "rollover",
-      "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
+      "txid": "b87489fac46440dc3500383989807eb802c9617102174d98484e4747360820d0",
       "version": 2,
       "lock_time": 0,
-      "fee_sats": 205,
+      "fee_sats": 291,
       "inputs": [
         {
           "txid": "0000000000000000000000000000000000000000000000000000000000000000",
           "vout": 0,
           "value_sats": 90000000,
-          "sequence": 4294967295
+          "sequence": 4294967295,
+          "role": "vault"
         }
       ],
       "outputs": [
         {
           "vout": 0,
           "purpose": "allowance-chain:step-1",
-          "value_sats": 30000572,
+          "value_sats": 29990907,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
         },
         {
           "vout": 1,
           "purpose": "vault-remainder",
-          "value_sats": 59999223,
+          "value_sats": 59988802,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        },
+        {
+          "vout": 2,
+          "purpose": "monthly-controller:state-1",
+          "value_sats": 10000,
+          "address": "bcrt1ppudyghxc03hu0les2yqe005qmm5avemukgsnvwyx55szxma53eysu2342c",
+          "script_pubkey": "51200f1a445cd87c6fc7ff30510197be80dee9d6677cb221363886a520236fb48e49"
+        },
+        {
+          "vout": 3,
+          "purpose": "emergency-controller:trigger",
+          "value_sats": 10000,
+          "address": "bcrt1ppudyghxc03hu0les2yqe005qmm5avemukgsnvwyx55szxma53eysu2342c",
+          "script_pubkey": "51200f1a445cd87c6fc7ff30510197be80dee9d6677cb221363886a520236fb48e49"
         }
       ]
     },
     {
       "name": "allowance:step-1:authorization",
-      "txid": "304d32fd77d948df0d2b063e32030b527110dbf630df28d241ab5520b1e62b80",
+      "txid": "4785ede876280bb170e6c72af45c97224d62ed38a346eed377b66c8b632cf073",
       "version": 2,
       "lock_time": 0,
-      "fee_sats": 205,
+      "fee_sats": 331,
       "inputs": [
         {
-          "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
+          "txid": "b87489fac46440dc3500383989807eb802c9617102174d98484e4747360820d0",
           "vout": 0,
-          "value_sats": 30000572,
-          "sequence": 4199367
+          "value_sats": 29990907,
+          "sequence": 4199367,
+          "role": "vault"
+        },
+        {
+          "txid": "b87489fac46440dc3500383989807eb802c9617102174d98484e4747360820d0",
+          "vout": 2,
+          "value_sats": 10000,
+          "sequence": 4294967293,
+          "role": "controller"
         }
       ],
       "outputs": [
@@ -74,48 +103,39 @@
         {
           "vout": 1,
           "purpose": "allowance-chain:step-2",
-          "value_sats": 20000367,
+          "value_sats": 19990576,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
-        }
-      ]
-    },
-    {
-      "name": "allowance:step-1:revoke-chain",
-      "txid": "39b3dd01f72b1451dc38fc9634d87fc679e8a194d4e4dcc1c13f2490c1aa1a3f",
-      "version": 2,
-      "lock_time": 0,
-      "fee_sats": 162,
-      "inputs": [
+        },
         {
-          "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
-          "vout": 0,
-          "value_sats": 30000572,
-          "sequence": 4294967295
-        }
-      ],
-      "outputs": [
-        {
-          "vout": 0,
-          "purpose": "vault-revocation:step-1-and-later",
-          "value_sats": 30000410,
-          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
-          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+          "vout": 2,
+          "purpose": "monthly-controller:state-2",
+          "value_sats": 10000,
+          "address": "bcrt1ppudyghxc03hu0les2yqe005qmm5avemukgsnvwyx55szxma53eysu2342c",
+          "script_pubkey": "51200f1a445cd87c6fc7ff30510197be80dee9d6677cb221363886a520236fb48e49"
         }
       ]
     },
     {
       "name": "allowance:step-2:authorization",
-      "txid": "b726d00b8a7a0cf94629dbcd9557a33b19224ecfa8cd53f1d9d3af4a6ba317ba",
+      "txid": "f3fbd86d52166462aa1428be4a2be31e096646f44590fb69cb2173fda3bda7e0",
       "version": 2,
       "lock_time": 0,
-      "fee_sats": 205,
+      "fee_sats": 331,
       "inputs": [
         {
-          "txid": "304d32fd77d948df0d2b063e32030b527110dbf630df28d241ab5520b1e62b80",
+          "txid": "4785ede876280bb170e6c72af45c97224d62ed38a346eed377b66c8b632cf073",
           "vout": 1,
-          "value_sats": 20000367,
-          "sequence": 4199367
+          "value_sats": 19990576,
+          "sequence": 4199367,
+          "role": "vault"
+        },
+        {
+          "txid": "4785ede876280bb170e6c72af45c97224d62ed38a346eed377b66c8b632cf073",
+          "vout": 2,
+          "value_sats": 10000,
+          "sequence": 4294967293,
+          "role": "controller"
         }
       ],
       "outputs": [
@@ -129,48 +149,39 @@
         {
           "vout": 1,
           "purpose": "allowance-chain:step-3",
-          "value_sats": 10000162,
+          "value_sats": 9990245,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
-        }
-      ]
-    },
-    {
-      "name": "allowance:step-2:revoke-chain",
-      "txid": "be403260a1520b9b651dc6b6ee508a54b79fe55b9d248552edd26d72b0f12d3f",
-      "version": 2,
-      "lock_time": 0,
-      "fee_sats": 162,
-      "inputs": [
+        },
         {
-          "txid": "304d32fd77d948df0d2b063e32030b527110dbf630df28d241ab5520b1e62b80",
-          "vout": 1,
-          "value_sats": 20000367,
-          "sequence": 4294967295
-        }
-      ],
-      "outputs": [
-        {
-          "vout": 0,
-          "purpose": "vault-revocation:step-2-and-later",
-          "value_sats": 20000205,
-          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
-          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+          "vout": 2,
+          "purpose": "monthly-controller:state-3",
+          "value_sats": 10000,
+          "address": "bcrt1ppudyghxc03hu0les2yqe005qmm5avemukgsnvwyx55szxma53eysu2342c",
+          "script_pubkey": "51200f1a445cd87c6fc7ff30510197be80dee9d6677cb221363886a520236fb48e49"
         }
       ]
     },
     {
       "name": "allowance:step-3:authorization",
-      "txid": "107629579962b0b9c58308d64305574b3edc3358543cc27820a3dcec8b9f20c4",
+      "txid": "86d5d2ea71081b0d32c2160438c29a294912be4267ab899920f13b4b031cf79d",
       "version": 2,
       "lock_time": 0,
-      "fee_sats": 162,
+      "fee_sats": 245,
       "inputs": [
         {
-          "txid": "b726d00b8a7a0cf94629dbcd9557a33b19224ecfa8cd53f1d9d3af4a6ba317ba",
+          "txid": "f3fbd86d52166462aa1428be4a2be31e096646f44590fb69cb2173fda3bda7e0",
           "vout": 1,
-          "value_sats": 10000162,
-          "sequence": 4199367
+          "value_sats": 9990245,
+          "sequence": 4199367,
+          "role": "vault"
+        },
+        {
+          "txid": "f3fbd86d52166462aa1428be4a2be31e096646f44590fb69cb2173fda3bda7e0",
+          "vout": 2,
+          "value_sats": 10000,
+          "sequence": 4294967293,
+          "role": "controller"
         }
       ],
       "outputs": [
@@ -184,72 +195,71 @@
       ]
     },
     {
-      "name": "allowance:step-3:revoke-chain",
-      "txid": "8dc2b6b99ae73781fdf7f02bf1dfb24cc1d413a86cc45811b5147462a3ac7181",
-      "version": 2,
-      "lock_time": 0,
-      "fee_sats": 162,
-      "inputs": [
-        {
-          "txid": "b726d00b8a7a0cf94629dbcd9557a33b19224ecfa8cd53f1d9d3af4a6ba317ba",
-          "vout": 1,
-          "value_sats": 10000162,
-          "sequence": 4294967295
-        }
-      ],
-      "outputs": [
-        {
-          "vout": 0,
-          "purpose": "vault-revocation:step-3-and-later",
-          "value_sats": 10000000,
-          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
-          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
-        }
-      ]
-    },
-    {
       "name": "emergency:trigger",
-      "txid": "bd95e1d78119402083ff13d9d722c7c680508b0dcf8c5737ad53b5faa03c601f",
+      "txid": "c496801d467ce0530d0f42c2ad75cfea0d4085ad51e71e4aa7afa03e33381e1e",
       "version": 2,
       "lock_time": 0,
-      "fee_sats": 205,
+      "fee_sats": 331,
       "inputs": [
         {
-          "txid": "427686ad3cde7d85f549ddc940d489fbfdab296b4c3baa089f73c45a060a8b4e",
+          "txid": "b87489fac46440dc3500383989807eb802c9617102174d98484e4747360820d0",
           "vout": 1,
-          "value_sats": 59999223,
-          "sequence": 4294967295
+          "value_sats": 59988802,
+          "sequence": 4294967295,
+          "role": "vault"
+        },
+        {
+          "txid": "b87489fac46440dc3500383989807eb802c9617102174d98484e4747360820d0",
+          "vout": 3,
+          "value_sats": 10000,
+          "sequence": 4294967293,
+          "role": "controller"
         }
       ],
       "outputs": [
         {
           "vout": 0,
           "purpose": "emergency-staging",
-          "value_sats": 50000162,
+          "value_sats": 49990245,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
         },
         {
           "vout": 1,
           "purpose": "vault-change",
-          "value_sats": 9998856,
+          "value_sats": 9998226,
           "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
           "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+        },
+        {
+          "vout": 2,
+          "purpose": "emergency-controller:withdrawal",
+          "value_sats": 10000,
+          "address": "bcrt1ppudyghxc03hu0les2yqe005qmm5avemukgsnvwyx55szxma53eysu2342c",
+          "script_pubkey": "51200f1a445cd87c6fc7ff30510197be80dee9d6677cb221363886a520236fb48e49"
         }
       ]
     },
     {
       "name": "emergency:withdrawal",
-      "txid": "e2bebe94d4cd77d86f023a18c48319d33e6efd605782e7e5793019328c85b19e",
+      "txid": "cfb9002e5debc82fce3c9ccaf19d0241b55c977a121617c99391e082a4481c2d",
       "version": 2,
       "lock_time": 0,
-      "fee_sats": 162,
+      "fee_sats": 245,
       "inputs": [
         {
-          "txid": "bd95e1d78119402083ff13d9d722c7c680508b0dcf8c5737ad53b5faa03c601f",
+          "txid": "c496801d467ce0530d0f42c2ad75cfea0d4085ad51e71e4aa7afa03e33381e1e",
           "vout": 0,
-          "value_sats": 50000162,
-          "sequence": 4195486
+          "value_sats": 49990245,
+          "sequence": 4195486,
+          "role": "vault"
+        },
+        {
+          "txid": "c496801d467ce0530d0f42c2ad75cfea0d4085ad51e71e4aa7afa03e33381e1e",
+          "vout": 2,
+          "value_sats": 10000,
+          "sequence": 4294967293,
+          "role": "controller"
         }
       ],
       "outputs": [
@@ -263,26 +273,27 @@
       ]
     },
     {
-      "name": "emergency:cancellation",
-      "txid": "c05c4f2a53ec3a5627b2e90b181a8af7a38b770634ac26c920c95c5ab435f54a",
+      "name": "dynamic-revocation:monthly-state-1",
+      "txid": "afa2cea20b66eaa7c67aed6bf0db18fd06e882d03bbfe1066c31d36d57b0efeb",
       "version": 2,
       "lock_time": 0,
-      "fee_sats": 162,
+      "fee_sats": 137,
       "inputs": [
         {
-          "txid": "bd95e1d78119402083ff13d9d722c7c680508b0dcf8c5737ad53b5faa03c601f",
-          "vout": 0,
-          "value_sats": 50000162,
-          "sequence": 4294967295
+          "txid": "b87489fac46440dc3500383989807eb802c9617102174d98484e4747360820d0",
+          "vout": 2,
+          "value_sats": 10000,
+          "sequence": 4294967293,
+          "role": "controller"
         }
       ],
       "outputs": [
         {
           "vout": 0,
-          "purpose": "vault-emergency-cancellation",
-          "value_sats": 50000000,
-          "address": "bcrt1p3kvhr5s57cjv3hf9cr2sv08ydf6qu3fhl7qftxetx7eyrpxel7eqygxs62",
-          "script_pubkey": "51208d9971d214f624c8dd25c0d5063ce46a740e4537ff80959b2b37b24184d9ffb2"
+          "purpose": "phone-wallet-change",
+          "value_sats": 9863,
+          "address": "bcrt1p6uav7en8k7zsumsqugdmg5j6930zmzy4dg7jcddshsr0fvxlqx7qnc7l22",
+          "script_pubkey": "5120d73acf6667b7850e6e00e21bb4525a2c5e2d88956a3d2c35b0bc06f4b0df01bc"
         }
       ]
     }

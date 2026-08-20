@@ -9,10 +9,11 @@ use core::cmp::Ordering;
 pub const VAULT_BALANCE_SATS: u64 = 210_000_000;
 pub const MONTHLY_ALLOWANCE_SATS: u64 = 10_000_000;
 pub const EMERGENCY_ACCESS_SATS: u64 = 50_000_000;
+pub const CONNECTOR_VALUE_SATS: u64 = 10_000;
 pub const MONTHLY_STEPS: usize = 12;
-pub const TRANSACTION_COUNT: u8 = 28;
+pub const TRANSACTION_COUNT: u8 = 15;
 pub const MAX_ROLLOVER_INPUTS: usize = 12;
-pub const MAX_SIGNATURE_JOBS: usize = MAX_ROLLOVER_INPUTS + 27;
+pub const MAX_SIGNATURE_JOBS: usize = MAX_ROLLOVER_INPUTS + 14;
 /// SHA256("Anzen benchmark fixed BIP340 digest v1").
 ///
 /// Hardware integrations sign this same digest repeatedly so signing time is
@@ -34,11 +35,13 @@ const SECP256K1_FIELD_PRIME: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2f,
 ];
 
-const MAX_SERIALIZED_TX_SIZE: usize = 640;
+const MAX_SERIALIZED_TX_SIZE: usize = 768;
 const MAX_HASH_COMPONENT_SIZE: usize = 512;
 const P2TR_SCRIPT_LEN: usize = 34;
 const COOPERATIVE_SCRIPT_LEN: usize = 70;
 const COOPERATIVE_CONTROL_BLOCK_LEN: usize = 65;
+const CONTROLLER_SCRIPT_LEN: usize = 34;
+const CONTROLLER_CONTROL_BLOCK_LEN: usize = 65;
 const TAPLEAF_TAG_HASH: [u8; 32] = [
     0xae, 0xea, 0x8f, 0xdc, 0x42, 0x08, 0x98, 0x31, 0x05, 0x73, 0x4b, 0x58, 0x08, 0x1d, 0x1e, 0x26,
     0x38, 0xd3, 0x5f, 0x1c, 0xb5, 0x40, 0x08, 0xd4, 0xd3, 0x57, 0xca, 0x03, 0xbe, 0x78, 0xe9, 0xee,
@@ -118,6 +121,29 @@ pub struct PolicyCommitment {
     pub output_key_tweak: [u8; 32],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ControllerCommitment {
+    pub merkle_root: [u8; 32],
+    pub output_key_tweak: [u8; 32],
+}
+
+impl ControllerCommitment {
+    pub fn new<H: Sha256>(hasher: &mut H, phone: [u8; 32], hww: [u8; 32]) -> Self {
+        let phone_leaf = tapleaf_hash(hasher, &single_signature_script(phone));
+        let hww_leaf = tapleaf_hash(hasher, &single_signature_script(hww));
+        let merkle_root = tapbranch_hash(hasher, phone_leaf, hww_leaf);
+        let output_key_tweak = tagged_hash(
+            hasher,
+            TAPTWEAK_TAG_HASH,
+            &[&BIP341_NUMS_XONLY, &merkle_root],
+        );
+        Self {
+            merkle_root,
+            output_key_tweak,
+        }
+    }
+}
+
 impl PolicyCommitment {
     pub fn new<H: Sha256>(hasher: &mut H, phone: [u8; 32], hww: [u8; 32]) -> Self {
         let cooperative_script = cooperative_script(phone, hww);
@@ -146,6 +172,7 @@ struct TxInput {
     previous_vout: u32,
     amount_sats: u64,
     sequence: u32,
+    controller: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,8 +194,14 @@ impl Default for TxOutput {
 struct BenchmarkTransaction {
     inputs: [TxInput; MAX_ROLLOVER_INPUTS],
     input_count: u8,
-    outputs: [TxOutput; 2],
+    outputs: [TxOutput; 4],
     output_count: u8,
+}
+
+struct SighashContext<'a> {
+    vault_script_pubkey: &'a [u8; P2TR_SCRIPT_LEN],
+    controller_script_pubkey: &'a [u8; P2TR_SCRIPT_LEN],
+    cooperative_leaf_hash: [u8; 32],
 }
 
 impl BenchmarkTransaction {
@@ -176,14 +209,14 @@ impl BenchmarkTransaction {
         if inputs.is_empty()
             || inputs.len() > MAX_ROLLOVER_INPUTS
             || outputs.is_empty()
-            || outputs.len() > 2
+            || outputs.len() > 4
         {
             return Err(BenchmarkError::SerializationOverflow);
         }
         let mut transaction = Self {
             inputs: [TxInput::default(); MAX_ROLLOVER_INPUTS],
             input_count: inputs.len() as u8,
-            outputs: [TxOutput::default(); 2],
+            outputs: [TxOutput::default(); 4],
             output_count: outputs.len() as u8,
         };
         transaction.inputs[..inputs.len()].copy_from_slice(inputs);
@@ -226,8 +259,7 @@ impl BenchmarkTransaction {
         hasher: &mut H,
         transaction_index: u8,
         first_signature_index: u8,
-        vault_script_pubkey: &[u8; P2TR_SCRIPT_LEN],
-        cooperative_leaf_hash: [u8; 32],
+        context: &SighashContext<'_>,
         callback: &mut F,
     ) -> Result<u8, VisitError<E>> {
         let mut component = ByteWriter::<MAX_HASH_COMPONENT_SIZE>::new();
@@ -244,9 +276,13 @@ impl BenchmarkTransaction {
         let hash_amounts = hasher.hash(&[component.as_slice()]);
 
         component.clear();
-        for _ in self.inputs() {
+        for input in self.inputs() {
             component.push(P2TR_SCRIPT_LEN as u8)?;
-            component.extend(vault_script_pubkey)?;
+            component.extend(if input.controller {
+                context.controller_script_pubkey
+            } else {
+                context.vault_script_pubkey
+            })?;
         }
         let hash_script_pubkeys = hasher.hash(&[component.as_slice()]);
 
@@ -262,6 +298,9 @@ impl BenchmarkTransaction {
 
         let mut next_signature_index = first_signature_index;
         for input_index in 0..self.input_count {
+            if self.inputs[input_index as usize].controller {
+                continue;
+            }
             let mut message = ByteWriter::<256>::new();
             message.push(0)?; // Taproot epoch.
             message.push(0)?; // SIGHASH_DEFAULT.
@@ -274,7 +313,7 @@ impl BenchmarkTransaction {
             message.extend(&hash_outputs)?;
             message.push(2)?; // ext_flag=1 (script path), annex absent.
             message.extend(&(input_index as u32).to_le_bytes())?;
-            message.extend(&cooperative_leaf_hash)?;
+            message.extend(&context.cooperative_leaf_hash)?;
             message.push(0)?; // Tapleaf key version.
             message.extend(&u32::MAX.to_le_bytes())?; // No OP_CODESEPARATOR.
             let sighash = tagged_hash(hasher, TAPSIGHASH_TAG_HASH, &[message.as_slice()]);
@@ -313,6 +352,7 @@ pub struct BenchmarkConfig {
     monthly_hot_scripts: [[u8; P2TR_SCRIPT_LEN]; MONTHLY_STEPS],
     emergency_hot_script: [u8; P2TR_SCRIPT_LEN],
     pub vault_script_pubkey: [u8; P2TR_SCRIPT_LEN],
+    pub controller_script_pubkey: [u8; P2TR_SCRIPT_LEN],
     pub cooperative_leaf_hash: [u8; 32],
 }
 
@@ -321,12 +361,14 @@ impl BenchmarkConfig {
         hasher: &mut H,
         rollover_input_count: u8,
         vault_output_key: [u8; 32],
+        controller_output_key: [u8; 32],
         cooperative_leaf_hash: [u8; 32],
     ) -> Result<Self, BenchmarkError> {
         if rollover_input_count == 0 || rollover_input_count as usize > MAX_ROLLOVER_INPUTS {
             return Err(BenchmarkError::InvalidRolloverInputCount);
         }
         let vault_script_pubkey = p2tr_script(vault_output_key);
+        let controller_script_pubkey = p2tr_script(controller_output_key);
         let mut rollover_inputs = [TxInput::default(); MAX_ROLLOVER_INPUTS];
         let input_value = VAULT_BALANCE_SATS / u64::from(rollover_input_count);
         let remainder = VAULT_BALANCE_SATS % u64::from(rollover_input_count);
@@ -342,6 +384,7 @@ impl BenchmarkConfig {
                 previous_vout: 0,
                 amount_sats: input_value + u64::from(index == 0) * remainder,
                 sequence: u32::MAX,
+                controller: false,
             };
         }
         let mut monthly_hot_scripts = [[0_u8; P2TR_SCRIPT_LEN]; MONTHLY_STEPS];
@@ -358,6 +401,7 @@ impl BenchmarkConfig {
             monthly_hot_scripts,
             emergency_hot_script,
             vault_script_pubkey,
+            controller_script_pubkey,
             cooperative_leaf_hash,
         })
     }
@@ -366,7 +410,7 @@ impl BenchmarkConfig {
         WorkloadSummary {
             rollover_inputs: self.rollover_input_count,
             transactions: TRANSACTION_COUNT,
-            signature_jobs: self.rollover_input_count + 27,
+            signature_jobs: self.rollover_input_count + 14,
         }
     }
 
@@ -377,13 +421,17 @@ impl BenchmarkConfig {
     ) -> Result<WorkloadSummary, VisitError<E>> {
         let mut next_signature = 0_u8;
         let mut transaction_index = 0_u8;
+        let context = SighashContext {
+            vault_script_pubkey: &self.vault_script_pubkey,
+            controller_script_pubkey: &self.controller_script_pubkey,
+            cooperative_leaf_hash: self.cooperative_leaf_hash,
+        };
         self.walk_transactions(hasher, |hasher, transaction| {
             next_signature = transaction.for_each_sighash(
                 hasher,
                 transaction_index,
                 next_signature,
-                &self.vault_script_pubkey,
-                self.cooperative_leaf_hash,
+                &context,
                 &mut callback,
             )?;
             transaction_index += 1;
@@ -404,19 +452,21 @@ impl BenchmarkConfig {
         hasher: &mut H,
         mut callback: F,
     ) -> Result<(), VisitError<E>> {
-        let continuing_authorization_fee = cooperative_vsize(1, 2) as u64;
-        let final_authorization_fee = cooperative_vsize(1, 1) as u64;
+        let continuing_authorization_fee = policy_vsize(1, 1, 3) as u64;
+        let final_authorization_fee = policy_vsize(1, 1, 1) as u64;
         let allowance_value = MONTHLY_ALLOWANCE_SATS
             .checked_mul(MONTHLY_STEPS as u64)
             .and_then(|value| {
                 value.checked_add(continuing_authorization_fee * (MONTHLY_STEPS as u64 - 1))
             })
             .and_then(|value| value.checked_add(final_authorization_fee))
+            .and_then(|value| value.checked_sub(CONNECTOR_VALUE_SATS))
             .ok_or(BenchmarkError::InsufficientValue)?;
-        let rollover_fee = cooperative_vsize(self.rollover_input_count, 2) as u64;
+        let rollover_fee = policy_vsize(self.rollover_input_count, 0, 4) as u64;
         let rollover_remainder = VAULT_BALANCE_SATS
             .checked_sub(allowance_value)
             .and_then(|value| value.checked_sub(rollover_fee))
+            .and_then(|value| value.checked_sub(CONNECTOR_VALUE_SATS * 2))
             .ok_or(BenchmarkError::InsufficientValue)?;
         let rollover = BenchmarkTransaction::new(
             &self.rollover_inputs[..self.rollover_input_count as usize],
@@ -429,6 +479,14 @@ impl BenchmarkConfig {
                     amount_sats: rollover_remainder,
                     script_pubkey: self.vault_script_pubkey,
                 },
+                TxOutput {
+                    amount_sats: CONNECTOR_VALUE_SATS,
+                    script_pubkey: self.controller_script_pubkey,
+                },
+                TxOutput {
+                    amount_sats: CONNECTOR_VALUE_SATS,
+                    script_pubkey: self.controller_script_pubkey,
+                },
             ],
         )?;
         callback(hasher, &rollover)?;
@@ -439,6 +497,14 @@ impl BenchmarkConfig {
             previous_vout: 0,
             amount_sats: allowance_value,
             sequence: MONTHLY_DELAY_SEQUENCE,
+            controller: false,
+        };
+        let mut connector_input = TxInput {
+            previous_txid: rollover_txid,
+            previous_vout: 2,
+            amount_sats: CONNECTOR_VALUE_SATS,
+            sequence: 0xffff_fffd,
+            controller: true,
         };
         for index in 0..MONTHLY_STEPS {
             let has_next = index + 1 < MONTHLY_STEPS;
@@ -449,7 +515,15 @@ impl BenchmarkConfig {
             };
             let next_chain_value = chain_input
                 .amount_sats
-                .checked_sub(MONTHLY_ALLOWANCE_SATS)
+                .checked_add(CONNECTOR_VALUE_SATS)
+                .and_then(|value| {
+                    if has_next {
+                        value.checked_sub(CONNECTOR_VALUE_SATS)
+                    } else {
+                        Some(value)
+                    }
+                })
+                .and_then(|value| value.checked_sub(MONTHLY_ALLOWANCE_SATS))
                 .and_then(|value| value.checked_sub(authorization_fee))
                 .ok_or(BenchmarkError::InsufficientValue)?;
             let hot_output = TxOutput {
@@ -458,12 +532,16 @@ impl BenchmarkConfig {
             };
             let authorization = if has_next {
                 BenchmarkTransaction::new(
-                    &[chain_input],
+                    &[chain_input, connector_input],
                     &[
                         hot_output,
                         TxOutput {
                             amount_sats: next_chain_value,
                             script_pubkey: self.vault_script_pubkey,
+                        },
+                        TxOutput {
+                            amount_sats: CONNECTOR_VALUE_SATS,
+                            script_pubkey: self.controller_script_pubkey,
                         },
                     ],
                 )?
@@ -471,26 +549,10 @@ impl BenchmarkConfig {
                 if next_chain_value != 0 {
                     return Err(BenchmarkError::InsufficientValue.into());
                 }
-                BenchmarkTransaction::new(&[chain_input], &[hot_output])?
+                BenchmarkTransaction::new(&[chain_input, connector_input], &[hot_output])?
             };
             callback(hasher, &authorization)?;
             let authorization_txid = authorization.txid(hasher)?;
-
-            let revocation_fee = cooperative_vsize(1, 1) as u64;
-            let revocation = BenchmarkTransaction::new(
-                &[TxInput {
-                    sequence: u32::MAX,
-                    ..chain_input
-                }],
-                &[TxOutput {
-                    amount_sats: chain_input
-                        .amount_sats
-                        .checked_sub(revocation_fee)
-                        .ok_or(BenchmarkError::InsufficientValue)?,
-                    script_pubkey: self.vault_script_pubkey,
-                }],
-            )?;
-            callback(hasher, &revocation)?;
 
             if has_next {
                 chain_input = TxInput {
@@ -498,26 +560,45 @@ impl BenchmarkConfig {
                     previous_vout: 1,
                     amount_sats: next_chain_value,
                     sequence: MONTHLY_DELAY_SEQUENCE,
+                    controller: false,
+                };
+                connector_input = TxInput {
+                    previous_txid: authorization_txid,
+                    previous_vout: 2,
+                    amount_sats: CONNECTOR_VALUE_SATS,
+                    sequence: 0xffff_fffd,
+                    controller: true,
                 };
             }
         }
 
-        let withdrawal_fee = cooperative_vsize(1, 1) as u64;
+        let withdrawal_fee = policy_vsize(1, 1, 1) as u64;
         let staging_value = EMERGENCY_ACCESS_SATS
             .checked_add(withdrawal_fee)
+            .and_then(|value| value.checked_sub(CONNECTOR_VALUE_SATS))
             .ok_or(BenchmarkError::InsufficientValue)?;
-        let trigger_fee = cooperative_vsize(1, 2) as u64;
+        let trigger_fee = policy_vsize(1, 1, 3) as u64;
         let vault_change = rollover_remainder
             .checked_sub(staging_value)
             .and_then(|value| value.checked_sub(trigger_fee))
             .ok_or(BenchmarkError::InsufficientValue)?;
         let trigger = BenchmarkTransaction::new(
-            &[TxInput {
-                previous_txid: rollover_txid,
-                previous_vout: 1,
-                amount_sats: rollover_remainder,
-                sequence: u32::MAX,
-            }],
+            &[
+                TxInput {
+                    previous_txid: rollover_txid,
+                    previous_vout: 1,
+                    amount_sats: rollover_remainder,
+                    sequence: u32::MAX,
+                    controller: false,
+                },
+                TxInput {
+                    previous_txid: rollover_txid,
+                    previous_vout: 3,
+                    amount_sats: CONNECTOR_VALUE_SATS,
+                    sequence: 0xffff_fffd,
+                    controller: true,
+                },
+            ],
             &[
                 TxOutput {
                     amount_sats: staging_value,
@@ -526,6 +607,10 @@ impl BenchmarkConfig {
                 TxOutput {
                     amount_sats: vault_change,
                     script_pubkey: self.vault_script_pubkey,
+                },
+                TxOutput {
+                    amount_sats: CONNECTOR_VALUE_SATS,
+                    script_pubkey: self.controller_script_pubkey,
                 },
             ],
         )?;
@@ -537,29 +622,25 @@ impl BenchmarkConfig {
             previous_vout: 0,
             amount_sats: staging_value,
             sequence: EMERGENCY_DELAY_SEQUENCE,
+            controller: false,
         };
         let withdrawal = BenchmarkTransaction::new(
-            &[emergency_input],
+            &[
+                emergency_input,
+                TxInput {
+                    previous_txid: trigger_txid,
+                    previous_vout: 2,
+                    amount_sats: CONNECTOR_VALUE_SATS,
+                    sequence: 0xffff_fffd,
+                    controller: true,
+                },
+            ],
             &[TxOutput {
                 amount_sats: EMERGENCY_ACCESS_SATS,
                 script_pubkey: self.emergency_hot_script,
             }],
         )?;
         callback(hasher, &withdrawal)?;
-
-        let cancellation = BenchmarkTransaction::new(
-            &[TxInput {
-                sequence: u32::MAX,
-                ..emergency_input
-            }],
-            &[TxOutput {
-                amount_sats: staging_value
-                    .checked_sub(cooperative_vsize(1, 1) as u64)
-                    .ok_or(BenchmarkError::InsufficientValue)?,
-                script_pubkey: self.vault_script_pubkey,
-            }],
-        )?;
-        callback(hasher, &cancellation)?;
         Ok(())
     }
 }
@@ -574,6 +655,14 @@ pub fn cooperative_script(phone: [u8; 32], hww: [u8; 32]) -> [u8; 70] {
     script[67] = 0xba; // OP_CHECKSIGADD
     script[68] = 0x52; // OP_2
     script[69] = 0x9c; // OP_NUMEQUAL
+    script
+}
+
+pub fn single_signature_script(key: [u8; 32]) -> [u8; CONTROLLER_SCRIPT_LEN] {
+    let mut script = [0_u8; CONTROLLER_SCRIPT_LEN];
+    script[0] = 32;
+    script[1..33].copy_from_slice(&key);
+    script[33] = 0xac; // OP_CHECKSIG
     script
 }
 
@@ -637,20 +726,25 @@ fn p2tr_script(output_key: [u8; 32]) -> [u8; P2TR_SCRIPT_LEN] {
     script
 }
 
-fn cooperative_vsize(input_count: u8, output_count: u8) -> u32 {
+fn policy_vsize(vault_input_count: u8, controller_input_count: u8, output_count: u8) -> u32 {
+    let input_count = vault_input_count + controller_input_count;
     let base_size = 4
         + 1
         + u32::from(input_count) * 41
         + 1
         + u32::from(output_count) * (8 + 1 + P2TR_SCRIPT_LEN as u32)
         + 4;
-    let witness_per_input = 1
+    let vault_witness = 1
         + 2 * (1 + 64)
         + 1
         + COOPERATIVE_SCRIPT_LEN as u32
         + 1
         + COOPERATIVE_CONTROL_BLOCK_LEN as u32;
-    let witness_size = 2 + u32::from(input_count) * witness_per_input;
+    let controller_witness =
+        1 + (1 + 64) + 1 + CONTROLLER_SCRIPT_LEN as u32 + 1 + CONTROLLER_CONTROL_BLOCK_LEN as u32;
+    let witness_size = 2
+        + u32::from(vault_input_count) * vault_witness
+        + u32::from(controller_input_count) * controller_witness;
     (base_size * 4 + witness_size).div_ceil(4)
 }
 
@@ -733,7 +827,8 @@ mod tests {
 
     fn fixture(input_count: u8) -> BenchmarkConfig {
         let mut hasher = TestSha256;
-        BenchmarkConfig::deterministic(&mut hasher, input_count, [7_u8; 32], [9_u8; 32]).unwrap()
+        BenchmarkConfig::deterministic(&mut hasher, input_count, [7_u8; 32], [8_u8; 32], [9_u8; 32])
+            .unwrap()
     }
 
     #[test]
@@ -787,6 +882,24 @@ mod tests {
         );
         assert_eq!(policy.merkle_root, merkle_root.to_byte_array());
         assert_eq!(policy.output_key_tweak, tweak.to_byte_array());
+
+        let controller = ControllerCommitment::new(&mut hasher, phone, hww);
+        let phone_controller_leaf = TapLeafHash::from_script(
+            ScriptBuf::from_bytes(single_signature_script(phone).to_vec()).as_script(),
+            LeafVersion::TapScript,
+        );
+        let hww_controller_leaf = TapLeafHash::from_script(
+            ScriptBuf::from_bytes(single_signature_script(hww).to_vec()).as_script(),
+            LeafVersion::TapScript,
+        );
+        let controller_root =
+            TapNodeHash::from_node_hashes(phone_controller_leaf.into(), hww_controller_leaf.into());
+        let controller_tweak = TapTweakHash::from_key_and_tweak(nums, Some(controller_root));
+        assert_eq!(controller.merkle_root, controller_root.to_byte_array());
+        assert_eq!(
+            controller.output_key_tweak,
+            controller_tweak.to_byte_array()
+        );
     }
 
     #[test]
@@ -799,7 +912,7 @@ mod tests {
 
     #[test]
     fn workload_scales_with_rollover_inputs() {
-        for (inputs, expected_jobs) in [(1, 28), (2, 29), (12, 39)] {
+        for (inputs, expected_jobs) in [(1, 15), (2, 16), (12, 26)] {
             let config = fixture(inputs);
             let mut hasher = TestSha256;
             let mut jobs = 0;
@@ -809,7 +922,7 @@ mod tests {
                     Ok::<_, ()>(())
                 })
                 .unwrap();
-            assert_eq!(summary.transactions, 28);
+            assert_eq!(summary.transactions, 15);
             assert_eq!(summary.signature_jobs, expected_jobs);
             assert_eq!(jobs, usize::from(expected_jobs));
         }
@@ -859,11 +972,21 @@ mod tests {
                     .iter()
                     .map(|input| TxOut {
                         value: Amount::from_sat(input.amount_sats),
-                        script_pubkey: ScriptBuf::from_bytes(config.vault_script_pubkey.to_vec()),
+                        script_pubkey: ScriptBuf::from_bytes(
+                            if input.controller {
+                                config.controller_script_pubkey
+                            } else {
+                                config.vault_script_pubkey
+                            }
+                            .to_vec(),
+                        ),
                     })
                     .collect::<Vec<_>>();
                 let leaf = TapLeafHash::from_byte_array(config.cooperative_leaf_hash);
                 for index in 0..transaction.input_count as usize {
+                    if transaction.inputs()[index].controller {
+                        continue;
+                    }
                     let sighash = SighashCache::new(&decoded)
                         .taproot_script_spend_signature_hash(
                             index,
@@ -878,5 +1001,72 @@ mod tests {
             })
             .unwrap();
         assert_eq!(ours, expected);
+    }
+
+    #[test]
+    fn fixed_cross_implementation_vector_covers_the_connector_graph() {
+        use bitcoin::secp256k1::{Scalar, Secp256k1};
+        let phone =
+            hex_literal::hex!("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+        let hww =
+            hex_literal::hex!("c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5");
+        let mut hasher = TestSha256;
+        let vault = PolicyCommitment::new(&mut hasher, phone, hww);
+        let controller = ControllerCommitment::new(&mut hasher, phone, hww);
+        let nums = XOnlyPublicKey::from_slice(&BIP341_NUMS_XONLY).unwrap();
+        let secp = Secp256k1::verification_only();
+        let vault_key = nums
+            .add_tweak(
+                &secp,
+                &Scalar::from_be_bytes(vault.output_key_tweak).unwrap(),
+            )
+            .unwrap()
+            .0
+            .serialize();
+        let controller_key = nums
+            .add_tweak(
+                &secp,
+                &Scalar::from_be_bytes(controller.output_key_tweak).unwrap(),
+            )
+            .unwrap()
+            .0
+            .serialize();
+        let config = BenchmarkConfig::deterministic(
+            &mut hasher,
+            12,
+            vault_key,
+            controller_key,
+            vault.cooperative_leaf_hash,
+        )
+        .unwrap();
+        let mut jobs = Vec::new();
+        config
+            .for_each_signature_job(&mut hasher, |job| {
+                jobs.push(job.sighash);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        let mut digest = Sha2::new();
+        for job in &jobs {
+            digest.update(job);
+        }
+        assert_eq!(
+            config.controller_script_pubkey,
+            hex_literal::hex!(
+                "5120ccbfe6eda160423f32be4f8e9d045840e00a13b1e22fcd3605e31cf3e8fdb109"
+            )
+        );
+        assert_eq!(
+            jobs[0],
+            hex_literal::hex!("46dd6d700aa4bf754e6f1480f96d7023f3dcf7a1b2621a1a27095e926a867e01")
+        );
+        assert_eq!(
+            jobs[jobs.len() - 1],
+            hex_literal::hex!("079ca96c653a171ef2cf1d5adb82b031f1b1ef1d9b9a57fd345e70aea289943c")
+        );
+        assert_eq!(
+            <[u8; 32]>::from(digest.finalize()),
+            hex_literal::hex!("fe4c60fab14873c3b7d9eb25a1d51d11c368b28d047150b636851ac53085da75")
+        );
     }
 }

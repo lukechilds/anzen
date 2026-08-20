@@ -1,4 +1,4 @@
-use super::{storage::VaultConfig, types::VaultUtxo};
+use super::{policy::ControllerPolicy, storage::VaultConfig, types::VaultUtxo};
 use anyhow::{Context, Result, bail};
 use bdk_electrum::{
     BdkElectrumClient,
@@ -12,6 +12,7 @@ use bitcoincore_rpc::{
     Client, RpcApi,
     json::{GetBlockchainInfoResult, ScanTxOutRequest},
 };
+use std::str::FromStr;
 use std::time::Duration;
 
 pub const MAINNET_ELECTRUM_SERVERS: &[&str] = &[
@@ -54,6 +55,7 @@ pub trait Blockchain {
     fn backend_description(&self) -> String;
     fn chain_tip(&self) -> Result<ChainTip>;
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>>;
+    fn scan_connectors(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>>;
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid>;
 }
 
@@ -78,6 +80,10 @@ impl Blockchain for BitcoinCoreBackend {
 
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
         BitcoinCoreBackend::scan_vault(self, config)
+    }
+
+    fn scan_connectors(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
+        BitcoinCoreBackend::scan_connectors(self, config)
     }
 
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid> {
@@ -182,30 +188,48 @@ impl Blockchain for ElectrumBackend {
             .parse::<Address<_>>()?
             .require_network(self.network)?;
         let script_pubkey = address.script_pubkey();
-        let mut utxos = self
-            .client
-            .inner
-            .script_list_unspent(&script_pubkey)
-            .context("Electrum vault UTXO query failed")?
-            .into_iter()
-            .filter(|utxo| utxo.height > 0)
-            .map(|utxo| VaultUtxo {
-                outpoint: OutPoint::new(utxo.tx_hash, utxo.tx_pos as u32),
-                txout: TxOut {
-                    value: Amount::from_sat(utxo.value),
-                    script_pubkey: script_pubkey.clone(),
-                },
-                confirmation_height: utxo.height as u64,
-            })
-            .collect::<Vec<_>>();
-        utxos.sort_by_key(|utxo| (utxo.confirmation_height, utxo.outpoint));
-        Ok(utxos)
+        self.scan_script(&script_pubkey, "vault")
+    }
+
+    fn scan_connectors(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
+        if config.bitcoin_network()? != self.network {
+            bail!(
+                "refusing to scan a {} vault with {} Electrum",
+                config.network,
+                self.network
+            );
+        }
+        let controller = controller_policy(config)?;
+        self.scan_script(&controller.address.script_pubkey(), "controller")
     }
 
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid> {
         self.client
             .transaction_broadcast(transaction)
             .context("Electrum transaction broadcast failed")
+    }
+}
+
+impl ElectrumBackend {
+    fn scan_script(&self, script_pubkey: &bitcoin::Script, label: &str) -> Result<Vec<VaultUtxo>> {
+        let mut utxos = self
+            .client
+            .inner
+            .script_list_unspent(script_pubkey)
+            .with_context(|| format!("Electrum {label} UTXO query failed"))?
+            .into_iter()
+            .filter(|utxo| utxo.height > 0)
+            .map(|utxo| VaultUtxo {
+                outpoint: OutPoint::new(utxo.tx_hash, utxo.tx_pos as u32),
+                txout: TxOut {
+                    value: Amount::from_sat(utxo.value),
+                    script_pubkey: script_pubkey.to_owned(),
+                },
+                confirmation_height: utxo.height as u64,
+            })
+            .collect::<Vec<_>>();
+        utxos.sort_by_key(|utxo| (utxo.confirmation_height, utxo.outpoint));
+        Ok(utxos)
     }
 }
 
@@ -267,13 +291,29 @@ impl BitcoinCoreBackend {
                 self.network
             );
         }
-        let request = ScanTxOutRequest::Single(format!("addr({})", config.vault_address));
+        self.scan_address(&config.vault_address, "vault")
+    }
+
+    pub fn scan_connectors(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
+        if config.bitcoin_network()? != self.network {
+            bail!(
+                "refusing to scan a {} vault with {} Bitcoin Core RPC",
+                config.network,
+                self.network
+            );
+        }
+        let controller = controller_policy(config)?;
+        self.scan_address(&controller.address.to_string(), "controller")
+    }
+
+    fn scan_address(&self, address: &str, label: &str) -> Result<Vec<VaultUtxo>> {
+        let request = ScanTxOutRequest::Single(format!("addr({address})"));
         let result = self
             .client
             .scan_tx_out_set_blocking(&[request])
-            .context("Bitcoin Core scantxoutset failed")?;
+            .with_context(|| format!("Bitcoin Core {label} scantxoutset failed"))?;
         if result.success != Some(true) {
-            bail!("Bitcoin Core did not complete the vault UTXO scan");
+            bail!("Bitcoin Core did not complete the {label} UTXO scan");
         }
         let mut utxos = result
             .unspents
@@ -299,6 +339,14 @@ impl BitcoinCoreBackend {
             .sum();
         Ok(Amount::from_sat(sats))
     }
+}
+
+fn controller_policy(config: &VaultConfig) -> Result<ControllerPolicy> {
+    let phone = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)
+        .context("invalid configured phone vault key")?;
+    let hww = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.hww_vault_pubkey)
+        .context("invalid configured HWW vault key")?;
+    ControllerPolicy::new_for_network(phone, hww, config.bitcoin_network()?)
 }
 
 #[cfg(test)]

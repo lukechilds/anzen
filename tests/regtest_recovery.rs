@@ -153,6 +153,7 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     let approved = cold_wallet::approve_phone_rotation(rotation_dir.path(), &proposal).unwrap();
     let rotation =
         hot_wallet::activate_phone_rotation(rotation_dir.path(), &rpc, &approved).unwrap();
+    assert!(rotation.controller_revocation_txid.is_none());
     assert_ne!(rotation.old_address, rotation.new_address);
     assert_ne!(rotation.new_phone_mnemonic, restored);
     assert_eq!(
