@@ -265,6 +265,8 @@ pub fn validate_cooperative_sweep(
     if transaction.input.len() != package.input_count
         || psbt.inputs.len() != package.input_count
         || transaction.input.is_empty()
+        || transaction.version != Version::TWO
+        || transaction.lock_time != absolute::LockTime::ZERO
         || transaction
             .input
             .iter()
@@ -456,6 +458,12 @@ fn build_sweep_psbt(
     let sent_sats = input_sats
         .checked_sub(fee_sats)
         .context("vault balance cannot pay the recovery sweep fee")?;
+    let minimum = destination.script_pubkey().minimal_non_dust().to_sat();
+    if sent_sats < minimum {
+        bail!(
+            "vault balance cannot create a non-dust sweep output ({sent_sats} sats after fees, minimum {minimum} sats)"
+        );
+    }
     transaction.output[0].value = Amount::from_sat(sent_sats);
     let prevouts = utxos
         .iter()
@@ -531,6 +539,59 @@ mod tests {
         let migrated: crate::core::social::CloudRecoveryBackup =
             crate::core::storage::read_json(&dir.path().join(PHONE_BACKUP_FILE)).unwrap();
         assert_eq!(migrated.kind, "vault-cloud-recovery");
+    }
+
+    #[test]
+    fn dust_balance_cannot_fund_a_recovery_sweep() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let destination = Address::from_str(&initialized.config.vault_address)
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap();
+        let utxo = VaultUtxo {
+            outpoint: OutPoint::null(),
+            txout: TxOut {
+                value: Amount::from_sat(400),
+                script_pubkey: destination.script_pubkey(),
+            },
+            confirmation_height: 1,
+        };
+        let error = prepare_sweep(
+            &initialized.config,
+            &[utxo],
+            100,
+            SweepPath::Cooperative,
+            &destination,
+        )
+        .err()
+        .expect("a dust-sized balance must not be sweepable");
+        assert!(format!("{error:#}").contains("non-dust"));
+    }
+
+    #[test]
+    fn cooperative_sweep_rejects_a_nonstandard_transaction_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let phone = crate::core::storage::load_device_keys(dir.path(), PHONE_DEVICE_FILE).unwrap();
+        let destination = Address::from_str(&initialized.config.vault_address)
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap();
+        let utxo = VaultUtxo {
+            outpoint: OutPoint::null(),
+            txout: TxOut {
+                value: Amount::from_sat(1_000_000),
+                script_pubkey: destination.script_pubkey(),
+            },
+            confirmation_height: 1,
+        };
+        let mut package =
+            create_cooperative_sweep(&initialized.config, &[utxo], &destination, &phone).unwrap();
+        let mut psbt = Psbt::from_str(&package.psbt).unwrap();
+        psbt.unsigned_tx.version = Version::ONE;
+        package.psbt = psbt.to_string();
+        assert!(validate_cooperative_sweep(&initialized.config, &package).is_err());
     }
 
     #[test]

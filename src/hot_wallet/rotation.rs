@@ -54,7 +54,12 @@ pub fn create_phone_rotation(
 ) -> Result<PhoneRotationPackage> {
     let context = load_rotation_context(data_dir, backend)?;
     let network = context.old_config.bitcoin_network()?;
-    let new_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
+    // Resume a pending rotation instead of overwriting it: the pending key may be the result
+    // of a completed vanity grind that must not be silently discarded.
+    let new_phone = match load_pending_phone(data_dir, &context.old_config)? {
+        Some(pending) => pending,
+        None => DeviceKeys::generate_for_network(&Secp256k1::new(), network)?,
+    };
     build_phone_rotation(data_dir, context, new_phone)
 }
 
@@ -129,12 +134,7 @@ fn load_rotation_context(
     })
 }
 
-fn load_pending_vanity_phone(
-    data_dir: &Path,
-    old_config: &VaultConfig,
-    hww_pubkey: XOnlyPublicKey,
-    suffix: &str,
-) -> Result<Option<(DeviceKeys, String)>> {
+fn load_pending_phone(data_dir: &Path, old_config: &VaultConfig) -> Result<Option<DeviceKeys>> {
     let pending_path = data_dir.join(recovery::PENDING_PHONE_ROTATION_FILE);
     if !pending_path.exists() {
         return Ok(None);
@@ -144,12 +144,24 @@ fn load_pending_vanity_phone(
     if pending.kind != "pending-phone-rotation" || pending.bitcoin_network()? != network {
         bail!("existing pending phone rotation is invalid for this vault");
     }
-    let phone = DeviceKeys::parse_for_network_at_index(
+    Ok(Some(DeviceKeys::parse_for_network_at_index(
         &Secp256k1::new(),
         &pending.mnemonic,
         network,
         pending.vault_key_index,
-    )?;
+    )?))
+}
+
+fn load_pending_vanity_phone(
+    data_dir: &Path,
+    old_config: &VaultConfig,
+    hww_pubkey: XOnlyPublicKey,
+    suffix: &str,
+) -> Result<Option<(DeviceKeys, String)>> {
+    let Some(phone) = load_pending_phone(data_dir, old_config)? else {
+        return Ok(None);
+    };
+    let network = old_config.bitcoin_network()?;
     let policy = VaultPolicy::new_for_network(phone.vault_pubkey, hww_pubkey, network)?;
     let expected_prefix = match network {
         bitcoin::Network::Bitcoin => format!("bc1p{suffix}"),
@@ -277,7 +289,13 @@ pub fn activate_phone_rotation(
         .renewed_policy
         .as_ref()
         .map(|_| activate_policy(data_dir, backend, &policy_workspace))
-        .transpose()?;
+        .transpose()
+        .with_context(|| {
+            format!(
+                "the rotation sweep {} was already broadcast and the vault state moved to the new phone key; funds are safe at the new vault address and the policy can be completed with `anzen phone set-policy`",
+                sweep.txid
+            )
+        })?;
     reset_workspace(&policy_workspace)?;
     let pending_path = data_dir.join(recovery::PENDING_PHONE_ROTATION_FILE);
     if pending_path.exists() {
@@ -513,5 +531,35 @@ mod tests {
             second.package.new_phone_vault_pubkey,
             first.package.new_phone_vault_pubkey
         );
+    }
+
+    #[test]
+    fn plain_rotation_resumes_a_pending_key_instead_of_replacing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let network = Network::Regtest;
+        hot_wallet::initialize(dir.path(), network).unwrap();
+        cold_wallet::initialize(dir.path(), network).unwrap();
+        let config = initialize_vault(dir.path()).unwrap();
+        let script_pubkey = Address::from_str(&config.vault_address)
+            .unwrap()
+            .require_network(network)
+            .unwrap()
+            .script_pubkey();
+        let backend = TestBackend {
+            network,
+            utxos: vec![VaultUtxo {
+                outpoint: OutPoint::new(Txid::all_zeros(), 0),
+                txout: TxOut {
+                    value: Amount::from_sat(210_000_000),
+                    script_pubkey,
+                },
+                confirmation_height: 1,
+            }],
+        };
+
+        let first = create_phone_rotation(dir.path(), &backend).unwrap();
+        let second = create_phone_rotation(dir.path(), &backend).unwrap();
+        assert_eq!(first.new_phone_vault_pubkey, second.new_phone_vault_pubkey);
+        assert_eq!(first.new_vault_address, second.new_vault_address);
     }
 }

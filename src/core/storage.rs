@@ -4,6 +4,7 @@ use bitcoin::{Network, key::Secp256k1, secp256k1::XOnlyPublicKey};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -228,9 +229,7 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let bytes = serde_json::to_vec_pretty(value)?;
-    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
-    set_private_permissions(path)?;
-    Ok(())
+    write_private(path, &bytes)
 }
 
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -238,9 +237,30 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
+    create_private_file(path, bytes)
+        .with_context(|| format!("failed to write {}", path.display()))?;
     set_private_permissions(path)?;
     Ok(())
+}
+
+// Create the file with owner-only permissions from the start so secrets are never readable
+// through the umask defaults, even briefly. `mode` only applies at creation, so
+// `set_private_permissions` still runs afterwards to tighten pre-existing files.
+#[cfg(unix)]
+fn create_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn create_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    fs::write(path, bytes)
 }
 
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
@@ -262,4 +282,27 @@ fn set_private_permissions(_path: &Path) -> Result<()> {
 
 pub fn hot_db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("phone/hot-wallet.sqlite")
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn written_files_have_owner_only_permissions_from_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("secret.json");
+        write_json(&json_path, &serde_json::json!({"key": "value"})).unwrap();
+        assert_eq!(
+            fs::metadata(&json_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let blob_path = dir.path().join("secret.bin");
+        write_private(&blob_path, b"seed").unwrap();
+        assert_eq!(
+            fs::metadata(&blob_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

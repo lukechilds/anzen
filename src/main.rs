@@ -64,6 +64,9 @@ enum PhoneCommand {
         /// Grind a combined HWW/phone vault address beginning with bc1pvault or bcrt1pvault.
         #[arg(long)]
         vanity: bool,
+        /// Print the mnemonic even for a mainnet vault.
+        #[arg(long)]
+        show_mnemonic: bool,
     },
     /// Derive and persist the next hot-wallet receive address.
     ReceiveAddress,
@@ -100,7 +103,12 @@ enum PhoneCommand {
         command: EmergencyCommand,
     },
     /// Restore the phone key from an HWW-created recovery package.
-    Restore { recovery: PathBuf },
+    Restore {
+        recovery: PathBuf,
+        /// Print the recovered mnemonic even for a mainnet vault.
+        #[arg(long)]
+        show_mnemonic: bool,
+    },
     /// Sweep mature vault outputs using the phone-only recovery path.
     Recover { destination: String },
     /// Create and phone-sign a cooperative sweep proposal.
@@ -120,7 +128,12 @@ enum PhoneCommand {
         output: PathBuf,
     },
     /// Activate an HWW-approved key rotation and replacement monthly schedule.
-    ActivateRotation { approved_rotation: PathBuf },
+    ActivateRotation {
+        approved_rotation: PathBuf,
+        /// Print the new mnemonic even for a mainnet vault.
+        #[arg(long)]
+        show_mnemonic: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -136,7 +149,11 @@ enum EmergencyCommand {
 #[derive(Debug, Subcommand)]
 enum HwwCommand {
     /// Create the simulated HWW key and encrypt the phone backup.
-    Init,
+    Init {
+        /// Print the mnemonic even for a mainnet vault.
+        #[arg(long)]
+        show_mnemonic: bool,
+    },
     /// Validate one high-level policy and sign its complete PSBT batch.
     ConfirmPolicy {
         proposal: PathBuf,
@@ -348,7 +365,10 @@ fn run_phone(
     network: Network,
 ) -> Result<()> {
     match command {
-        PhoneCommand::Init { vanity } => {
+        PhoneCommand::Init {
+            vanity,
+            show_mnemonic,
+        } => {
             if vanity {
                 let target = hot_wallet::vanity_address_prefix(network)?;
                 eprintln!(
@@ -361,7 +381,12 @@ fn run_phone(
                     );
                 })?;
                 println!("Simulated phone initialized ({})", network_label(network));
-                println!("Phone mnemonic: {}", result.device.mnemonic);
+                print_mnemonic(
+                    "Phone mnemonic",
+                    &result.device.mnemonic,
+                    network,
+                    show_mnemonic,
+                );
                 println!("Phone vault key: {}", result.device.vault_pubkey);
                 println!("Phone vault key index: {}", result.device.vault_key_index);
                 println!("Vanity vault address: {}", result.vault_address);
@@ -374,7 +399,7 @@ fn run_phone(
             }
             let phone = hot_wallet::initialize(data_dir, network)?;
             println!("Simulated phone initialized ({})", network_label(network));
-            println!("Phone mnemonic: {}", phone.mnemonic);
+            print_mnemonic("Phone mnemonic", &phone.mnemonic, network, show_mnemonic);
             println!("Phone vault key: {}", phone.vault_pubkey);
         }
         PhoneCommand::ReceiveAddress => {
@@ -453,11 +478,19 @@ fn run_phone(
                 }
             }
         }
-        PhoneCommand::Restore { recovery } => {
+        PhoneCommand::Restore {
+            recovery,
+            show_mnemonic,
+        } => {
             let package: core::recovery::PhoneRecoveryPackage = read_artifact(&recovery)?;
             let mnemonic = hot_wallet::restore_phone(data_dir, &package)?;
             println!("Phone key restored from authenticated recovery package");
-            println!("Recovered phone mnemonic: {mnemonic}");
+            print_mnemonic(
+                "Recovered phone mnemonic",
+                &mnemonic,
+                network,
+                show_mnemonic,
+            );
         }
         PhoneCommand::Recover { destination } => {
             let destination = configured_address(data_dir, &destination)?;
@@ -522,7 +555,10 @@ fn run_phone(
             write_artifact(&output, &package)?;
             report_artifact(&output, "Phone-key rotation proposal")?;
         }
-        PhoneCommand::ActivateRotation { approved_rotation } => {
+        PhoneCommand::ActivateRotation {
+            approved_rotation,
+            show_mnemonic,
+        } => {
             let package: core::recovery::PhoneRotationPackage = read_artifact(&approved_rotation)?;
             let backend = rpc_args.connect_hot(data_dir)?;
             let result = hot_wallet::activate_phone_rotation(data_dir, backend.as_ref(), &package)?;
@@ -532,7 +568,12 @@ fn run_phone(
             );
             println!("Old vault address: {}", result.old_address);
             println!("New vault address: {}", result.new_address);
-            println!("New phone mnemonic: {}", result.new_phone_mnemonic);
+            print_mnemonic(
+                "New phone mnemonic",
+                &result.new_phone_mnemonic,
+                network,
+                show_mnemonic,
+            );
             match result.renewed_schedule {
                 Some(schedule) => {
                     println!(
@@ -562,10 +603,10 @@ fn run_hww(
     network: Network,
 ) -> Result<()> {
     match command {
-        HwwCommand::Init => {
+        HwwCommand::Init { show_mnemonic } => {
             let hww = cold_wallet::initialize(data_dir, network)?;
             println!("Simulated HWW initialized ({})", network_label(network));
-            println!("HWW mnemonic: {}", hww.mnemonic);
+            print_mnemonic("HWW mnemonic", &hww.mnemonic, network, show_mnemonic);
             println!("HWW vault key: {}", hww.vault_pubkey);
             println!("HWW ready to wrap the descriptor-bound cloud backup at anzen init");
         }
@@ -1289,6 +1330,16 @@ fn network_label(network: Network) -> &'static str {
         Network::Bitcoin => "MAINNET — REAL FUNDS",
         Network::Regtest => "REGTEST ONLY",
         _ => "UNSUPPORTED NETWORK",
+    }
+}
+
+// Mnemonics print freely in the regtest simulation; on mainnet they stay hidden unless the
+// operator explicitly passes --show-mnemonic, so they never linger in terminal scrollback.
+fn print_mnemonic(label: &str, mnemonic: &str, network: Network, show_mnemonic: bool) {
+    if show_mnemonic || network != Network::Bitcoin {
+        println!("{label}: {mnemonic}");
+    } else {
+        println!("{label}: <hidden on mainnet; re-run with --show-mnemonic to display>");
     }
 }
 

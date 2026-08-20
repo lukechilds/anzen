@@ -467,10 +467,19 @@ pub fn activate_policy(
         entries,
         emergency_access,
     };
-    write_json(&data_dir.join(SCHEDULE_FILE), &schedule)?;
-    backend
-        .broadcast(&rollover)
-        .context("failed to broadcast rollover transaction")?;
+    // Broadcast before persisting the schedule so a failed broadcast never leaves an active
+    // schedule pointing at an unbroadcast rollover. A matching persisted schedule means a
+    // previous attempt crashed after broadcasting, so resume without re-broadcasting.
+    let schedule_path = data_dir.join(SCHEDULE_FILE);
+    let already_broadcast = read_json::<Schedule>(&schedule_path)
+        .map(|existing| existing.rollover_txid == schedule.rollover_txid)
+        .unwrap_or(false);
+    if !already_broadcast {
+        backend
+            .broadcast(&rollover)
+            .context("failed to broadcast rollover transaction")?;
+    }
+    write_json(&schedule_path, &schedule)?;
     Ok(schedule)
 }
 
@@ -975,5 +984,91 @@ mod tests {
         assert!(result.vault_address.starts_with("bc1pv"));
         assert_eq!(result.worker_count, 4);
         assert!(result.attempts > 0);
+    }
+
+    #[test]
+    fn activate_policy_broadcasts_the_rollover_only_once() {
+        use crate::{
+            cold_wallet,
+            core::{
+                chain::{Blockchain, ChainTip},
+                types::VaultUtxo,
+            },
+            test_support::initialize,
+        };
+        use bitcoin::{Amount, BlockHash, TxOut, hashes::Hash as _};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct MockBackend {
+            network: Network,
+            utxos: Vec<VaultUtxo>,
+            broadcasts: Arc<AtomicUsize>,
+        }
+
+        impl Blockchain for MockBackend {
+            fn network(&self) -> Network {
+                self.network
+            }
+            fn backend_description(&self) -> String {
+                "mock".to_owned()
+            }
+            fn chain_tip(&self) -> Result<ChainTip> {
+                Ok(ChainTip {
+                    network: self.network,
+                    height: 1,
+                    median_time: 0,
+                    best_block_hash: BlockHash::all_zeros(),
+                })
+            }
+            fn scan_vault(&self, _config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
+                Ok(self.utxos.clone())
+            }
+            fn broadcast(&self, transaction: &Transaction) -> Result<Txid> {
+                self.broadcasts.fetch_add(1, Ordering::SeqCst);
+                Ok(transaction.compute_txid())
+            }
+        }
+
+        impl HotWalletBackend for MockBackend {
+            fn sync_hot_wallet(&self, _wallet: &mut HotWallet) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let script_pubkey = initialized
+            .config
+            .vault_address
+            .parse::<Address<_>>()
+            .unwrap()
+            .require_network(Network::Regtest)
+            .unwrap()
+            .script_pubkey();
+        let utxo = VaultUtxo {
+            outpoint: OutPoint::new(Txid::all_zeros(), 0),
+            txout: TxOut {
+                value: Amount::from_sat(200_000_000),
+                script_pubkey,
+            },
+            confirmation_height: 1,
+        };
+        let broadcasts = Arc::new(AtomicUsize::new(0));
+        let backend = MockBackend {
+            network: Network::Regtest,
+            utxos: vec![utxo],
+            broadcasts: Arc::clone(&broadcasts),
+        };
+        let batch = dir.path().join("batch");
+        propose_policy(dir.path(), &backend, Utc::now(), 10_000_000, 0, &batch).unwrap();
+        cold_wallet::approve_policy(dir.path(), &batch).unwrap();
+        activate_policy(dir.path(), &backend, &batch).unwrap();
+        assert_eq!(broadcasts.load(Ordering::SeqCst), 1);
+        // Re-activating the same approved policy resumes without a duplicate broadcast.
+        activate_policy(dir.path(), &backend, &batch).unwrap();
+        assert_eq!(broadcasts.load(Ordering::SeqCst), 1);
     }
 }
