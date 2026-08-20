@@ -188,14 +188,15 @@ impl VaultPolicy {
             }
             let script = miniscript.encode();
             if let Some(delay) = target_delay {
-                let delay_script_num = bitcoin::script::Builder::new()
+                // Recovery leaves always open with `<delay> OP_CSV OP_VERIFY`; match that
+                // canonical prefix instead of searching for the delay bytes anywhere in the
+                // script, where they could coincidentally appear inside a pushed key.
+                let prefix = Builder::new()
                     .push_int(i64::from(delay))
+                    .push_opcode(OP_CSV)
+                    .push_opcode(OP_VERIFY)
                     .into_script();
-                if !script
-                    .as_bytes()
-                    .windows(delay_script_num.len())
-                    .any(|window| window == delay_script_num.as_bytes())
-                {
+                if !script.as_bytes().starts_with(prefix.as_bytes()) {
                     continue;
                 }
             }

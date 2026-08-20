@@ -9,7 +9,9 @@ use bitcoin::{
 use rand::{RngCore, rngs::OsRng};
 use std::str::FromStr;
 
-#[derive(Debug, Clone)]
+// Debug is implemented manually below so an accidental `{:?}` log can never leak the mnemonic,
+// seed, or any private key material.
+#[derive(Clone)]
 pub struct DeviceKeys {
     pub network: Network,
     pub mnemonic: Mnemonic,
@@ -19,6 +21,16 @@ pub struct DeviceKeys {
     pub vault_xpriv: Xpriv,
     pub vault_keypair: Keypair,
     pub vault_pubkey: XOnlyPublicKey,
+}
+
+impl std::fmt::Debug for DeviceKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceKeys")
+            .field("network", &self.network)
+            .field("vault_key_index", &self.vault_key_index)
+            .field("vault_pubkey", &self.vault_pubkey)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DeviceKeys {
@@ -155,6 +167,17 @@ fn coin_type(network: Network) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_output_never_leaks_secret_material() {
+        let secp = Secp256k1::new();
+        let keys = DeviceKeys::generate(&secp).unwrap();
+        let debug = format!("{keys:?}");
+        assert!(debug.contains("vault_pubkey"));
+        assert!(!debug.contains(&keys.mnemonic.to_string()));
+        assert!(!debug.contains(&keys.master_xpriv.to_string()));
+        assert!(!debug.contains(&keys.vault_xpriv.to_string()));
+    }
 
     #[test]
     fn mnemonic_recreates_vault_key_and_hot_descriptors() {
