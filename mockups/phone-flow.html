@@ -184,7 +184,7 @@
     background:rgba(24,21,26,.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.5)}
   .wopt .m{flex:1}
   .wopt .n{font-size:13.5px;font-weight:500;color:var(--c92)}
-  .wopt .d{font-size:11.5px;color:var(--c42);margin-top:3px}
+  .wopt .d{font-size:11.5px;color:var(--c42);margin-top:2px}
   .wopt .ch{color:var(--c30);font-size:16px}
   .grab{width:36px;height:4px;border-radius:2px;background:var(--c30);margin:4px auto 0}
   .qeyebrow{text-align:center;font-size:9.5px;letter-spacing:3px;color:var(--c42);
@@ -240,6 +240,8 @@
   .homebar{position:absolute;bottom:9px;left:50%;transform:translateX(-50%);z-index:50;
     width:134px;height:5px;border-radius:3px;background:rgba(0,0,0,.28)}
   .caption{font-size:9px;letter-spacing:3px;color:#8A8880}
+  .wopt .r{text-align:right}
+  .wopt .wv{font-family:var(--num);font-size:12px;font-variant-numeric:tabular-nums;color:var(--c55);margin-top:3px}
 </style>
 </head>
 <body>
@@ -371,7 +373,7 @@
       <div class="view" data-v="settings">
         <div class="eyebrow">Settings</div>
         <div class="srows">
-          <div class="srow"><div class="sl">Keys</div><div class="sr"><div class="sv">Phone + Trezor</div><div class="ch">&#8250;</div></div></div>
+          <div class="srow"><div class="sl">Keys</div><div class="sr"><div class="sv">Phone + hardware wallet</div><div class="ch">&#8250;</div></div></div>
           <div class="srow"><div class="sl">Recovery</div><div class="sr"><div class="sv">Configured</div><div class="ch">&#8250;</div></div></div>
           <div class="srow"><div class="sl">Next ceremony</div><div class="sr"><div class="sv mono">Aug 2027</div><div class="ch">&#8250;</div></div></div>
           <div class="srow"><div class="sl">Node</div><div class="sr"><div class="gd"></div><div class="sv">Connected</div><div class="ch">&#8250;</div></div></div>
@@ -417,13 +419,11 @@
       <div class="wopts">
         <div class="wopt">
           <div class="wic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></div>
-          <div class="m"><div class="n">Instant</div><div class="d">Any amount &#183; Phone + Trezor</div></div>
-          <div class="ch">&#8250;</div>
+          <div class="m"><div class="n">Instant</div><div class="wv">Any amount</div><div class="d">Phone + hardware wallet</div></div>
         </div>
         <div class="wopt">
           <div class="wic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M12 18h.01"/></svg></div>
-          <div class="m"><div class="n">After 1 week</div><div class="d">Up to &#8383;0.5000 &#183; Phone only</div></div>
-          <div class="ch">&#8250;</div>
+          <div class="m"><div class="n">After 1 week</div><div class="wv">Up to &#8383;0.5000</div><div class="d">Phone only</div></div>
         </div>
       </div>
     </div>
