@@ -52,7 +52,18 @@ def main() -> None:
     session = test_ctx.get_session(passphrase="")
     instance_id = debuglink.load_trezorapp(session, args.artifact)
 
+    def approve_without_layout_wait():
+        while True:
+            yield
+            # Optimized firmware intentionally omits most debug-layout plumbing.
+            # Send the decision directly so test automation cannot deadlock while
+            # waiting for a diagnostic layout response that the app does not need.
+            test_ctx.debug._write(  # noqa: SLF001 - emulator-only test helper
+                messages.DebugLinkDecision(button=messages.DebugButton.YES)
+            )
+
     with test_ctx:
+        test_ctx.set_input_flow(approve_without_layout_wait)
         response = session.call(
             messages.TrezorAppMessage(
                 instance_id=instance_id,

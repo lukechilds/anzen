@@ -58,12 +58,20 @@ cargo xtask unit-tests --model t3w1 --lang en
 cargo xtask fmt-check
 ```
 
-For an end-to-end run, first build app-enabled T3W1 emulator firmware and the
-emulator app artifact:
+For an end-to-end run through the same optimized Python path used by production
+firmware, first build app-enabled T3W1 emulator firmware and the emulator app
+artifact:
 
 ```sh
 cd trezor-firmware
-xtask build firmware --model T3W1 --apps --emulator --pyopt false --debug-link
+uv run xtask build firmware \
+  --model T3W1 \
+  --unsafe-fw \
+  --apps \
+  --emulator \
+  --frozen false \
+  --pyopt true \
+  --debug-link true
 
 cd ../trezor-app
 cargo xtask build --model t3w1 --lang en --emulator
@@ -74,11 +82,14 @@ the same policy screens a user sees:
 
 ```sh
 trezor-firmware/core/emu.py \
+  --production \
   --headless \
   --temporary-profile \
-  --executable trezor-firmware/core/build-xtask/release/unix \
+  --executable trezor-firmware/core/build-xtask/artifacts/T3W1/firmware-emu \
   --command trezor-app/tools/emulator-test.py
 ```
 
-This validates the complete app protocol and signing workload. Its timings are
-host-CPU timings; use a physical development device for representative results.
+This validates policy approval, the complete app protocol and signing workload,
+the results screen, and the final response. Its timings are host-CPU timings;
+use a physical development device only when representative performance numbers
+are required.
