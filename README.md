@@ -64,12 +64,19 @@ Once per year, the phone proposes a policy and the HWW approves it once. They fu
 
 ![The sequential allowance chain and emergency transactions for an example 2.1 BTC annual vault policy](media/vault-utxo-layout.svg)
 
-Solid outputs are confirmed after rollover; dashed outputs exist only if their parent action confirms. Each action has one vault input and one connector input:
+The overview shows the state immediately after rollover. Large blue circles are principal-holding vault UTXOs, small amber circles are the controller-wallet connectors, and boxes are transactions. A dashed outline means that output or transaction has not happened yet. Round principal amounts are shown so the policy is easy to read; the checked-in test vector contains exact fees and values.
 
-- **Execute monthly spending:** after roughly 30 days, the phone signs the connector input. The transaction releases the fixed limit and, except at the final step, creates both a smaller vault output and the next connector.
-- **Revoke monthly spending:** either device spends only the live connector. Vault principal stays in its existing output, while the current and every dependent future authorization become permanently invalid.
-- **Execute emergency access:** the trigger rolls its connector while creating a staging vault output and cold change. After one week, the withdrawal spends the staging output plus that connector to the hot wallet.
-- **Cancel emergency access:** either device spends only the withdrawal connector. The staged principal remains under the vault script and the withdrawal becomes permanently invalid.
+#### Monthly allowance
+
+![Twelve sequential monthly allowances with a connector rolling alongside the vault state, plus dynamic revocation](media/monthly-allowance-chain.svg)
+
+Each monthly transaction has exactly two inputs: the current allowance vault UTXO and the current connector. After roughly 30 days, the phone signs the connector input and releases 0.1 BTC. Except for month twelve, that transaction creates both the next smaller vault UTXO and the exact connector required by the next step. Spending the live connector in a dynamic revocation leaves the current vault UTXO untouched and makes the current and every dependent future allowance impossible.
+
+#### Emergency access
+
+![Emergency access trigger, delayed withdrawal, and connector-only cancellation](media/emergency-access-chain.svg)
+
+The immediate trigger spends the vault remainder and emergency connector, then creates a staged 0.5 BTC vault output, cold change, and the withdrawal connector. After one week, the staged output and connector can be spent together to the hot wallet. Before then, either device can cancel by spending only the withdrawal connector; both principal outputs remain under the vault script and the delayed withdrawal becomes permanently invalid.
 
 Connector change never returns to the controller address: phone revocation sends it to a fresh hot-wallet change address, while HWW revocation requires an explicitly displayed destination. A later annual rollover spends every live vault and connector output, resets recovery delays, creates only the renewed policy's connectors, and invalidates the old epoch.
 

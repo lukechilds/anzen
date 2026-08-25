@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="650" viewBox="0 0 1000 650" role="img" aria-labelledby="title desc">
+  <title id="title">Anzen sequential monthly allowance chain and revocation</title>
+  <desc id="desc">The current vault UTXO and connector feed month one. Each monthly transaction releases 0.1 bitcoin, creates the next smaller vault UTXO and rolls the connector. At any live state, revocation spends only the connector and leaves the vault UTXO untouched.</desc>
+  <defs>
+    <marker id="arrow-neutral" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#737373"/></marker>
+    <marker id="arrow-hot" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#16a34a"/></marker>
+    <marker id="arrow-connector" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#b7791f"/></marker>
+    <marker id="arrow-revoke" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#e11d48"/></marker>
+  </defs>
+  <style>
+    :root { --bg:#fff; --panel:#fafafa; --fg:#171717; --dim:#737373; --rule:#d4d4d4; --vault:#0ea5e9; --connector:#b7791f; --hot:#16a34a; --revoke:#e11d48; }
+    @media (prefers-color-scheme:dark) { :root { --bg:#0a0a0a; --panel:#0a0a0a; --fg:#e5e5e5; --dim:#737373; --rule:#262626; --vault:#38bdf8; --connector:#c99a55; --hot:#42c470; --revoke:#de6477; } }
+    text { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; text-anchor:start; }
+    .title { fill:var(--fg); font-size:22px; font-weight:650; letter-spacing:.02em; }
+    .subtitle { fill:var(--dim); font-size:12px; }
+    .panel { fill:var(--panel); stroke:var(--rule); stroke-width:1.25; }
+    .label { fill:var(--fg); font-size:13px; font-weight:650; text-anchor:middle; }
+    .small { fill:var(--dim); font-size:9.5px; text-anchor:middle; }
+    .tiny { fill:var(--dim); font-size:8.5px; text-anchor:middle; }
+    .vault circle { fill:var(--bg); stroke:var(--vault); stroke-width:1.5; }
+    .future circle { stroke-dasharray:5 4; }
+    .tx rect { fill:var(--bg); stroke:var(--hot); stroke-width:1.4; stroke-dasharray:5 4; }
+    .connector circle { fill:var(--bg); stroke:var(--connector); stroke-width:1.5; }
+    .connector.future circle { stroke-dasharray:5 4; }
+    .connector text { fill:var(--connector); font:650 11px ui-monospace,SFMono-Regular,Menlo,monospace; text-anchor:middle; }
+    .principal { fill:none; stroke:var(--dim); stroke-width:1.35; stroke-dasharray:5 4; marker-end:url(#arrow-neutral); }
+    .hot { fill:none; stroke:var(--hot); stroke-width:1.35; stroke-dasharray:5 4; marker-end:url(#arrow-hot); }
+    .connector-line { fill:none; stroke:var(--connector); stroke-width:1.35; stroke-dasharray:5 4; marker-end:url(#arrow-connector); }
+    .revoke-line { fill:none; stroke:var(--revoke); stroke-width:1.7; marker-end:url(#arrow-revoke); }
+  </style>
+
+  <rect width="1000" height="650" fill="var(--bg)"/>
+  <text class="title" x="35" y="42">MONTHLY ALLOWANCE</text>
+  <text class="subtitle" x="35" y="63">one vault UTXO and one connector roll forward together; the next delay starts only after confirmation</text>
+
+  <rect class="panel" x="20" y="82" width="960" height="355" rx="18"/>
+
+  <g class="vault" aria-label="Current allowance vault UTXO">
+    <circle cx="99.5" cy="182" r="52"/>
+    <text class="label" x="99.5" y="176">≈1.2 BTC</text>
+    <text class="small" x="99.5" y="195">current vault UTXO</text>
+  </g>
+  <path class="principal" d="M151.5 182H193"/>
+
+  <g class="tx" aria-label="Presigned month one transaction">
+    <rect x="201" y="141" width="126" height="82" rx="13"/>
+    <text class="label" x="264" y="170">MONTH 1</text>
+    <text class="small" x="264" y="189">presigned transaction</text>
+    <text class="tiny" x="264" y="206">valid after ≥30 days</text>
+  </g>
+  <path class="hot" d="M264 141V110"/>
+  <text class="tiny" x="264" y="101" style="fill:var(--hot);font-weight:650">0.1 BTC → HOT WALLET</text>
+  <path class="principal" d="M327 182H363"/>
+
+  <g class="vault future" aria-label="Future month two vault UTXO">
+    <circle cx="425" cy="182" r="48"/>
+    <text class="label" x="425" y="176">≈1.1 BTC</text>
+    <text class="small" x="425" y="195">next vault UTXO</text>
+  </g>
+  <path class="principal" d="M473 182H515"/>
+
+  <g class="tx" aria-label="Presigned month two transaction">
+    <rect x="523" y="141" width="126" height="82" rx="13"/>
+    <text class="label" x="586" y="170">MONTH 2</text>
+    <text class="small" x="586" y="189">presigned transaction</text>
+    <text class="tiny" x="586" y="206">valid after ≥30 days</text>
+  </g>
+  <path class="hot" d="M586 141V110"/>
+  <text class="tiny" x="586" y="101" style="fill:var(--hot);font-weight:650">0.1 BTC → HOT WALLET</text>
+
+  <path class="principal" d="M649 182H675" marker-end="none"/>
+  <text x="692" y="188" fill="var(--dim)" font-size="22" text-anchor="middle">···</text>
+  <path class="principal" d="M713 182H730"/>
+
+  <g class="vault future" aria-label="Future month twelve vault input">
+    <circle cx="779" cy="182" r="40"/>
+    <text class="label" x="779" y="177">V₁₁</text>
+    <text class="tiny" x="779" y="195">final vault state</text>
+  </g>
+  <path class="principal" d="M820 182H839"/>
+
+  <g class="tx" aria-label="Presigned month twelve transaction">
+    <rect x="847" y="141" width="120" height="82" rx="13"/>
+    <text class="label" x="907" y="170">MONTH 12</text>
+    <text class="small" x="907" y="189">presigned transaction</text>
+    <text class="tiny" x="907" y="206">valid after ≥30 days</text>
+  </g>
+  <path class="hot" d="M907 141V110"/>
+  <text class="tiny" x="907" y="101" style="fill:var(--hot);font-weight:650">FINAL 0.1 BTC → HOT WALLET</text>
+  <text class="tiny" x="907" y="237">no successor vault or connector</text>
+
+  <rect class="panel" x="42" y="269" width="867" height="140" rx="15"/>
+  <text x="62" y="295" fill="var(--fg)" font-size="12px" font-weight="650">CONTROLLER WALLET</text>
+  <text x="62" y="311" fill="var(--dim)" font-size="9.5px">only the live connector is confirmed</text>
+
+  <g class="connector" aria-label="Current monthly connector">
+    <circle cx="112" cy="360" r="24"/>
+    <text x="112" y="364">C₀</text>
+  </g>
+  <path class="connector-line" d="M136 360C185 360 182 246 225 222"/>
+  <path class="connector-line" d="M302 223C337 250 320 331 370 351"/>
+  <g class="connector future" aria-label="Future month two connector">
+    <circle cx="395" cy="360" r="24"/>
+    <text x="395" y="364">C₁</text>
+  </g>
+  <path class="connector-line" d="M419 360C485 360 500 246 548 222"/>
+  <path class="connector-line" d="M624 223C652 250 651 331 690 351"/>
+  <text x="716" y="366" fill="var(--connector)" font-size="18" text-anchor="middle">···</text>
+  <g class="connector future" aria-label="Future month twelve connector">
+    <circle cx="816" cy="360" r="24"/>
+    <text x="816" y="364">C₁₁</text>
+  </g>
+  <path class="connector-line" d="M840 360C875 329 872 252 888 223"/>
+
+  <rect class="panel" x="20" y="461" width="960" height="164" rx="18"/>
+  <text x="42" y="489" fill="var(--fg)" font-size="14px" font-weight="650">REVOKE AT ANY LIVE STATE</text>
+  <text x="42" y="507" fill="var(--dim)" font-size="10px">the phone or HWW spends only the connector; principal does not move</text>
+
+  <g class="vault" aria-label="Vault UTXO remains untouched after revocation">
+    <circle cx="129.5" cy="565" r="59"/>
+    <text class="label" x="129.5" y="559">VAULT STATE Vₙ</text>
+    <text class="small" x="129.5" y="579">remains untouched</text>
+  </g>
+  <g class="connector" aria-label="Live connector selected for revocation">
+    <circle cx="324" cy="565" r="25"/>
+    <text x="324" y="569">Cₙ</text>
+  </g>
+  <path class="connector-line" d="M349 555C400 520 430 520 470 535"/>
+  <g class="tx" opacity=".5" aria-label="Invalidated presigned monthly transaction">
+    <rect x="478" y="513" width="150" height="62" rx="13"/>
+    <text class="label" x="553" y="540">MONTH N</text>
+    <text class="small" x="553" y="558">presigned transaction</text>
+  </g>
+  <path d="M489 523L617 565M617 523L489 565" fill="none" stroke="var(--revoke)" stroke-width="4" stroke-linecap="round"/>
+  <path class="revoke-line" d="M349 575H700"/>
+  <g aria-label="Dynamic revocation transaction">
+    <rect x="708" y="530" width="135" height="70" rx="13" fill="var(--bg)" stroke="var(--revoke)" stroke-width="1.6"/>
+    <text class="label" x="775.5" y="559">REVOKE</text>
+    <text class="small" x="775.5" y="578" style="fill:var(--revoke)">dynamic transaction</text>
+  </g>
+  <path class="revoke-line" d="M843 565H913"/>
+  <text class="small" x="948" y="559">connector remainder</text>
+  <text class="small" x="948" y="575">to wallet change</text>
+
+  <text class="tiny" x="975" y="641" style="text-anchor:end">round principal amounts; fees omitted</text>
+</svg>

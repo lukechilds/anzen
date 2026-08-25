@@ -1,252 +1,115 @@
-<svg
-  xmlns="http://www.w3.org/2000/svg"
-  width="532"
-  height="1008"
-  viewBox="0 0 532 1008"
-  role="img"
-  aria-labelledby="title description"
->
-  <title id="title">Anzen annual vault transaction graph</title>
-  <desc id="description">The simplified on-chain structure of a 2.1 bitcoin vault after annual rollover, with fees omitted. A confirmed 1.2 bitcoin allowance vault output and 1,000 sat connector feed twelve sequential presigned authorizations. Each releases 0.1 bitcoin after a relative 30-day delay and rolls both vault and connector state. Revocation spends only the connector, leaving vault principal in place. A separate 0.9 bitcoin remainder and connector fund a 0.5 bitcoin emergency withdrawal with a one-week delay; cancellation likewise spends only its connector.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500" role="img" aria-labelledby="title desc">
+  <title id="title">Anzen annual vault rollover layout</title>
+  <desc id="desc">A confirmed 2.1 bitcoin vault is spent by the annual rollover. The rollover creates an allowance vault state and monthly connector, plus a vault remainder and emergency connector. Each pair feeds an independent presigned policy chain.</desc>
+  <defs>
+    <marker id="arrow-neutral" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#737373"/></marker>
+    <marker id="arrow-vault" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#0ea5e9"/></marker>
+    <marker id="arrow-connector" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#b7791f"/></marker>
+  </defs>
   <style>
-    :root {
-      --bg: #fafafa;
-      --fg: #171717;
-      --dim: #737373;
-      --rule: #e5e5e5;
-      --accent: #0ea5e9;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0a0a0a;
-        --fg: #e5e5e5;
-        --dim: #737373;
-        --rule: #262626;
-        --accent: #38bdf8;
-      }
-    }
-    text {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      text-anchor: middle;
-    }
-    .d-note {
-      fill: var(--dim);
-      font-size: 12px;
-    }
-    .d-note.start {
-      text-anchor: start;
-    }
-    .d-step {
-      fill: var(--dim);
-      font-size: 10.5px;
-    }
-    .d-utxo rect {
-      fill: var(--bg);
-      stroke: var(--accent);
-      stroke-width: 1.5;
-    }
-    .d-utxo.future rect {
-      stroke-dasharray: 4 3;
-    }
-    .d-utxo text {
-      fill: var(--fg);
-      font: 500 11.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    }
-    .d-branchline {
-      fill: none;
-      stroke: var(--dim);
-      stroke-opacity: 0.55;
-      stroke-width: 1.25;
-    }
-    .d-branch {
-      fill: var(--dim);
-      font-size: 11.5px;
-      text-anchor: start;
-    }
-    .d-tx rect {
-      fill: var(--bg);
-      stroke: var(--dim);
-      stroke-opacity: 0.45;
-      stroke-width: 1.25;
-    }
-    .d-tx text {
-      fill: var(--dim);
-      font-size: 10.5px;
-      text-anchor: start;
-    }
-    .d-tx .d-when {
-      text-anchor: end;
-    }
-    .d-ok circle,
-    .d-no circle {
-      fill: var(--bg);
-      stroke: var(--dim);
-      stroke-opacity: 0.45;
-      stroke-width: 1.25;
-    }
-    .d-ok path {
-      fill: none;
-      stroke: #22c55e;
-      stroke-width: 1.2;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-    .d-no line {
-      stroke: #ef4444;
-      stroke-width: 1.2;
-      stroke-linecap: round;
-    }
-    .d-rule {
-      stroke: var(--rule);
-      stroke-width: 1;
-    }
+    :root { --bg:#fff; --panel:#fafafa; --fg:#171717; --dim:#737373; --rule:#d4d4d4; --vault:#0ea5e9; --connector:#b7791f; --execute:#16a34a; }
+    @media (prefers-color-scheme:dark) { :root { --bg:#0a0a0a; --panel:#0a0a0a; --fg:#e5e5e5; --dim:#737373; --rule:#262626; --vault:#38bdf8; --connector:#c99a55; --execute:#42c470; } }
+    text { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; text-anchor:start; }
+    .title { fill:var(--fg); font-size:22px; font-weight:650; letter-spacing:.02em; }
+    .subtitle { fill:var(--dim); font-size:12px; }
+    .label { fill:var(--fg); font-size:14px; font-weight:650; text-anchor:middle; }
+    .small { fill:var(--dim); font-size:10px; text-anchor:middle; }
+    .tiny { fill:var(--dim); font-size:9px; text-anchor:middle; }
+    .panel { fill:var(--panel); stroke:var(--rule); stroke-width:1.25; }
+    .vault circle { fill:var(--bg); stroke:var(--vault); stroke-width:1.6; }
+    .vault.future circle { stroke-dasharray:5 4; }
+    .connector circle { fill:var(--bg); stroke:var(--connector); stroke-width:1.5; }
+    .connector.future circle { stroke-dasharray:5 4; }
+    .connector text { fill:var(--connector); font:650 11px ui-monospace,SFMono-Regular,Menlo,monospace; text-anchor:middle; }
+    .tx rect { fill:var(--bg); stroke:var(--dim); stroke-width:1.4; }
+    .chain rect { fill:var(--bg); stroke:var(--execute); stroke-width:1.4; stroke-dasharray:5 4; }
+    .neutral { fill:none; stroke:var(--dim); stroke-width:1.4; marker-end:url(#arrow-neutral); }
+    .vault-line { fill:none; stroke:var(--vault); stroke-width:1.4; stroke-dasharray:5 4; marker-end:url(#arrow-vault); }
+    .connector-line { fill:none; stroke:var(--connector); stroke-width:1.4; stroke-dasharray:5 4; marker-end:url(#arrow-connector); }
   </style>
 
-  <text class="d-note" x="76" y="20">On-chain UTXOs</text>
-  <text class="d-branch" x="170" y="20">Policy actions</text>
-  <text class="d-step" x="76" y="39">Confirmed allowance state</text>
+  <rect width="1000" height="500" fill="var(--bg)"/>
+  <text class="title" x="35" y="43">ANNUAL ROLLOVER</text>
+  <text class="subtitle" x="35" y="64">one confirmed transaction creates two independent policy chains</text>
 
-  <g class="d-utxo">
-    <rect x="18" y="47" width="116" height="245" rx="17" />
-    <text x="76" y="173">1.2 BTC vault</text>
-  </g>
-  <g class="d-utxo">
-    <rect x="18" y="305" width="116" height="53" rx="17" />
-    <text x="76" y="335">1k connector</text>
-  </g>
-  <path class="d-branchline" d="M134 64 H142 M134 331 H142 V64 M142 64 L170 52 M142 64 L170 78" />
-  <g class="d-tx">
-    <rect x="170" y="43" width="356" height="18" rx="9" />
-    <text x="180" y="56">Step 1: release 0.1 BTC; roll connector</text>
-    <text class="d-when" x="516" y="56">after ≥30 days</text>
-  </g>
-  <g class="d-tx">
-    <rect x="170" y="69" width="356" height="18" rx="9" />
-    <text x="180" y="82">Revoke connector; vault stays in place</text>
-    <text class="d-when" x="516" y="82">immediately</text>
-  </g>
-  <g class="d-ok">
-    <circle cx="152" cy="55" r="5" />
-    <path d="M150 55 l1.4 1.7 l2.7 -3.4" />
-  </g>
-  <g class="d-no">
-    <circle cx="152" cy="77" r="5" />
-    <line x1="150.4" y1="75.4" x2="153.6" y2="78.6" />
-    <line x1="153.6" y1="75.4" x2="150.4" y2="78.6" />
+  <g aria-label="Example policy">
+    <rect class="panel" x="730" y="18" width="235" height="62" rx="13"/>
+    <text class="small" x="747" y="39" style="text-anchor:start;font-weight:650;fill:var(--fg)">EXAMPLE POLICY</text>
+    <text class="tiny" x="747" y="57" style="text-anchor:start">2.1 BTC · 0.1 BTC monthly · 0.5 BTC emergency</text>
   </g>
 
-  <path class="d-branchline" d="M526 52 H528 V124 H142 V166 M142 166 L170 153 M142 166 L170 179" />
-  <text class="d-note start" x="154" y="111">step 1 creates both vault and connector inputs for step 2</text>
+  <rect class="panel" x="25" y="100" width="950" height="330" rx="18"/>
 
-  <g class="d-tx">
-    <rect x="170" y="144" width="356" height="18" rx="9" />
-    <text x="180" y="157">Step 2: release 0.1 BTC; roll connector</text>
-    <text class="d-when" x="516" y="157">after ≥30 days</text>
-  </g>
-  <g class="d-tx">
-    <rect x="170" y="170" width="356" height="18" rx="9" />
-    <text x="180" y="183">Revoke connector; vault stays in place</text>
-    <text class="d-when" x="516" y="183">immediately</text>
-  </g>
-  <g class="d-ok">
-    <circle cx="152" cy="156" r="5" />
-    <path d="M150 156 l1.4 1.7 l2.7 -3.4" />
-  </g>
-  <g class="d-no">
-    <circle cx="152" cy="178" r="5" />
-    <line x1="150.4" y1="176.4" x2="153.6" y2="179.6" />
-    <line x1="153.6" y1="176.4" x2="150.4" y2="179.6" />
+  <g class="vault" aria-label="Confirmed source vault">
+    <circle cx="127.5" cy="251" r="61"/>
+    <text class="label" x="127.5" y="245">2.1 BTC VAULT</text>
+    <text class="small" x="127.5" y="268">confirmed on-chain</text>
   </g>
 
-  <path class="d-branchline" d="M526 153 H528 V211 H142" />
-  <text class="d-note" x="142" y="239" style="font-size: 24px">⋮</text>
-  <path class="d-branchline" d="M142 251 V317 M142 317 L170 304 M142 317 L170 330" />
-  <text class="d-branch" x="170" y="229">Steps 3–11 repeat the same transition</text>
-  <text class="d-note start" x="170" y="248">Each execution creates the next exact connector outpoint.</text>
-
-  <g class="d-tx">
-    <rect x="170" y="295" width="356" height="18" rx="9" />
-    <text x="180" y="308">Step 12: release final 0.1 BTC; consume connector</text>
-    <text class="d-when" x="516" y="308">after ≥30 days</text>
-  </g>
-  <g class="d-tx">
-    <rect x="170" y="321" width="356" height="18" rx="9" />
-    <text x="180" y="334">Revoke connector; final vault output stays</text>
-    <text class="d-when" x="516" y="334">immediately</text>
-  </g>
-  <g class="d-ok">
-    <circle cx="152" cy="307" r="5" />
-    <path d="M150 307 l1.4 1.7 l2.7 -3.4" />
-  </g>
-  <g class="d-no">
-    <circle cx="152" cy="329" r="5" />
-    <line x1="150.4" y1="327.4" x2="153.6" y2="330.6" />
-    <line x1="153.6" y1="327.4" x2="150.4" y2="330.6" />
+  <path class="neutral" d="M188.5 251H280"/>
+  <g class="tx" aria-label="Confirmed annual rollover transaction">
+    <rect x="288" y="211" width="160" height="80" rx="14"/>
+    <text class="label" x="368" y="244">ROLLOVER</text>
+    <text class="small" x="368" y="265">confirmed transaction</text>
   </g>
 
-  <text class="d-note start" x="18" y="385">Each execution spends the preceding vault output and connector.</text>
-  <text class="d-note start" x="18" y="404">Intermediate vault and connector outputs are implicit in this view.</text>
-  <text class="d-note start" x="18" y="423">Revocation spends only the connector; all later steps become impossible.</text>
-  <line class="d-rule" x1="18" y1="448" x2="526" y2="448" />
+  <path class="vault-line" d="M448 241C500 241 495 162 550 162"/>
+  <path class="vault-line" d="M448 261C500 261 495 338 550 338"/>
 
-  <text class="d-note" x="76" y="475">On-chain UTXOs</text>
-  <text class="d-branch" x="170" y="475">Emergency policy actions</text>
-  <g class="d-utxo">
-    <rect x="18" y="493" width="116" height="180" rx="17" />
-    <text x="76" y="587">0.9 BTC vault</text>
+  <g class="vault" aria-label="Confirmed monthly allowance vault state">
+    <circle cx="638" cy="162" r="56"/>
+    <text class="label" x="638" y="154">≈1.2 BTC</text>
+    <text class="small" x="638" y="175">allowance vault state</text>
   </g>
-  <g class="d-utxo">
-    <rect x="18" y="690" width="116" height="53" rx="17" />
-    <text x="76" y="720">1k connector</text>
-  </g>
-  <path class="d-branchline" d="M134 583 H154 V618 H170 M134 716 H154 V618" />
-  <g class="d-tx">
-    <rect x="170" y="609" width="238" height="18" rx="9" />
-    <text x="180" y="622">Emergency trigger</text>
-    <text class="d-when" x="398" y="622">immediately</text>
-  </g>
-  <path class="d-branchline" d="M182 627 V925 M182 737 H194 M182 925 H194" />
-
-  <text class="d-step" x="252" y="660">Future staging output</text>
-  <g class="d-utxo future">
-    <rect x="194" y="670" width="116" height="134" rx="17" />
-    <text x="252" y="741">0.5 BTC</text>
-  </g>
-  <line class="d-branchline" x1="310" y1="737" x2="338" y2="724" />
-  <g class="d-tx">
-    <rect x="338" y="715" width="188" height="18" rx="9" />
-    <text x="348" y="728">Withdraw 0.5 BTC</text>
-    <text class="d-when" x="516" y="728">after ≥1 week</text>
-  </g>
-  <g class="d-tx">
-    <rect x="338" y="741" width="188" height="18" rx="9" />
-    <text x="348" y="754">Cancel: spend connector</text>
-    <text class="d-when" x="516" y="754">immediately</text>
-  </g>
-  <g class="d-ok">
-    <circle cx="322" cy="727" r="5" />
-    <path d="M320 727 l1.4 1.7 l2.7 -3.4" />
-  </g>
-  <g class="d-no">
-    <circle cx="322" cy="749" r="5" />
-    <line x1="320.4" y1="747.4" x2="323.6" y2="750.6" />
-    <line x1="323.6" y1="747.4" x2="320.4" y2="750.6" />
+  <g class="vault" aria-label="Confirmed emergency remainder vault state">
+    <circle cx="638" cy="338" r="56"/>
+    <text class="label" x="638" y="330">≈0.9 BTC</text>
+    <text class="small" x="638" y="351">vault remainder</text>
   </g>
 
-  <text class="d-step" x="252" y="817">Future withdrawal controller</text>
-  <g class="d-utxo future">
-    <rect x="194" y="825" width="116" height="38" rx="17" />
-    <text x="252" y="848">1k connector</text>
+  <rect class="panel" x="746" y="103" width="92" height="294" rx="15"/>
+  <text class="tiny" x="792" y="122" style="font-weight:650;fill:var(--fg)">CONTROLLER</text>
+  <text class="tiny" x="792" y="135">WALLET</text>
+  <g class="connector" aria-label="Confirmed monthly connector">
+    <circle cx="792" cy="178" r="25"/>
+    <text x="792" y="182">Cₘ</text>
+    <text class="tiny" x="792" y="216">1k sats</text>
   </g>
-  <path class="d-branchline" d="M310 844 H322 V750 H338" />
-
-  <text class="d-step" x="252" y="881">Future cold change</text>
-  <g class="d-utxo future">
-    <rect x="194" y="889" width="116" height="81" rx="17" />
-    <text x="252" y="933">0.4 BTC vault</text>
+  <g class="connector" aria-label="Confirmed emergency connector">
+    <circle cx="792" cy="333" r="25"/>
+    <text x="792" y="337">Cₑ</text>
+    <text class="tiny" x="792" y="371">1k sats</text>
   </g>
-  <line class="d-branchline" x1="310" y1="929" x2="346" y2="929" />
-  <text class="d-branch" x="354" y="933">Change stays in vault</text>
 
-  <text class="d-note start" x="18" y="995">Round amounts shown; fees omitted. Green executes; red spends only the connector.</text>
+  <path class="connector-line" d="M448 251C535 251 690 178 761 178"/>
+  <path class="connector-line" d="M448 251C535 251 690 333 761 333"/>
+
+  <path class="vault-line" d="M694 162H850"/>
+  <path class="connector-line" d="M817 178H850"/>
+  <g class="chain" aria-label="Presigned monthly chain">
+    <rect x="858" y="126" width="92" height="72" rx="13"/>
+    <text class="label" x="904" y="153" style="font-size:12px">MONTHLY</text>
+    <text class="small" x="904" y="171">12 presigned</text>
+    <text class="small" x="904" y="185">transactions</text>
+  </g>
+
+  <path class="vault-line" d="M694 338H850"/>
+  <path class="connector-line" d="M817 333H850"/>
+  <g class="chain" aria-label="Presigned emergency chain">
+    <rect x="858" y="302" width="92" height="72" rx="13"/>
+    <text class="label" x="904" y="329" style="font-size:12px">EMERGENCY</text>
+    <text class="small" x="904" y="347">trigger and</text>
+    <text class="small" x="904" y="361">withdrawal</text>
+  </g>
+
+  <g aria-label="Diagram key">
+    <text class="tiny" x="55" y="461" style="text-anchor:start;font-weight:650;fill:var(--fg)">KEY</text>
+    <circle cx="117" cy="458" r="12" fill="var(--bg)" stroke="var(--vault)" stroke-width="1.4"/>
+    <text class="tiny" x="145" y="462" style="text-anchor:start">vault UTXO</text>
+    <circle cx="245" cy="458" r="11" fill="var(--bg)" stroke="var(--connector)" stroke-width="1.4"/>
+    <text class="tiny" x="265" y="462" style="text-anchor:start">connector UTXO</text>
+    <rect x="390" y="447" width="42" height="22" rx="5" fill="var(--bg)" stroke="var(--dim)" stroke-width="1.3"/>
+    <text class="tiny" x="444" y="462" style="text-anchor:start">transaction</text>
+    <text class="tiny" x="965" y="462" style="text-anchor:end">round principal amounts; fees and connector reserves omitted</text>
+  </g>
 </svg>

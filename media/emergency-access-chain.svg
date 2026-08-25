@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="650" viewBox="0 0 1000 650" role="img" aria-labelledby="title desc">
+  <title id="title">Anzen emergency access and cancellation graph</title>
+  <desc id="desc">A vault remainder and emergency connector feed an immediate trigger. The trigger creates a staged vault output, cold change and a successor connector. After one week, the staged output and connector can fund the hot wallet. Before then, cancellation spends only the successor connector and leaves both vault outputs untouched.</desc>
+  <defs>
+    <marker id="arrow-neutral" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#737373"/></marker>
+    <marker id="arrow-vault" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#0ea5e9"/></marker>
+    <marker id="arrow-hot" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#16a34a"/></marker>
+    <marker id="arrow-connector" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#b7791f"/></marker>
+    <marker id="arrow-revoke" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0 0 6 3 0 6z" fill="#e11d48"/></marker>
+  </defs>
+  <style>
+    :root { --bg:#fff; --panel:#fafafa; --fg:#171717; --dim:#737373; --rule:#d4d4d4; --vault:#0ea5e9; --connector:#b7791f; --hot:#16a34a; --revoke:#e11d48; }
+    @media (prefers-color-scheme:dark) { :root { --bg:#0a0a0a; --panel:#0a0a0a; --fg:#e5e5e5; --dim:#737373; --rule:#262626; --vault:#38bdf8; --connector:#c99a55; --hot:#42c470; --revoke:#de6477; } }
+    text { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; text-anchor:start; }
+    .title { fill:var(--fg); font-size:22px; font-weight:650; letter-spacing:.02em; }
+    .subtitle { fill:var(--dim); font-size:12px; }
+    .panel { fill:var(--panel); stroke:var(--rule); stroke-width:1.25; }
+    .label { fill:var(--fg); font-size:13px; font-weight:650; text-anchor:middle; }
+    .small { fill:var(--dim); font-size:9.5px; text-anchor:middle; }
+    .tiny { fill:var(--dim); font-size:8.5px; text-anchor:middle; }
+    .vault circle { fill:var(--bg); stroke:var(--vault); stroke-width:1.5; }
+    .future circle { stroke-dasharray:5 4; }
+    .tx rect { fill:var(--bg); stroke:var(--hot); stroke-width:1.4; stroke-dasharray:5 4; }
+    .connector circle { fill:var(--bg); stroke:var(--connector); stroke-width:1.5; }
+    .connector.future circle { stroke-dasharray:5 4; }
+    .connector text { fill:var(--connector); font:650 11px ui-monospace,SFMono-Regular,Menlo,monospace; text-anchor:middle; }
+    .principal { fill:none; stroke:var(--dim); stroke-width:1.35; stroke-dasharray:5 4; marker-end:url(#arrow-neutral); }
+    .vault-line { fill:none; stroke:var(--vault); stroke-width:1.35; stroke-dasharray:5 4; marker-end:url(#arrow-vault); }
+    .hot { fill:none; stroke:var(--hot); stroke-width:1.35; stroke-dasharray:5 4; marker-end:url(#arrow-hot); }
+    .connector-line { fill:none; stroke:var(--connector); stroke-width:1.35; stroke-dasharray:5 4; marker-end:url(#arrow-connector); }
+    .revoke-line { fill:none; stroke:var(--revoke); stroke-width:1.7; marker-end:url(#arrow-revoke); }
+  </style>
+
+  <rect width="1000" height="650" fill="var(--bg)"/>
+  <text class="title" x="35" y="42">EMERGENCY ACCESS</text>
+  <text class="subtitle" x="35" y="63">an immediate trigger starts a one-week cancellation window before 0.5 BTC can reach the hot wallet</text>
+
+  <rect class="panel" x="20" y="82" width="960" height="360" rx="18"/>
+  <g class="vault" aria-label="Current vault remainder">
+    <circle cx="107" cy="181" r="55"/>
+    <text class="label" x="107" y="174">≈0.9 BTC</text>
+    <text class="small" x="107" y="194">vault remainder</text>
+  </g>
+  <path class="principal" d="M162 181H248"/>
+
+  <g class="tx" aria-label="Presigned immediate emergency trigger">
+    <rect x="256" y="136" width="145" height="90" rx="13"/>
+    <text class="label" x="328.5" y="168">TRIGGER</text>
+    <text class="small" x="328.5" y="188">presigned transaction</text>
+    <text class="tiny" x="328.5" y="207">valid immediately</text>
+  </g>
+
+  <path class="vault-line" d="M401 165C455 165 452 128 497 128"/>
+  <path class="vault-line" d="M401 198C455 198 452 245 497 245"/>
+  <g class="vault future" aria-label="Future staged emergency vault output">
+    <circle cx="576" cy="128" r="52"/>
+    <text class="label" x="576" y="121">≈0.5 BTC</text>
+    <text class="small" x="576" y="141">staged vault UTXO</text>
+  </g>
+  <g class="vault future" aria-label="Future cold change vault output">
+    <circle cx="576" cy="245" r="52"/>
+    <text class="label" x="576" y="238">≈0.4 BTC</text>
+    <text class="small" x="576" y="258">cold change stays vaulted</text>
+  </g>
+
+  <path class="principal" d="M628 128H728"/>
+  <g class="tx" aria-label="Presigned delayed emergency withdrawal">
+    <rect x="736" y="82" width="150" height="92" rx="13"/>
+    <text class="label" x="811" y="114">WITHDRAW</text>
+    <text class="small" x="811" y="134">presigned transaction</text>
+    <text class="tiny" x="811" y="153">valid after ≥1 week</text>
+  </g>
+  <path class="hot" d="M886 128H950"/>
+  <text class="small" x="933" y="107" style="fill:var(--hot);font-weight:650">0.5 BTC</text>
+  <text class="small" x="933" y="120" style="fill:var(--hot)">hot wallet</text>
+
+  <rect class="panel" x="42" y="310" width="844" height="105" rx="15"/>
+  <text x="62" y="335" fill="var(--fg)" font-size="12px" font-weight="650">CONTROLLER WALLET</text>
+  <text x="62" y="351" fill="var(--dim)" font-size="9.5px">the trigger rolls C₀ into C₁; withdrawal still needs C₁</text>
+  <g class="connector" aria-label="Current emergency connector">
+    <circle cx="194" cy="376" r="24"/>
+    <text x="194" y="380">C₀</text>
+  </g>
+  <path class="connector-line" d="M218 376C270 376 275 260 304 225"/>
+  <path class="connector-line" d="M370 226C405 260 445 351 505 367"/>
+  <g class="connector future" aria-label="Future withdrawal connector">
+    <circle cx="532" cy="376" r="24"/>
+    <text x="532" y="380">C₁</text>
+  </g>
+  <path class="connector-line" d="M556 376C675 376 691 205 770 174"/>
+
+  <rect class="panel" x="20" y="466" width="960" height="159" rx="18"/>
+  <text x="42" y="494" fill="var(--fg)" font-size="14px" font-weight="650">CANCEL AFTER THE TRIGGER</text>
+  <text x="42" y="512" fill="var(--dim)" font-size="10px">spend C₁ before withdrawal; both staged principal and cold change remain in their vault outputs</text>
+
+  <g class="vault" aria-label="Staged emergency output remains untouched">
+    <circle cx="129.5" cy="569" r="58"/>
+    <text class="label" x="129.5" y="563">≈0.5 BTC STAGED</text>
+    <text class="small" x="129.5" y="582">remains vaulted</text>
+  </g>
+  <g class="connector" aria-label="Withdrawal connector selected for cancellation">
+    <circle cx="313" cy="569" r="25"/>
+    <text x="313" y="573">C₁</text>
+  </g>
+  <path class="connector-line" d="M338 559C380 530 410 530 449 542"/>
+  <g class="tx" opacity=".5" aria-label="Invalidated delayed withdrawal">
+    <rect x="457" y="522" width="150" height="62" rx="13"/>
+    <text class="label" x="532" y="549">WITHDRAW</text>
+    <text class="small" x="532" y="567">after one week</text>
+  </g>
+  <path d="M468 532L596 574M596 532L468 574" fill="none" stroke="var(--revoke)" stroke-width="4" stroke-linecap="round"/>
+  <path class="revoke-line" d="M338 579H682"/>
+  <g aria-label="Dynamic emergency cancellation transaction">
+    <rect x="690" y="534" width="145" height="70" rx="13" fill="var(--bg)" stroke="var(--revoke)" stroke-width="1.6"/>
+    <text class="label" x="762.5" y="563">CANCEL</text>
+    <text class="small" x="762.5" y="582" style="fill:var(--revoke)">dynamic transaction</text>
+  </g>
+  <path class="revoke-line" d="M835 569H908"/>
+  <text class="small" x="947" y="563">connector remainder</text>
+  <text class="small" x="947" y="579">to wallet change</text>
+
+  <text class="tiny" x="975" y="641" style="text-anchor:end">round principal amounts; fees omitted</text>
+</svg>
