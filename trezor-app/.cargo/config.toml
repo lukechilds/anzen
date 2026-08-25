@@ -1,0 +1,2 @@
+[alias]
+xtask = "run --manifest-path ../trezor-firmware/sdk/crates/modular-xtask/Cargo.toml --"

@@ -1,0 +1,70 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "anzen-trezor"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Anzen cold-signer app for Trezor"
+
+[package.metadata.trezor]
+id = "anzen.app"
+name = "Anzen"
+vendor = "Anzen"
+stack-size = 16384
+heap-size = 8192
+app-ring = 2
+curves = ["bip340"]
+paths = [
+    "m/86'/coin_type'/100'/0/[0-2147483647]/**",
+]
+slip44-id = 0
+
+[dependencies]
+anzen-cold-signer = { path = "../cold-signer" }
+trezor-app-sdk = { path = "../trezor-firmware/sdk/crates/trezor-app-sdk" }
+ufmt = { version = "0.2.0", default-features = false }
+
+[features]
+model_t3t1 = []
+model_t3w1 = []
+
+lang_en = []
+lang_cs = []
+
+log_level_error = ["trezor-app-sdk/log_level_error"]
+log_level_warn = ["trezor-app-sdk/log_level_warn"]
+log_level_info = ["trezor-app-sdk/log_level_info"]
+log_level_debug = ["trezor-app-sdk/log_level_debug"]
+
+emulator = []
+test = ["dev_keys", "trezor-app-sdk/test", "trezor-app-sdk/log_level_debug"]
+debug = ["trezor-app-sdk/debug"]
+dev_keys = []
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[profile.debug-fw]
+inherits = "dev"
+split-debuginfo = "off"
+debug = 2
+strip = "none"
+panic = "abort"
+
+[profile.release-fw]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+split-debuginfo = "off"
+debug = 0
+debug-assertions = false
+overflow-checks = false
+incremental = false
+panic = "immediate-abort"
+
+[profile.test]
+split-debuginfo = "off"
+debug = 2

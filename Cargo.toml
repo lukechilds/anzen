@@ -9,7 +9,12 @@ autobins = false
 
 [workspace]
 members = [".", "cold-signer"]
-exclude = ["ledger-app"]
+exclude = [
+    "ledger-app",
+    "trezor-app",
+    "trezor-firmware/sdk/crates/modular-xtask",
+    "trezor-firmware/sdk/crates/trezor-app-sdk",
+]
 default-members = ["."]
 resolver = "3"
 

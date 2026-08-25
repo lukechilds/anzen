@@ -1,6 +1,6 @@
 # Development
 
-This document describes the repository boundaries, dependency direction, and the workflow for Anzen's independently versioned Trezor firmware fork.
+This document describes the repository boundaries, dependency direction, and the workflow for Anzen's standalone hardware apps and pinned Trezor runtime fork.
 
 ## Repository layout
 
@@ -13,7 +13,8 @@ anzen/
 │   └── main.rs           CLI orchestration and chain interaction
 ├── cold-signer/          Small `no_std` crate for embedded cold-signing logic
 ├── ledger-app/           Ledger application; depends on `cold-signer`
-├── trezor-firmware/      Git submodule pointing to `lukechilds/trezor-firmware`
+├── trezor-app/            Trezor application; depends on `cold-signer`
+├── trezor-firmware/      Pinned Trezor external-app runtime and SDK submodule
 ├── test-vectors/         Canonical serialized vault and transaction-graph fixtures
 ├── tests/                Rust architecture, CLI, and real-node integration tests
 └── scripts/              Docker, end-to-end, and firmware setup helpers
@@ -32,8 +33,8 @@ Anzen CLI / future apps ─┤                ├──> core
 
 Ledger app ──> cold-signer
 
-Trezor firmware ──> independent Anzen protocol implementation
-                └──> canonical protocol test vectors
+Trezor app ──> cold-signer
+           └──> Trezor app SDK (pinned by trezor-firmware)
 ```
 
 - `core` contains shared serialized objects, key derivation, Miniscript policy construction, PSBT construction and validation, encryption formats, storage types, and chain interfaces. It does not depend on either device implementation.
@@ -41,7 +42,8 @@ Trezor firmware ──> independent Anzen protocol implementation
 - `cold_wallet` is the reference implementation of the hardware-wallet role used by the CLI. It has no hot-wallet or chain-backend dependency.
 - `cold-signer` is the small, platform-independent `no_std` surface intended for embedded hardware-wallet applications. It currently contains the deterministic signing benchmark; protocol parsing and validation should move here as those interfaces stabilize.
 - `ledger-app` is an independently built Ledger firmware crate and directly consumes `cold-signer`.
-- `trezor-firmware` cannot consume the Rust crate through Trezor's normal firmware architecture. It implements the same protocol independently and proves compatibility against the same deterministic vectors. Production code should live under `core/src/apps/anzen/`, with protocol messages in `common/protob/messages-anzen.proto`, Python host support in `python/src/trezorlib/anzen.py`, and device tests in `tests/device_tests/anzen/`.
+- `trezor-app` is an independently built external application in this repository. It directly consumes `cold-signer`, while private-key derivation and signing stay inside Trezor Core through the generic app SDK.
+- `trezor-firmware` contains the pinned external-app runtime and SDK needed to build and run `trezor-app`. Anzen-specific policy construction, UI, and host protocol code do not live in the firmware fork.
 
 The tests in `tests/architecture.rs` enforce the root Rust dependency boundaries. Hardware implementations must never gain network access or depend on phone-wallet implementation code.
 
@@ -62,19 +64,23 @@ cd ledger-app
 cargo ledger build flex
 ```
 
+The Trezor application is also a separate workspace. Its complete build,
+physical-device, and emulator instructions are in
+[`trezor-app/README.md`](trezor-app/README.md).
+
 The Docker integration and end-to-end commands are documented in the main README. The Trezor submodule is excluded from the root Docker build context so local firmware checkouts do not invalidate or enlarge CLI images.
 
 ## Hardware signing benchmark
 
 The Ledger and Trezor benchmarks reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.
 
-The resulting workload is 15 transactions and 26 HWW signatures: twelve rollover-input signatures plus one for each of fourteen future actions. Dynamic revocation and cancellation are deliberately excluded because either device constructs and signs those controller-only transactions only when requested. `cold-signer` checks every BIP341 sighash against `rust-bitcoin` and pins the controller script, first and last sighashes, and aggregate digest. Trezor independently pins those same values, preventing the two firmware implementations from silently benchmarking different graphs.
+The resulting workload is 15 transactions and 26 HWW signatures: twelve rollover-input signatures plus one for each of fourteen future actions. Dynamic revocation and cancellation are deliberately excluded because either device constructs and signs those controller-only transactions only when requested. `cold-signer` checks every BIP341 sighash against `rust-bitcoin` and pins the controller script, first and last sighashes, and aggregate digest. Both hardware apps consume this exact graph implementation, preventing their benchmark workloads from drifting apart.
 
-Build Ledger Flex with the command above. From a configured Trezor Nix environment, run its focused compatibility test with:
+Build Ledger Flex with the command above. From a configured Trezor Nix environment, run the Trezor app's focused tests with:
 
 ```bash
-make -C trezor-firmware/core test \
-  TESTOPTS=test_apps.homescreen.anzen_benchmark.py
+cd trezor-app
+cargo xtask unit-tests --model t3w1 --lang en
 ```
 
 ## The Trezor firmware submodule
