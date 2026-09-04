@@ -84,6 +84,15 @@ epoch's `approved-policy.json`. Backends accept retries of an already-known tran
 phone refuses to reactivate an epoch it has already superseded. State files use private temporary
 files and a flushed atomic rename rather than truncating the active file in place.
 
+## Hot-wallet address recovery
+
+The first Electrum sync of a new or restored database discovers both receive and change chains,
+using a 100-unused-address stop gap to accommodate addresses reserved by policy proposals. This is
+a bounded discovery scan, not a promise to find arbitrary gaps larger than 100 addresses. Previously
+revealed addresses are always synced too, even when they lie beyond that gap. Successful discovery
+is recorded in SQLite only after the wallet update is persisted; failed scans retry after reopening.
+Phone restoration calls `HotWallet::request_full_scan` even if an old database survives.
+
 ## Hardware signing benchmark
 
 The Ledger and Trezor benchmarks reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.

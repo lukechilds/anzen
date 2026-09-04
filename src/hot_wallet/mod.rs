@@ -811,6 +811,7 @@ pub fn restore_phone(data_dir: &Path, package: &PhoneRecoveryPackage) -> Result<
             vault_key_index: package.phone_vault_key_index,
         },
     )?;
+    HotWallet::open_or_create(data_dir)?.request_full_scan()?;
     Ok(package.phone_mnemonic.clone())
 }
 

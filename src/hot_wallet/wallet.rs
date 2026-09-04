@@ -10,6 +10,10 @@ use bitcoin::{Address, Amount, FeeRate, OutPoint, ScriptBuf, Transaction, key::S
 use bitcoincore_rpc::Client;
 use std::{fs, path::Path};
 
+// Policy proposals reserve multiple receive addresses at once. Allow more than the usual
+// twenty-address gap when recovering a phone that has lost its address-index database.
+const RECOVERY_STOP_GAP: usize = 100;
+
 pub struct HotWallet {
     pub wallet: PersistedWallet<Connection>,
     db: Connection,
@@ -46,6 +50,10 @@ impl HotWallet {
                 .network(keys.network)
                 .create_wallet(&mut db)?,
         };
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS anzen_sync_state (id INTEGER PRIMARY KEY CHECK (id = 0))",
+            [],
+        )?;
         Ok(Self { wallet, db })
     }
 
@@ -93,10 +101,34 @@ impl HotWallet {
         client: &BdkElectrumClient<E>,
     ) -> Result<()> {
         client.populate_tx_cache(self.wallet.tx_graph().full_txs().map(|node| node.tx));
+        let discovered: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM anzen_sync_state WHERE id = 0)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !discovered {
+            let update =
+                client.full_scan(self.wallet.start_full_scan(), RECOVERY_STOP_GAP, 20, false)?;
+            self.wallet.apply_update(update)?;
+            self.wallet.persist(&mut self.db)?;
+        }
+        // Still sync all known addresses: an existing database can contain revealed indices
+        // beyond the discovery gap. Ordinary subsequent syncs need only this inexpensive path.
         let request = self.wallet.start_sync_with_revealed_spks();
         let update = client.sync(request, 20, false)?;
         self.wallet.apply_update(update)?;
         self.wallet.persist(&mut self.db)?;
+        if !discovered {
+            self.db
+                .execute("INSERT OR IGNORE INTO anzen_sync_state (id) VALUES (0)", [])?;
+        }
+        Ok(())
+    }
+
+    /// Require address discovery at the next Electrum sync, including when restoring over a
+    /// surviving database. The completion marker is written only after a successful persisted sync.
+    pub fn request_full_scan(&mut self) -> Result<()> {
+        self.db.execute("DELETE FROM anzen_sync_state", [])?;
         Ok(())
     }
 
