@@ -373,11 +373,27 @@ pub fn activate_policy(
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
 
     let rollover = finalize_vault_psbt(read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?)?;
+    // Stage each epoch independently. A rejected or interrupted rollover must leave the current
+    // schedule and its encrypted transactions intact. Retain enough material to retry activation.
+    let epoch_dir = data_dir
+        .join("phone/transactions")
+        .join(rollover.compute_txid().to_string());
+    if epoch_dir.join("activated.json").exists() && data_dir.join(SCHEDULE_FILE).exists() {
+        let active = load_schedule(data_dir)?;
+        if active.rollover_txid != rollover.compute_txid().to_string() {
+            bail!("this policy epoch has already been superseded; refusing to reactivate it");
+        }
+    }
+    write_json(
+        &epoch_dir.join("approved-policy.json"),
+        &ceremony::package_from_batch(batch_dir)?,
+    )?;
+    write_json(&epoch_dir.join("rollover.json"), &rollover)?;
     let mut entries = Vec::with_capacity(manifest.allowances.len());
     for allowance in &manifest.allowances {
         let authorization = read_psbt(&batch_dir.join(&allowance.authorization.psbt_file))?;
         let authorization_path =
-            encrypted_transaction_path(data_dir, allowance.step, TransactionKind::Authorization);
+            encrypted_transaction_path(&epoch_dir, allowance.step, TransactionKind::Authorization);
         write_encrypted_transaction(
             &authorization_path,
             &phone.seed,
@@ -401,12 +417,12 @@ pub fn activate_policy(
             let trigger = read_psbt(&batch_dir.join(&emergency.trigger.psbt_file))?;
             let withdrawal = read_psbt(&batch_dir.join(&emergency.withdrawal.psbt_file))?;
             let trigger_path = emergency_transaction_path(
-                data_dir,
+                &epoch_dir,
                 EmergencyTransactionKind::Trigger,
                 trigger.unsigned_tx.compute_txid(),
             );
             let withdrawal_path = emergency_transaction_path(
-                data_dir,
+                &epoch_dir,
                 EmergencyTransactionKind::Withdrawal,
                 withdrawal.unsigned_tx.compute_txid(),
             );
@@ -447,10 +463,23 @@ pub fn activate_policy(
         entries,
         emergency_access,
     };
-    write_json(&data_dir.join(SCHEDULE_FILE), &schedule)?;
-    backend
+    write_json(&epoch_dir.join("schedule.json"), &schedule)?;
+    let broadcast_txid = backend
         .broadcast(&rollover)
         .context("failed to broadcast rollover transaction")?;
+    if broadcast_txid != rollover.compute_txid() {
+        bail!("chain backend returned an unexpected rollover transaction ID");
+    }
+    write_json(&data_dir.join(SCHEDULE_FILE), &schedule).context(
+        "rollover accepted but schedule activation failed; retry the same approved policy",
+    )?;
+    crate::core::storage::set_policy_limits(
+        data_dir,
+        manifest.monthly_limit_sats,
+        manifest.emergency_access_limit_sats,
+    )
+    .context("rollover accepted but saving policy limits failed; retry the same approved policy")?;
+    write_json(&epoch_dir.join("activated.json"), &true)?;
     Ok(schedule)
 }
 
@@ -892,23 +921,23 @@ fn read_psbt(path: &Path) -> Result<Psbt> {
 }
 
 fn encrypted_transaction_path(
-    data_dir: &Path,
+    epoch_dir: &Path,
     step: u8,
     kind: TransactionKind,
 ) -> std::path::PathBuf {
-    data_dir.join(format!(
-        "phone/transactions/allowance-{step:02}-{}.json",
+    epoch_dir.join(format!(
+        "allowance-{step:02}-{}.json",
         transaction_kind_name(kind)
     ))
 }
 
 fn emergency_transaction_path(
-    data_dir: &Path,
+    epoch_dir: &Path,
     kind: EmergencyTransactionKind,
     txid: Txid,
 ) -> std::path::PathBuf {
-    data_dir.join(format!(
-        "phone/transactions/emergency-{}-{txid}.json",
+    epoch_dir.join(format!(
+        "emergency-{}-{txid}.json",
         emergency_transaction_kind_name(kind)
     ))
 }

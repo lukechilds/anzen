@@ -4,6 +4,7 @@ use bitcoin::{Network, key::Secp256k1, secp256k1::XOnlyPublicKey};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -223,23 +224,28 @@ fn default_network_name() -> String {
 }
 
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let bytes = serde_json::to_vec_pretty(value)?;
-    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
-    set_private_permissions(path)?;
-    Ok(())
+    write_private(path, &serde_json::to_vec_pretty(value)?)
 }
 
+/// Replace a file atomically on the same filesystem. The temporary file is private from
+/// creation, and is flushed before the rename so interrupted writes cannot truncate live keys
+/// or the active schedule. Persist the directory entry as well on Unix.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
-    set_private_permissions(path)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary
+        .write_all(bytes)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -248,18 +254,46 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     serde_json::from_slice(&bytes).with_context(|| format!("invalid JSON in {}", path.display()))
 }
 
-#[cfg(unix)]
-fn set_private_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("failed to set private permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_private_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
 pub fn hot_db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("phone/hot-wallet.sqlite")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_files_are_atomically_replaced_and_remain_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_json(&path, &vec![1_u64; 100]).unwrap();
+        let old_handle = fs::File::open(&path).unwrap();
+        write_json(&path, &vec![2_u64; 100]).unwrap();
+        assert_eq!(read_json::<Vec<u64>>(&path).unwrap(), vec![2; 100]);
+        // An open reader still sees the complete old inode, not truncated/partially written JSON.
+        assert_eq!(
+            serde_json::from_reader::<_, Vec<u64>>(old_handle).unwrap(),
+            vec![1; 100]
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn failed_replacement_preserves_destination_and_cleans_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-file");
+        fs::create_dir(&path).unwrap();
+        write_private(&path.join("retained"), b"unchanged").unwrap();
+        assert!(write_private(&path, b"replacement").is_err());
+        assert_eq!(fs::read(path.join("retained")).unwrap(), b"unchanged");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }

@@ -55,6 +55,8 @@ fn real_regtest_runs_sequential_allowances_whole_chain_revocation_and_soft_limit
     let schedule = hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
     let first_delay_base = rpc.chain_info().unwrap().median_time;
     rpc.mine(1, &mining_address).unwrap();
+    let retried = hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
+    assert_eq!(retried.rollover_txid, schedule.rollover_txid);
     assert_eq!(rpc.scan_vault(&config).unwrap().len(), 2);
     assert_eq!(rpc.scan_connectors(&config).unwrap().len(), 1);
 

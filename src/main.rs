@@ -845,11 +845,6 @@ fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path)
     core::ceremony::materialize_policy_package(&package, &workspace)?;
     let backend = rpc_args.connect_hot(data_dir)?;
     let schedule = hot_wallet::activate_policy(data_dir, backend.as_ref(), &workspace)?;
-    core::storage::set_policy_limits(
-        data_dir,
-        package.manifest.monthly_limit_sats,
-        package.manifest.emergency_access_limit_sats,
-    )?;
     println!("Rollover broadcast: {}", schedule.rollover_txid);
     println!("Active monthly limit: {} sats", schedule.monthly_limit_sats);
     println!(

@@ -74,6 +74,16 @@ Treat this directory as sensitive wallet data, not disposable policy output: it 
 rotations, late deposits, and immature regtest coinbase outputs recoverable. Old-key recovery
 material is intentionally not deleted automatically after broadcasting a sweep.
 
+## Policy activation durability
+
+Each policy is staged under `phone/transactions/<rollover-txid>/`, including its approved package,
+signed rollover, encrypted future transactions, and candidate schedule. The active `phone/schedule.json`
+is atomically replaced only after the chain backend accepts the rollover; failed broadcasts leave the
+previous epoch intact. If broadcasting succeeds but a local write fails, retry activation using that
+epoch's `approved-policy.json`. Backends accept retries of an already-known transaction, while the
+phone refuses to reactivate an epoch it has already superseded. State files use private temporary
+files and a flushed atomic rename rather than truncating the active file in place.
+
 ## Hardware signing benchmark
 
 The Ledger and Trezor benchmarks reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.

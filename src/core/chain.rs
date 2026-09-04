@@ -87,9 +87,13 @@ impl Blockchain for BitcoinCoreBackend {
     }
 
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid> {
-        self.client
-            .send_raw_transaction(transaction)
-            .context("Bitcoin Core transaction broadcast failed")
+        match self.client.send_raw_transaction(transaction) {
+            // A retry after a successful broadcast/failed local write may already be confirmed.
+            Err(bitcoincore_rpc::Error::JsonRpc(bitcoincore_rpc::jsonrpc::error::Error::Rpc(
+                error,
+            ))) if error.code == -27 => Ok(transaction.compute_txid()),
+            result => result.context("Bitcoin Core transaction broadcast failed"),
+        }
     }
 }
 
@@ -204,9 +208,18 @@ impl Blockchain for ElectrumBackend {
     }
 
     fn broadcast(&self, transaction: &Transaction) -> Result<bitcoin::Txid> {
-        self.client
-            .transaction_broadcast(transaction)
-            .context("Electrum transaction broadcast failed")
+        let result = self.client.transaction_broadcast(transaction);
+        if result.is_err() {
+            let expected = transaction.compute_txid();
+            // Do not infer acceptance from server-specific error strings. Ask the server for
+            // the exact transaction, bypassing our local BDK transaction cache.
+            if let Ok(known) = self.client.inner.transaction_get(&expected) {
+                if known.compute_txid() == expected {
+                    return Ok(expected);
+                }
+            }
+        }
+        result.context("Electrum transaction broadcast failed")
     }
 }
 
