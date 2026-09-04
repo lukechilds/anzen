@@ -10,7 +10,7 @@ use anzen::{
             load_config, read_json, set_policy_limits,
         },
     },
-    hot_wallet::{self, HotWallet},
+    hot_wallet::{self, HotWallet, HotWalletBackend},
 };
 use bitcoin::{Address, Network};
 use std::{env, fs, str::FromStr};
@@ -209,6 +209,59 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     assert!(renewed_utxos.iter().any(|utxo| {
         utxo.outpoint.txid.to_string() == renewed_schedule.rollover_txid && utxo.outpoint.vout == 1
     }));
+}
+
+#[test]
+#[ignore = "requires a disposable Bitcoin Core regtest node"]
+fn real_regtest_phone_rotation_sweeps_hot_funds_and_preserves_recovery_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let initialized = initialize(dir.path());
+    let rpc = rpc_from_env();
+    let sink = tempfile::tempdir().unwrap();
+    initialize(sink.path());
+    let mining_address = HotWallet::open_or_create(sink.path())
+        .unwrap()
+        .next_receive_address()
+        .unwrap();
+    let hot_address = HotWallet::open_or_create(dir.path())
+        .unwrap()
+        .next_receive_address()
+        .unwrap();
+    rpc.mine(1, &hot_address).unwrap();
+    rpc.mine(1, &address(&initialized.config.vault_address))
+        .unwrap();
+    rpc.mine(100, &mining_address).unwrap();
+
+    let proposal = hot_wallet::create_phone_rotation(dir.path(), &rpc).unwrap();
+    let approved = cold_wallet::approve_phone_rotation(dir.path(), &proposal).unwrap();
+    let rotation = hot_wallet::activate_phone_rotation(dir.path(), &rpc, &approved).unwrap();
+    let hot_sweep_txid = rotation.hot_wallet_sweep_txid.unwrap();
+    rpc.mine(1, &mining_address).unwrap();
+    let mut replacement = HotWallet::open_or_create(dir.path()).unwrap();
+    rpc.sync_hot_wallet(&mut replacement).unwrap();
+    assert!(replacement.wallet.balance().confirmed.to_sat() > 4_999_990_000);
+    assert_eq!(
+        replacement
+            .wallet
+            .list_unspent()
+            .next()
+            .unwrap()
+            .outpoint
+            .txid,
+        hot_sweep_txid
+    );
+
+    let archive = dir
+        .path()
+        .join("history")
+        .join(format!("rotation-{}", rotation.sweep.txid));
+    let mut old_hot = HotWallet::open_or_create(&archive).unwrap();
+    rpc.sync_hot_wallet(&mut old_hot).unwrap();
+    assert_eq!(old_hot.wallet.balance().total().to_sat(), 0);
+    let old_keys = anzen::core::storage::load_device_keys(&archive, PHONE_DEVICE_FILE).unwrap();
+    assert_eq!(old_keys.mnemonic.to_string(), initialized.phone_mnemonic);
+    assert!(archive.join(PHONE_BACKUP_FILE).exists());
+    assert!(archive.join("replacement").join(PHONE_BACKUP_FILE).exists());
 }
 
 fn mine_until_next_height(rpc: &BitcoinCoreBackend, target_next_height: u64, address: &Address) {

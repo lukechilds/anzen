@@ -68,6 +68,8 @@ pub struct RotationResult {
     pub sweep: SweepResult,
     #[serde(default)]
     pub controller_revocation_txid: Option<Txid>,
+    #[serde(default)]
+    pub hot_wallet_sweep_txid: Option<Txid>,
     pub old_address: String,
     pub new_address: String,
     pub new_phone_mnemonic: String,

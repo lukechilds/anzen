@@ -166,6 +166,27 @@ impl HotWallet {
         self.wallet.persist(&mut self.db)?;
         Ok((transaction, fee_sats))
     }
+
+    /// Move all currently spendable hot coins to the replacement phone. Immature coinbase
+    /// outputs cannot be moved yet; rotation retains the old key and database for those coins.
+    pub fn build_sweep(&mut self, destination: ScriptBuf) -> Result<Option<Transaction>> {
+        let balance = self.wallet.balance();
+        if balance.total() == balance.immature {
+            return Ok(None);
+        }
+        let mut builder = self.wallet.build_tx();
+        builder
+            .drain_wallet()
+            .drain_to(destination)
+            .fee_rate(FeeRate::from_sat_per_vb(1).expect("1 sat/vB is valid"));
+        let mut psbt = builder.finish()?;
+        if !self.wallet.sign(&mut psbt, SignOptions::default())? {
+            anyhow::bail!("BDK could not finalize the hot-wallet rotation sweep");
+        }
+        let transaction = psbt.extract_tx()?;
+        self.wallet.persist(&mut self.db)?;
+        Ok(Some(transaction))
+    }
 }
 
 #[cfg(test)]

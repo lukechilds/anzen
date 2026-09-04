@@ -64,6 +64,16 @@ cargo ledger build flex
 
 The Docker integration and end-to-end commands are documented in the main README. The Trezor submodule is excluded from the root Docker build context so local firmware checkouts do not invalidate or enlarge CLI images.
 
+## Phone rotation recovery state
+
+Phone rotation sweeps the old phone's spendable hot-wallet balance as well as rotating the vault.
+Before any broadcast, it retains the old and replacement key material and encrypted cloud backups
+under `history/rotation-<vault-sweep-txid>/`; the replacement state is in its `replacement/` directory.
+The old wallet database and policy artifacts are archived there when the vault sweep succeeds.
+Treat this directory as sensitive wallet data, not disposable policy output: it keeps interrupted
+rotations, late deposits, and immature regtest coinbase outputs recoverable. Old-key recovery
+material is intentionally not deleted automatically after broadcasting a sweep.
+
 ## Hardware signing benchmark
 
 The Ledger and Trezor benchmarks reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.

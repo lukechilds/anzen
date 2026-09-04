@@ -22,7 +22,7 @@ use crate::core::{
     },
     storage::{
         CONFIG_FILE, DeviceFile, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, VaultConfig, load_config,
-        load_device_keys, read_json, write_json,
+        load_device_keys, read_json, write_json, write_private,
     },
     transactions::{
         build_controller_revocation_psbt, finalize_vault_psbt, sign_controller_psbt_inputs,
@@ -250,6 +250,41 @@ pub fn activate_phone_rotation(
         validate_rotation_hot_addresses(&new_phone, policy)?;
     }
 
+    // Keep both generations recoverable before sending any funds to the replacement key.
+    // This archive is deliberately retained after success, including for late deposits and
+    // immature regtest coinbase outputs that cannot be swept during rotation.
+    let sweep_psbt = Psbt::from_str(&package.sweep.psbt)?;
+    let archive = rotation_archive(data_dir, sweep_psbt.unsigned_tx.compute_txid());
+    preserve_rotation_keys(
+        data_dir,
+        &archive,
+        &old_config,
+        &new_config,
+        &pending,
+        backup,
+    )?;
+    let mut replacement_wallet = HotWallet::ephemeral(&new_phone)?;
+    let hot_destination = replacement_wallet.next_change_address()?;
+    let hot_sweep = {
+        let mut old_hot = HotWallet::open_or_create(data_dir)?;
+        backend.sync_hot_wallet(&mut old_hot)?;
+        old_hot.build_sweep(hot_destination.script_pubkey())?
+    };
+    let hot_wallet_sweep_txid = if let Some(transaction) = hot_sweep {
+        write_json(&archive.join("hot-wallet-sweep.json"), &transaction)?;
+        let expected = transaction.compute_txid();
+        let actual = backend
+            .broadcast(&transaction)
+            .context("failed to sweep the old hot wallet during phone rotation")?;
+        ensure!(
+            actual == expected,
+            "chain backend returned an unexpected hot sweep transaction ID"
+        );
+        Some(expected)
+    } else {
+        None
+    };
+
     // Controller state is fixed only for the lifetime of a key epoch. Consume every old state
     // before replacing the phone key, and return its small remainder to the replacement phone's
     // normal wallet rather than creating an unmanaged controller outpoint.
@@ -257,7 +292,6 @@ pub fn activate_phone_rotation(
     let revoked_controllers = if old_connectors.is_empty() {
         None
     } else {
-        let mut replacement_wallet = HotWallet::ephemeral(&new_phone)?;
         let destination = replacement_wallet.next_change_address()?;
         let phone_pubkey = XOnlyPublicKey::from_str(&old_config.phone_vault_pubkey)?;
         let hww_pubkey = XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?;
@@ -308,6 +342,10 @@ pub fn activate_phone_rotation(
     write_json(&data_dir.join(PHONE_BACKUP_FILE), backup)?;
 
     let mut hot = HotWallet::open_or_create(data_dir)?;
+    ensure!(
+        hot.next_change_address()? == hot_destination,
+        "hot sweep destination does not match the replacement phone wallet"
+    );
     if let Some((expected, _)) = &revoked_controllers {
         ensure!(
             hot.next_change_address()? == *expected,
@@ -341,6 +379,7 @@ pub fn activate_phone_rotation(
     Ok(RotationResult {
         sweep,
         controller_revocation_txid: revoked_controllers.map(|(_, txid)| txid),
+        hot_wallet_sweep_txid,
         old_address: old_config.vault_address,
         new_address: new_config.vault_address,
         new_phone_mnemonic: pending.mnemonic,
@@ -410,8 +449,34 @@ fn reset_workspace(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn rotation_archive(data_dir: &Path, txid: bitcoin::Txid) -> PathBuf {
+    data_dir.join("history").join(format!("rotation-{txid}"))
+}
+
+fn preserve_rotation_keys(
+    data_dir: &Path,
+    archive: &Path,
+    old_config: &VaultConfig,
+    new_config: &VaultConfig,
+    pending: &DeviceFile,
+    backup: &crate::core::social::CloudRecoveryBackup,
+) -> Result<()> {
+    write_json(&archive.join(CONFIG_FILE), old_config)?;
+    for relative in [PHONE_DEVICE_FILE, PHONE_BACKUP_FILE] {
+        let source = data_dir.join(relative);
+        if source.exists() {
+            write_private(&archive.join(relative), &fs::read(&source)?)?;
+        }
+    }
+    let replacement = archive.join("replacement");
+    write_json(&replacement.join(CONFIG_FILE), new_config)?;
+    write_json(&replacement.join(PHONE_DEVICE_FILE), pending)?;
+    write_json(&replacement.join(PHONE_BACKUP_FILE), backup)?;
+    Ok(())
+}
+
 fn archive_old_epoch(data_dir: &Path, old_config: &VaultConfig, txid: bitcoin::Txid) -> Result<()> {
-    let archive = data_dir.join("history").join(format!("rotation-{txid}"));
+    let archive = rotation_archive(data_dir, txid);
     fs::create_dir_all(&archive)
         .with_context(|| format!("failed to create rotation archive {}", archive.display()))?;
     write_json(&archive.join(CONFIG_FILE), old_config)?;
@@ -458,11 +523,15 @@ mod tests {
     use bitcoin::{
         Address, Amount, BlockHash, Network, OutPoint, Transaction, TxOut, Txid, hashes::Hash as _,
     };
+    use std::cell::RefCell;
     use std::str::FromStr;
 
     struct TestBackend {
         network: Network,
         utxos: Vec<VaultUtxo>,
+        hot_transactions: Vec<Transaction>,
+        broadcasts: RefCell<Vec<Transaction>>,
+        reject_broadcast: Option<usize>,
     }
 
     impl Blockchain for TestBackend {
@@ -492,12 +561,23 @@ mod tests {
         }
 
         fn broadcast(&self, transaction: &Transaction) -> Result<Txid> {
+            if self.reject_broadcast == Some(self.broadcasts.borrow().len()) {
+                bail!("test broadcast rejected");
+            }
+            self.broadcasts.borrow_mut().push(transaction.clone());
             Ok(transaction.compute_txid())
         }
     }
 
     impl HotWalletBackend for TestBackend {
-        fn sync_hot_wallet(&self, _wallet: &mut HotWallet) -> Result<()> {
+        fn sync_hot_wallet(&self, wallet: &mut HotWallet) -> Result<()> {
+            wallet.wallet.apply_unconfirmed_txs(
+                self.hot_transactions
+                    .iter()
+                    .chain(self.broadcasts.borrow().iter())
+                    .cloned()
+                    .map(|transaction| (transaction, 1)),
+            );
             Ok(())
         }
     }
@@ -520,6 +600,9 @@ mod tests {
             .script_pubkey();
         let backend = TestBackend {
             network,
+            hot_transactions: Vec::new(),
+            broadcasts: RefCell::default(),
+            reject_broadcast: None,
             utxos: vec![VaultUtxo {
                 outpoint: OutPoint::new(Txid::all_zeros(), 0),
                 txout: TxOut {
@@ -572,5 +655,122 @@ mod tests {
             second.package.new_phone_vault_pubkey,
             first.package.new_phone_vault_pubkey
         );
+    }
+
+    #[test]
+    fn rotation_sweeps_hot_coins_and_keeps_both_key_generations_recoverable() {
+        check_hot_rotation(None);
+    }
+
+    #[test]
+    fn failed_rotation_preserves_keys_after_the_hot_sweep_has_broadcast() {
+        check_hot_rotation(Some(1));
+    }
+
+    fn check_hot_rotation(reject_broadcast: Option<usize>) {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = crate::test_support::initialize(dir.path()).unwrap();
+        let config = initialized.config;
+        let hot_address = HotWallet::open_or_create(dir.path())
+            .unwrap()
+            .next_receive_address()
+            .unwrap();
+        let funding = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: OutPoint::new(Txid::all_zeros(), 1),
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000_000),
+                script_pubkey: hot_address.script_pubkey(),
+            }],
+        };
+        let backend = TestBackend {
+            network: Network::Regtest,
+            utxos: vec![VaultUtxo {
+                outpoint: OutPoint::new(Txid::all_zeros(), 0),
+                txout: TxOut {
+                    value: Amount::from_sat(200_000_000),
+                    script_pubkey: config
+                        .vault_address
+                        .parse::<Address<_>>()
+                        .unwrap()
+                        .require_network(Network::Regtest)
+                        .unwrap()
+                        .script_pubkey(),
+                },
+                confirmation_height: 1,
+            }],
+            hot_transactions: vec![funding.clone()],
+            broadcasts: RefCell::default(),
+            reject_broadcast,
+        };
+        let proposal = create_phone_rotation(dir.path(), &backend).unwrap();
+        let approved = cold_wallet::approve_phone_rotation(dir.path(), &proposal).unwrap();
+        let sweep_txid = Psbt::from_str(&approved.sweep.psbt)
+            .unwrap()
+            .unsigned_tx
+            .compute_txid();
+        let archive = rotation_archive(dir.path(), sweep_txid);
+        let result = activate_phone_rotation(dir.path(), &backend, &approved);
+        if reject_broadcast.is_some() {
+            assert!(format!("{:#}", result.unwrap_err()).contains("test broadcast rejected"));
+            assert_eq!(backend.broadcasts.borrow().len(), 1);
+            assert_eq!(
+                load_device_keys(dir.path(), PHONE_DEVICE_FILE)
+                    .unwrap()
+                    .mnemonic
+                    .to_string(),
+                initialized.phone_mnemonic
+            );
+        } else {
+            let result = result.unwrap();
+            assert!(result.hot_wallet_sweep_txid.is_some());
+            let mut replacement = HotWallet::open_or_create(dir.path()).unwrap();
+            backend.sync_hot_wallet(&mut replacement).unwrap();
+            let coins = replacement.wallet.list_unspent().collect::<Vec<_>>();
+            assert_eq!(coins.len(), 1);
+            assert_eq!(
+                coins[0].outpoint.txid,
+                result.hot_wallet_sweep_txid.unwrap()
+            );
+            assert!(coins[0].txout.value.to_sat() > 999_000);
+        }
+        let archived_phone = load_device_keys(&archive, PHONE_DEVICE_FILE).unwrap();
+        assert_eq!(
+            archived_phone.mnemonic.to_string(),
+            initialized.phone_mnemonic
+        );
+        let replacement =
+            load_device_keys(&archive.join("replacement"), PHONE_DEVICE_FILE).unwrap();
+        assert_eq!(
+            replacement.vault_pubkey.to_string(),
+            approved.new_phone_vault_pubkey
+        );
+        let archived_backup: crate::core::social::CloudRecoveryBackup =
+            read_json(&archive.join(PHONE_BACKUP_FILE)).unwrap();
+        let hww = load_device_keys(dir.path(), crate::core::storage::HWW_DEVICE_FILE).unwrap();
+        assert_eq!(
+            crate::core::social::decrypt_with_hww(&archived_backup, &hww.seed)
+                .unwrap()
+                .phone_mnemonic,
+            initialized.phone_mnemonic
+        );
+        let signed_sweep: Transaction = read_json(&archive.join("hot-wallet-sweep.json")).unwrap();
+        assert_eq!(
+            signed_sweep.input[0].previous_output,
+            OutPoint::new(funding.compute_txid(), 0)
+        );
+        assert_eq!(
+            signed_sweep.output[0].script_pubkey,
+            HotWallet::ephemeral(&replacement)
+                .unwrap()
+                .next_change_address()
+                .unwrap()
+                .script_pubkey()
+        );
+        assert_eq!(signed_sweep.input[0].witness.len(), 1);
     }
 }

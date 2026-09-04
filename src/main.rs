@@ -540,6 +540,10 @@ fn run_phone(
             if let Some(txid) = result.controller_revocation_txid {
                 println!("Old policy controllers revoked: {txid}");
             }
+            if let Some(txid) = result.hot_wallet_sweep_txid {
+                println!("Old hot-wallet funds swept to replacement phone: {txid}");
+            }
+            println!("Previous and replacement recovery keys retained in the rotation archive");
             println!("Old vault address: {}", result.old_address);
             println!("New vault address: {}", result.new_address);
             println!("New phone mnemonic: {}", result.new_phone_mnemonic);
