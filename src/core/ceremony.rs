@@ -7,7 +7,7 @@ use super::{
     storage::{VaultConfig, read_json, write_json, write_private},
     transactions::{
         create_policy_psbt, estimate_policy_vsize, sign_controller_psbt_inputs,
-        sign_vault_psbt_inputs,
+        sign_vault_psbt_inputs, validate_default_sighashes,
     },
     types::VaultUtxo,
 };
@@ -722,6 +722,9 @@ pub fn validate_batch(
 ) -> Result<VaultPolicy> {
     if manifest.version != 5 || manifest.network != config.network {
         bail!("unsupported ceremony manifest or network mismatch");
+    }
+    for transaction in manifest_transactions(manifest) {
+        validate_default_sighashes(&read_psbt(&batch_dir.join(&transaction.psbt_file))?)?;
     }
     if manifest.vault_descriptor != config.vault_descriptor
         || manifest.vault_address != config.vault_address
@@ -2096,6 +2099,39 @@ mod tests {
                     "presigned policy actions must remain incomplete until a device signs their controller input"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn hww_rejects_unsupported_sighash_before_signing_any_batch_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = initialize(dir.path()).unwrap();
+        let batch = dir.path().join("batch");
+        let manifest = prepare_from_utxos(
+            dir.path(),
+            &initialized.config,
+            &[fake_utxo(&initialized.config, 200_000_000)],
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+            10_000_000,
+            &batch,
+        )
+        .unwrap();
+        let path = batch.join(&manifest.allowances.last().unwrap().authorization.psbt_file);
+        let mut psbt = read_psbt(&path).unwrap();
+        psbt.inputs[0].sighash_type = Some(bitcoin::sighash::TapSighashType::All.into());
+        write_psbt(&path, &psbt).unwrap();
+        let before = manifest_transactions(&manifest)
+            .iter()
+            .map(|transaction| {
+                let path = batch.join(&transaction.psbt_file);
+                (path.clone(), fs::read(path).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let error = cold_wallet::approve_policy(dir.path(), &batch).unwrap_err();
+        assert!(error.to_string().contains("SIGHASH_DEFAULT"));
+        assert!(!load_manifest(&batch).unwrap().hww_approved);
+        for (path, contents) in before {
+            assert_eq!(fs::read(path).unwrap(), contents);
         }
     }
 

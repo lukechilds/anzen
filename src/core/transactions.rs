@@ -206,6 +206,7 @@ pub fn sign_vault_psbt_inputs(
     keypair: &Keypair,
     input_indexes: &[usize],
 ) -> Result<()> {
+    validate_default_sighashes(psbt)?;
     let secp = Secp256k1::new();
     let (signing_pubkey, _) = XOnlyPublicKey::from_keypair(keypair);
     let leaf = policy.leaf(path)?;
@@ -249,6 +250,7 @@ pub fn sign_controller_psbt_inputs(
     keypair: &Keypair,
     input_indexes: &[usize],
 ) -> Result<()> {
+    validate_default_sighashes(psbt)?;
     let secp = Secp256k1::new();
     let (signing_pubkey, _) = XOnlyPublicKey::from_keypair(keypair);
     let leaf = policy.leaf(path)?;
@@ -300,6 +302,7 @@ pub fn verify_vault_psbt_signatures(
     signing_pubkey: XOnlyPublicKey,
     input_indexes: &[usize],
 ) -> Result<()> {
+    validate_default_sighashes(psbt)?;
     let secp = Secp256k1::verification_only();
     let leaf = policy.leaf(path)?;
     for &index in input_indexes {
@@ -334,6 +337,7 @@ pub fn verify_controller_psbt_signatures(
     signing_pubkey: XOnlyPublicKey,
     input_indexes: &[usize],
 ) -> Result<()> {
+    validate_default_sighashes(psbt)?;
     let secp = Secp256k1::verification_only();
     let leaf = policy.leaf(path)?;
     for &index in input_indexes {
@@ -361,7 +365,22 @@ pub fn verify_controller_psbt_signatures(
     Ok(())
 }
 
+/// Every policy signature must commit to the complete transaction. Check the PSBT input field
+/// that actually selects the digest, not just the type attached to an existing signature.
+/// An omitted field means SIGHASH_DEFAULT under BIP371 and is safe to accept.
+pub(crate) fn validate_default_sighashes(psbt: &Psbt) -> Result<()> {
+    for (index, input) in psbt.inputs.iter().enumerate() {
+        if let Some(sighash_type) = input.sighash_type {
+            if sighash_type != PsbtSighashType::from(TapSighashType::Default) {
+                bail!("PSBT input {index} must use SIGHASH_DEFAULT");
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn finalize_vault_psbt(mut psbt: Psbt) -> Result<Transaction> {
+    validate_default_sighashes(&psbt)?;
     let secp = Secp256k1::verification_only();
     psbt.finalize_mut(&secp)
         .map_err(|errors| anyhow::anyhow!("unable to finalize vault PSBT: {errors:?}"))?;
@@ -511,6 +530,153 @@ mod tests {
         };
         let psbt = create_vault_psbt(tx, &[prevout], &policy).unwrap();
         (policy, phone, hww, psbt)
+    }
+
+    #[test]
+    fn vault_and_controller_signatures_require_default_sighash_metadata() {
+        let (vault, phone, hww, unsigned) = fixture(Sequence::MAX);
+        let controller = ControllerPolicy::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
+        let controller_unsigned = create_controller_psbt(
+            unsigned.unsigned_tx.clone(),
+            &[TxOut {
+                value: Amount::from_sat(20_000_000),
+                script_pubkey: controller.address.script_pubkey(),
+            }],
+            &controller,
+        )
+        .unwrap();
+        let mut vault_signed = unsigned.clone();
+        sign_vault_psbt(
+            &mut vault_signed,
+            &vault,
+            SpendPath::Cooperative,
+            &phone.vault_keypair,
+        )
+        .unwrap();
+        let mut controller_signed = controller_unsigned.clone();
+        sign_controller_psbt_inputs(
+            &mut controller_signed,
+            &controller,
+            ControllerPath::Phone,
+            &phone.vault_keypair,
+            &[0],
+        )
+        .unwrap();
+
+        // Only exercise rejection: no signatures using these modes should ever be produced.
+        for raw_type in [1, 2, 3, 0x81, 0x82, 0x83, 0xff] {
+            let rejected_type = Some(PsbtSighashType::from_u32(raw_type));
+            let mut psbt = unsigned.clone();
+            psbt.inputs[0].sighash_type = rejected_type;
+            let error = sign_vault_psbt(
+                &mut psbt,
+                &vault,
+                SpendPath::Cooperative,
+                &phone.vault_keypair,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("SIGHASH_DEFAULT"));
+            assert!(psbt.inputs[0].tap_script_sigs.is_empty());
+
+            let mut psbt = controller_unsigned.clone();
+            psbt.inputs[0].sighash_type = rejected_type;
+            assert!(
+                sign_controller_psbt_inputs(
+                    &mut psbt,
+                    &controller,
+                    ControllerPath::Phone,
+                    &phone.vault_keypair,
+                    &[0],
+                )
+                .is_err()
+            );
+            assert!(psbt.inputs[0].tap_script_sigs.is_empty());
+
+            let mut psbt = vault_signed.clone();
+            psbt.inputs[0].sighash_type = rejected_type;
+            assert!(
+                verify_vault_psbt_signature(
+                    &psbt,
+                    &vault,
+                    SpendPath::Cooperative,
+                    phone.vault_pubkey,
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("SIGHASH_DEFAULT")
+            );
+            assert!(
+                finalize_vault_psbt(psbt)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("SIGHASH_DEFAULT")
+            );
+
+            let mut psbt = controller_signed.clone();
+            psbt.inputs[0].sighash_type = rejected_type;
+            assert!(
+                verify_controller_psbt_signatures(
+                    &psbt,
+                    &controller,
+                    ControllerPath::Phone,
+                    phone.vault_pubkey,
+                    &[0],
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("SIGHASH_DEFAULT")
+            );
+        }
+    }
+
+    #[test]
+    fn default_sighash_can_be_explicit_or_omitted() {
+        let (policy, phone, hww, unsigned) = fixture(Sequence::MAX);
+        for field in [None, Some(TapSighashType::Default.into())] {
+            let mut psbt = unsigned.clone();
+            psbt.inputs[0].sighash_type = field;
+            for keys in [&phone, &hww] {
+                sign_vault_psbt(
+                    &mut psbt,
+                    &policy,
+                    SpendPath::Cooperative,
+                    &keys.vault_keypair,
+                )
+                .unwrap();
+                verify_vault_psbt_signature(
+                    &psbt,
+                    &policy,
+                    SpendPath::Cooperative,
+                    keys.vault_pubkey,
+                )
+                .unwrap();
+            }
+            assert!(finalize_vault_psbt(psbt).is_ok());
+        }
+    }
+
+    #[test]
+    fn unsupported_sighash_in_later_input_is_rejected_before_any_signing() {
+        let (policy, phone, _, mut psbt) = fixture(Sequence::MAX);
+        psbt.unsigned_tx
+            .input
+            .push(psbt.unsigned_tx.input[0].clone());
+        psbt.inputs.push(psbt.inputs[0].clone());
+        psbt.inputs[1].sighash_type = Some(TapSighashType::All.into());
+        assert!(
+            sign_vault_psbt(
+                &mut psbt,
+                &policy,
+                SpendPath::Cooperative,
+                &phone.vault_keypair
+            )
+            .is_err()
+        );
+        assert!(
+            psbt.inputs
+                .iter()
+                .all(|input| input.tap_script_sigs.is_empty())
+        );
     }
 
     #[test]
