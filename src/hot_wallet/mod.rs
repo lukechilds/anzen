@@ -406,11 +406,15 @@ pub fn activate_policy(
     let epoch_dir = data_dir
         .join("phone/transactions")
         .join(rollover.compute_txid().to_string());
-    if epoch_dir.join("activated.json").exists() && data_dir.join(SCHEDULE_FILE).exists() {
-        let active = load_schedule(data_dir)?;
-        if active.rollover_txid != rollover.compute_txid().to_string() {
-            bail!("this policy epoch has already been superseded; refusing to reactivate it");
-        }
+    let previous_epoch = if data_dir.join(SCHEDULE_FILE).is_file() {
+        Some(load_schedule(data_dir)?.rollover_txid.parse::<Txid>()?)
+    } else {
+        None
+    };
+    if epoch_dir.join("activated.json").exists()
+        && previous_epoch.is_some_and(|txid| txid != rollover.compute_txid())
+    {
+        bail!("this policy epoch has already been superseded; refusing to reactivate it");
     }
     write_json(
         &epoch_dir.join("approved-policy.json"),
@@ -501,6 +505,14 @@ pub fn activate_policy(
         .context("failed to broadcast rollover transaction")?;
     if broadcast_txid != rollover.compute_txid() {
         bail!("chain backend returned an unexpected rollover transaction ID");
+    }
+    // Pre-staging versions have no activation marker. Remember their active epoch too before
+    // replacing the pointer, so an already-confirmed legacy approval cannot reactivate it later.
+    if let Some(previous) = previous_epoch.filter(|txid| *txid != broadcast_txid) {
+        write_json(
+            &data_dir.join("phone/transactions").join(previous.to_string()).join("activated.json"),
+            &true,
+        ).context("rollover accepted but archiving the prior epoch failed; retry the same approved policy")?;
     }
     write_json(&data_dir.join(SCHEDULE_FILE), &schedule).context(
         "rollover accepted but schedule activation failed; retry the same approved policy",

@@ -156,6 +156,33 @@ fn rejected_rollover_preserves_active_schedule_limits_and_encrypted_transactions
 }
 
 #[test]
+fn upgrading_a_legacy_schedule_still_prevents_reactivating_the_superseded_epoch() {
+    let (dir, backend) = setup();
+    let old = approved_batch(dir.path(), &backend, "old", 10_000_000);
+    let old_schedule = hot_wallet::activate_policy(dir.path(), &backend, &old).unwrap();
+    // Legacy schedules have the same public format, but predate durable activation markers.
+    let marker = dir
+        .path()
+        .join("phone/transactions")
+        .join(&old_schedule.rollover_txid)
+        .join("activated.json");
+    fs::remove_file(&marker).unwrap();
+    let new = approved_batch(dir.path(), &backend, "new", 5_000_000);
+    let current = hot_wallet::activate_policy(dir.path(), &backend, &new).unwrap();
+    assert!(marker.exists());
+    assert!(
+        hot_wallet::activate_policy(dir.path(), &backend, &old)
+            .unwrap_err()
+            .to_string()
+            .contains("superseded")
+    );
+    assert_eq!(
+        hot_wallet::load_schedule(dir.path()).unwrap().rollover_txid,
+        current.rollover_txid
+    );
+}
+
+#[test]
 fn failed_initial_activation_does_not_enable_a_policy() {
     let (dir, backend) = setup();
     let batch = approved_batch(dir.path(), &backend, "proposal", 10_000_000);
