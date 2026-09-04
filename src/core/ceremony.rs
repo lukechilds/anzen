@@ -7,7 +7,7 @@ use super::{
     storage::{VaultConfig, read_json, write_json, write_private},
     transactions::{
         create_policy_psbt, estimate_policy_vsize, sign_controller_psbt_inputs,
-        sign_vault_psbt_inputs, validate_default_sighashes,
+        sign_vault_psbt_inputs, validate_default_sighashes, verify_vault_psbt_signatures,
     },
     types::VaultUtxo,
 };
@@ -17,6 +17,7 @@ use bitcoin::{
     absolute, transaction::Version,
 };
 use chrono::{DateTime, Utc};
+use miniscript::psbt::PsbtExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -713,6 +714,48 @@ pub fn build_policy_proposal_with_connectors(
 
 pub fn load_manifest(batch_dir: &Path) -> Result<BatchManifest> {
     read_json(&batch_dir.join("manifest.json"))
+}
+
+/// Verify the complete returned ceremony before the phone funds it. Finalize individual vault
+/// inputs on a temporary copy: this checks signatures and satisfaction metadata without creating
+/// any of the controller signatures that must remain deferred until a user executes an action.
+pub fn validate_approved_batch(
+    config: &VaultConfig,
+    manifest: &BatchManifest,
+    batch_dir: &Path,
+) -> Result<VaultPolicy> {
+    if !manifest.phone_approved || !manifest.hww_approved {
+        bail!("both phone and HWW approval are required before finalization");
+    }
+    let policy = validate_batch(config, manifest, batch_dir)?;
+    let phone_pubkey = config.phone_vault_pubkey.parse()?;
+    let hww_pubkey = config.hww_vault_pubkey.parse()?;
+    let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+    for transaction in manifest_transactions(manifest) {
+        let mut psbt = read_psbt(&batch_dir.join(&transaction.psbt_file))?;
+        let indexes = transaction_indexes(&transaction.vault_input_indexes)?;
+        for pubkey in [phone_pubkey, hww_pubkey] {
+            verify_vault_psbt_signatures(&psbt, &policy, SpendPath::Cooperative, pubkey, &indexes)
+                .with_context(|| {
+                    format!("invalid vault signatures in {}", transaction.psbt_file)
+                })?;
+        }
+        for index in indexes {
+            psbt.finalize_inp_mut(&secp, index).with_context(|| {
+                format!(
+                    "vault input {index} cannot finalize in {}",
+                    transaction.psbt_file
+                )
+            })?;
+        }
+        if transaction.psbt_file == manifest.rollover.psbt_file {
+            for index in transaction_indexes(&transaction.controller_input_indexes)? {
+                psbt.finalize_inp_mut(&secp, index)
+                    .context("rollover controller input cannot finalize")?;
+            }
+        }
+    }
+    Ok(policy)
 }
 
 pub fn validate_batch(

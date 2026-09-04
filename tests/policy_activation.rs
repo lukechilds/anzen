@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use anzen::{
     cold_wallet,
     core::{
-        ceremony::{SCHEDULE_FILE, Schedule},
+        ceremony::{self, SCHEDULE_FILE, Schedule},
         chain::{Blockchain, ChainTip},
         storage::{CONFIG_FILE, VaultConfig, initialize_vault, load_config},
         types::VaultUtxo,
@@ -18,6 +18,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 struct Backend {
@@ -186,4 +187,108 @@ fn accepted_rollover_can_resume_after_schedule_write_failure() {
         10_000_000
     );
     assert!(epoch.join("activated.json").is_file());
+}
+
+#[test]
+fn every_future_vault_signature_is_checked_before_funding_a_policy() {
+    let (dir, backend) = setup();
+    let old = approved_batch(dir.path(), &backend, "old", 10_000_000);
+    let old_schedule = hot_wallet::activate_policy(dir.path(), &backend, &old).unwrap();
+    let before = active_files(dir.path(), &old_schedule);
+    let batch = approved_batch(dir.path(), &backend, "new", 5_000_000);
+    let manifest = ceremony::load_manifest(&batch).unwrap();
+    let rollover = ceremony::read_psbt(&batch.join(&manifest.rollover.psbt_file)).unwrap();
+    for transaction in ceremony::manifest_transactions(&manifest)
+        .into_iter()
+        .skip(1)
+    {
+        let path = batch.join(&transaction.psbt_file);
+        let original = ceremony::read_psbt(&path).unwrap();
+        assert_eq!(original.inputs[0].tap_script_sigs.len(), 2);
+        for key in original.inputs[0].tap_script_sigs.keys() {
+            for missing in [true, false] {
+                let mut changed = original.clone();
+                if missing {
+                    changed.inputs[0].tap_script_sigs.remove(key);
+                } else {
+                    // A well-formed signature for a different transaction must also be rejected.
+                    changed.inputs[0]
+                        .tap_script_sigs
+                        .insert(*key, rollover.inputs[0].tap_script_sigs[key]);
+                }
+                ceremony::write_psbt(&path, &changed).unwrap();
+                let error = hot_wallet::activate_policy(dir.path(), &backend, &batch).unwrap_err();
+                assert!(error.to_string().contains("invalid vault signatures"));
+                assert_eq!(backend.broadcasts.borrow().len(), 1);
+                assert_eq!(active_files(dir.path(), &old_schedule), before);
+            }
+        }
+        ceremony::write_psbt(&path, &original).unwrap();
+    }
+}
+
+#[test]
+fn future_vault_inputs_must_be_finalizable_without_signing_their_connectors() {
+    let (dir, backend) = setup();
+    let batch = approved_batch(dir.path(), &backend, "proposal", 10_000_000);
+    let manifest = ceremony::load_manifest(&batch).unwrap();
+    let path = batch.join(&manifest.allowances[0].authorization.psbt_file);
+    let original = ceremony::read_psbt(&path).unwrap();
+    let mut missing_script = original.clone();
+    missing_script.inputs[0].tap_scripts.clear();
+    ceremony::write_psbt(&path, &missing_script).unwrap();
+    assert!(
+        hot_wallet::activate_policy(dir.path(), &backend, &batch)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot finalize")
+    );
+    assert!(backend.broadcasts.borrow().is_empty());
+    assert!(!dir.path().join(SCHEDULE_FILE).exists());
+
+    ceremony::write_psbt(&path, &original).unwrap();
+    let schedule = hot_wallet::activate_policy(dir.path(), &backend, &batch).unwrap();
+    let phone =
+        anzen::core::storage::load_device_keys(dir.path(), anzen::core::storage::PHONE_DEVICE_FILE)
+            .unwrap();
+    for entry in schedule.entries {
+        let artifact: ceremony::EncryptedTransaction =
+            anzen::core::storage::read_json(&dir.path().join(entry.authorization_file)).unwrap();
+        let blob = &artifact.encrypted_psbt;
+        let plaintext = anzen::core::crypto::decrypt(&phone.seed, &blob.purpose, blob).unwrap();
+        let psbt = bitcoin::Psbt::from_str(std::str::from_utf8(&plaintext).unwrap()).unwrap();
+        assert_eq!(psbt.inputs[0].tap_script_sigs.len(), 2);
+        assert!(psbt.inputs[0].final_script_witness.is_none());
+        assert!(psbt.inputs[1].tap_script_sigs.is_empty());
+        assert!(psbt.inputs[1].final_script_witness.is_none());
+    }
+}
+
+#[test]
+fn rotation_rejects_an_incompletely_signed_renewal_before_any_broadcast() {
+    let (dir, backend) = setup();
+    let config = load_config(dir.path()).unwrap();
+    cold_wallet::create_cloud_recovery_backup(dir.path(), &config).unwrap();
+    anzen::core::storage::set_policy_limits(dir.path(), 10_000_000, 50_000_000).unwrap();
+    let proposal = hot_wallet::create_phone_rotation(dir.path(), &backend).unwrap();
+    let mut approved = cold_wallet::approve_phone_rotation(dir.path(), &proposal).unwrap();
+    let renewal = approved.renewed_policy.as_mut().unwrap();
+    let path = &renewal
+        .manifest
+        .emergency_access
+        .as_ref()
+        .unwrap()
+        .withdrawal
+        .psbt_file;
+    let serialized = renewal.psbts.get_mut(path).unwrap();
+    let mut psbt = bitcoin::Psbt::from_str(serialized).unwrap();
+    psbt.inputs[0].tap_script_sigs.clear();
+    *serialized = psbt.to_string();
+    let error = hot_wallet::activate_phone_rotation(dir.path(), &backend, &approved).unwrap_err();
+    assert!(error.to_string().contains("invalid vault signatures"));
+    assert!(backend.broadcasts.borrow().is_empty());
+    assert_eq!(
+        load_config(dir.path()).unwrap().vault_descriptor,
+        config.vault_descriptor
+    );
 }

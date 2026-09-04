@@ -366,10 +366,7 @@ pub fn activate_policy(
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let manifest = ceremony::load_manifest(batch_dir)?;
-    if !manifest.phone_approved || !manifest.hww_approved {
-        bail!("both phone and HWW approval are required before finalization");
-    }
-    ceremony::validate_batch(&config, &manifest, batch_dir)?;
+    ceremony::validate_approved_batch(&config, &manifest, batch_dir)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
 
     let rollover = finalize_vault_psbt(read_psbt(&batch_dir.join(&manifest.rollover.psbt_file))?)?;

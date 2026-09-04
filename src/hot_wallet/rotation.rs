@@ -12,7 +12,7 @@ use crate::core::{
     DEFAULT_FEE_RATE_SAT_VB,
     ceremony::{
         DEFAULT_BATCH_DIR, PolicyLimits, PolicyPackage, SCHEDULE_FILE, build_policy_proposal,
-        materialize_policy_package, package_from_batch, validate_batch,
+        materialize_policy_package, package_from_batch, validate_approved_batch,
     },
     keys::DeviceKeys,
     policy::{ControllerPath, ControllerPolicy, VaultPolicy},
@@ -245,7 +245,7 @@ pub fn activate_phone_rotation(
         }
         reset_workspace(&policy_workspace)?;
         materialize_policy_package(policy, &policy_workspace)?;
-        validate_batch(&new_config, &policy.manifest, &policy_workspace)?;
+        validate_approved_batch(&new_config, &policy.manifest, &policy_workspace)?;
         validate_rotation_policy_binding(&old_config, &new_config, &package.sweep, policy)?;
         validate_rotation_hot_addresses(&new_phone, policy)?;
     }

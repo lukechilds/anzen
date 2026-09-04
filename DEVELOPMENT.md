@@ -84,6 +84,11 @@ epoch's `approved-policy.json`. Backends accept retries of an already-known tran
 phone refuses to reactivate an epoch it has already superseded. State files use private temporary
 files and a flushed atomic rename rather than truncating the active file in place.
 
+Before staging or funding a policy, the phone verifies both vault signatures on every transaction
+and finalizes each vault input on a temporary copy to check its satisfaction metadata. Future
+controller inputs remain unsigned. Phone rotation runs the same complete renewal check before
+broadcasting its hot-wallet sweep, controller revocation, or vault sweep.
+
 ## Hot-wallet address recovery
 
 The first Electrum sync of a new or restored database discovers both receive and change chains,
