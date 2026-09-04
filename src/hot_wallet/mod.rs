@@ -21,6 +21,37 @@ pub struct EmergencyBroadcastResult {
     pub transaction_txid: Txid,
 }
 
+/// The HWW hand-off is a plain protocol package; the phone's durable retry copy is encrypted.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub enum ApprovedPolicyInput {
+    Package(Box<crate::core::ceremony::PolicyPackage>),
+    Encrypted(crate::core::crypto::EncryptedBlob),
+}
+
+pub fn open_approved_policy(data_dir: &Path, input: ApprovedPolicyInput) -> Result<PolicyPackage> {
+    match input {
+        ApprovedPolicyInput::Package(package) => Ok(*package),
+        ApprovedPolicyInput::Encrypted(blob) => {
+            if !blob.purpose.starts_with("policy-activation-v1:") {
+                bail!("encrypted artifact is not an approved policy backup");
+            }
+            let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+            let plaintext = crate::core::crypto::decrypt(&phone.seed, &blob.purpose, &blob)?;
+            let package: PolicyPackage = serde_json::from_slice(&plaintext)?;
+            if blob.purpose
+                != format!(
+                    "policy-activation-v1:{}",
+                    package.manifest.rollover.unsigned_txid
+                )
+            {
+                bail!("encrypted policy backup does not match its rollover");
+            }
+            Ok(package)
+        }
+    }
+}
+
 use crate::core::{
     ceremony::{
         self, BatchManifest, EmergencyAccessSchedule, EmergencyTransactionKind,
@@ -383,7 +414,11 @@ pub fn activate_policy(
     }
     write_json(
         &epoch_dir.join("approved-policy.json"),
-        &ceremony::package_from_batch(batch_dir)?,
+        &crate::core::crypto::encrypt(
+            &phone.seed,
+            &format!("policy-activation-v1:{}", rollover.compute_txid()),
+            &serde_json::to_vec(&ceremony::package_from_batch(batch_dir)?)?,
+        )?,
     )?;
     write_json(&epoch_dir.join("rollover.json"), &rollover)?;
     let mut entries = Vec::with_capacity(manifest.allowances.len());

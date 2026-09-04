@@ -836,7 +836,7 @@ fn hww_confirm_policy(data_dir: &Path, proposal: &Path, output: &Path, yes: bool
 }
 
 fn phone_activate_policy(data_dir: &Path, rpc_args: &ChainArgs, approved: &Path) -> Result<()> {
-    let package: core::ceremony::PolicyPackage = read_artifact(approved)?;
+    let package = hot_wallet::open_approved_policy(data_dir, read_artifact(approved)?)?;
     if !package.manifest.phone_approved || !package.manifest.hww_approved {
         bail!("policy package requires both phone and HWW approval");
     }

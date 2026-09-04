@@ -57,6 +57,19 @@ fn real_regtest_runs_sequential_allowances_whole_chain_revocation_and_soft_limit
     rpc.mine(1, &mining_address).unwrap();
     let retried = hot_wallet::activate_policy(dir.path(), &rpc, &batch_dir).unwrap();
     assert_eq!(retried.rollover_txid, schedule.rollover_txid);
+    let encrypted_backup = dir
+        .path()
+        .join("phone/transactions")
+        .join(&schedule.rollover_txid)
+        .join("approved-policy.json");
+    assert_cmd::Command::cargo_bin("anzen")
+        .unwrap()
+        .arg("--data-dir")
+        .arg(dir.path())
+        .args(["phone", "activate-policy"])
+        .arg(encrypted_backup)
+        .assert()
+        .success();
     assert_eq!(rpc.scan_vault(&config).unwrap().len(), 2);
     assert_eq!(rpc.scan_connectors(&config).unwrap().len(), 1);
 

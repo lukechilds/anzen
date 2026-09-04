@@ -80,7 +80,8 @@ Each policy is staged under `phone/transactions/<rollover-txid>/`, including its
 signed rollover, encrypted future transactions, and candidate schedule. The active `phone/schedule.json`
 is atomically replaced only after the chain backend accepts the rollover; failed broadcasts leave the
 previous epoch intact. If broadcasting succeeds but a local write fails, retry activation using that
-epoch's `approved-policy.json`. Backends accept retries of an already-known transaction, while the
+epoch's `approved-policy.json`, encrypted with the phone key and accepted directly by
+`phone activate-policy`. Backends accept retries of an already-known transaction, while the
 phone refuses to reactivate an epoch it has already superseded. State files use private temporary
 files and a flushed atomic rename rather than truncating the active file in place.
 

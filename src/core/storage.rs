@@ -235,7 +235,27 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    #[cfg(unix)]
+    let mut created_parents = Vec::new();
+    #[cfg(unix)]
+    for ancestor in parent.ancestors() {
+        if ancestor.as_os_str().is_empty() || ancestor.exists() {
+            break;
+        }
+        created_parents.push(
+            ancestor
+                .parent()
+                .filter(|directory| !directory.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new(".")),
+        );
+    }
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    // A new epoch may also create several directories. Flush their containing directories so
+    // the staged files do not depend on directory entries that are still only in memory.
+    #[cfg(unix)]
+    for directory in created_parents.into_iter().rev() {
+        fs::File::open(directory)?.sync_all()?;
+    }
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     temporary
         .write_all(bytes)
@@ -284,6 +304,14 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn private_writes_create_nested_state_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("phone/transactions/epoch/schedule.json");
+        write_json(&path, &vec![1_u64, 2, 3]).unwrap();
+        assert_eq!(read_json::<Vec<u64>>(&path).unwrap(), vec![1, 2, 3]);
     }
 
     #[test]

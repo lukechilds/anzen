@@ -179,8 +179,22 @@ fn accepted_rollover_can_resume_after_schedule_write_failure() {
     assert!(epoch.join("approved-policy.json").is_file());
     assert!(epoch.join("rollover.json").is_file());
     assert!(epoch.join("schedule.json").is_file());
+    let stored = fs::read(epoch.join("approved-policy.json")).unwrap();
+    assert!(serde_json::from_slice::<ceremony::PolicyPackage>(&stored).is_err());
+    let input = serde_json::from_slice(&stored).unwrap();
+    let package = hot_wallet::open_approved_policy(dir.path(), input).unwrap();
+    let retry_batch = dir.path().join("retry-from-encrypted-backup");
+    ceremony::materialize_policy_package(&package, &retry_batch).unwrap();
+    let (other_phone, _) = setup();
+    assert!(
+        hot_wallet::open_approved_policy(
+            other_phone.path(),
+            serde_json::from_slice(&stored).unwrap()
+        )
+        .is_err()
+    );
     fs::remove_dir(&schedule_path).unwrap();
-    let schedule = hot_wallet::activate_policy(dir.path(), &backend, &batch).unwrap();
+    let schedule = hot_wallet::activate_policy(dir.path(), &backend, &retry_batch).unwrap();
     assert_eq!(schedule.rollover_txid, txid.to_string());
     assert_eq!(
         load_config(dir.path()).unwrap().monthly_limit_sats,
