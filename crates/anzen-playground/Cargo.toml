@@ -1,0 +1,31 @@
+[package]
+name = "anzen-playground"
+description = "Loopback regtest host for the browser playground: public chain data and encrypted cloud objects only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "anzen-playground"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+anzen-chain = { workspace = true, features = ["native"] }
+anzen-wallet = { workspace = true, features = ["native"] }
+axum.workspace = true
+bitcoin.workspace = true
+bitcoincore-rpc.workspace = true
+chrono.workspace = true
+clap.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+
+
+[dev-dependencies]
+bdk_wallet.workspace = true

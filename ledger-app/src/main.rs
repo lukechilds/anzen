@@ -6,7 +6,7 @@ extern crate alloc;
 mod benchmark;
 
 use alloc::format;
-use anzen_cold_signer::{PROTOCOL_NAME, benchmark::WorkloadSummary};
+use anzen_signer::{PROTOCOL_NAME, benchmark::WorkloadSummary};
 use benchmark::{BenchmarkContext, BenchmarkError};
 use core::sync::atomic::{AtomicBool, Ordering};
 use ledger_device_sdk::include_gif;

@@ -7,7 +7,7 @@ license = "MIT"
 description = "Anzen cold-signer app for Ledger devices"
 
 [dependencies]
-anzen-cold-signer = { path = "../cold-signer" }
+anzen-signer = { path = "../crates/anzen-signer" }
 ledger_device_sdk = { version = "=1.36.1", features = ["io_new", "sys"] }
 
 [features]

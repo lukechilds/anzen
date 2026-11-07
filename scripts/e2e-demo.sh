@@ -348,12 +348,12 @@ ceremony() {
     local proposal="${E2E_TEST}-policy.json"
     local approved="${E2E_TEST}-approved-policy.json"
     anzen_filtered '
-        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Policy controller address:|Policy controller reserve:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Allowance steps:|Allowance hop delay:|WARNING:|Rollover txid:|Rollover fee:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency hot address:|Phone signed PSBTs:|Phone-signed policy proposal:)/ { print }
+        /^(PHONE POLICY PROPOSAL|Cold storage descriptor:|Vault address:|Policy controller address:|Policy controller reserve:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Fee rate:|Total input:|Allowance steps:|Allowance hop delay:|WARNING:|Rollover txid:|Rollover fee:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency hot address:|Presigned transactions:|Policy proposal:)/ { print }
     ' "$MAIN" phone set-policy --monthly-limit "$monthly_limit" \
         --emergency-access-limit "$emergency_access_limit" \
         --output "$proposal" --now "$now"
     anzen_filtered '
-        /^(SIMULATED HWW|Policy controller address:|Policy controller reserve:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Allowance steps:|Allowance hop delay:|Rollover txid:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency hot address:|Phone signed PSBTs:|HWW validated and signed|HWW-approved policy:)/ { print }
+        /^(SIMULATED HWW|Policy controller address:|Policy controller reserve:|Monthly spending:|Monthly limit:|Emergency access:|Emergency access limit:|Emergency access delay:|Allowance steps:|Allowance hop delay:|Rollover txid:|Initial allowance-chain UTXO:|Rollover remainder:|Emergency trigger txid:|Emergency withdrawal txid:|Emergency hot address:|Presigned transactions:|WARNING:|HWW validated and signed|HWW-approved policy:)/ { print }
     ' "$MAIN" hww confirm-policy "$proposal" --output "$approved" --yes
     anzen_filtered '
         /^(Rollover broadcast:|Active monthly limit:|Encrypted allowance authorizations:|Active emergency access:|Encrypted emergency transaction set:|Emergency access:)/ { print }
@@ -409,12 +409,24 @@ confirm_transaction() {
     mine_blocks 1 "$1"
 }
 
+# A replacement phone starts empty. The HWW exports public vault state, then releases the cloud
+# backup's key sealed to the replacement's fresh key; the HWW never sees the phone seed.
 restore_phone() {
     local data_dir=$1
-    local recovery="${E2E_TEST}-phone-recovery.json"
-    anzen "$data_dir" hww decrypt-phone-backup \
-        "$data_dir/cloud/phone-seed-backup.json" --output "$recovery"
-    anzen "$data_dir" phone restore "$recovery"
+    local bundle="${E2E_TEST}-recovery-bundle.json"
+    local request="${E2E_TEST}-restore-request.json"
+    local response="${E2E_TEST}-restore-response.json"
+    show_file_command rm -rf -- "$data_dir/phone" "$data_dir/anzen.json"
+    rm -rf -- "$data_dir/phone" "$data_dir/anzen.json"
+    anzen_filtered '
+        /^(Simulated phone initialized|Phone vault key:)/ { print }
+    ' "$data_dir" phone init
+    anzen "$data_dir" hww export-recovery --output "$bundle"
+    anzen "$data_dir" phone import-recovery "$bundle"
+    anzen "$data_dir" phone restore-request \
+        "$data_dir/cloud/phone-seed-backup.json" --output "$request"
+    anzen "$data_dir" hww approve-restore "$request" --output "$response" --yes
+    anzen "$data_dir" phone restore "$response"
 }
 
 rotate_phone_key() {
@@ -424,6 +436,7 @@ rotate_phone_key() {
     anzen "$data_dir" phone rotate-key --output "$proposal"
     anzen "$data_dir" hww confirm-rotation "$proposal" --output "$approved" --yes
     anzen "$data_dir" phone activate-rotation "$approved"
+    anzen "$data_dir" hww adopt-rotation "$approved"
 }
 
 cooperative_sweep() {
@@ -663,7 +676,7 @@ test_lost_phone() {
         "$MAIN" phone receive-address
     success "Phone loss detected; wallet access blocked."
 
-    step "Use the HWW to decrypt the cloud backup, then rotate the phone key"
+    step "Restore the phone key through the HWW, then rotate to the replacement key"
     restore_phone "$MAIN"
     rotate_phone_key "$MAIN"
     first_delay_base=$(node_mtp)
@@ -719,7 +732,7 @@ test_stolen_phone() {
         "$attacker_dir" phone recover "$attacker_address"
     success "Hot funds exposed; cold vault remained protected."
 
-    step "The owner restores the phone backup with the HWW and rotates immediately"
+    step "The owner restores the phone key through the HWW and rotates immediately"
     show_file_command rm -- "$MAIN/phone/device.json"
     rm -- "$MAIN/phone/device.json"
     restore_phone "$MAIN"
@@ -803,11 +816,16 @@ test_lost_phone_no_cloud() {
     make_receiver recovery_address "Recovered owner"
 
     step "Simulate losing the phone and its cloud backup"
-    show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/cloud/phone-seed-backup.json"
-    rm -- "$MAIN/phone/device.json" "$MAIN/cloud/phone-seed-backup.json"
+    show_file_command rm -rf -- "$MAIN/phone" "$MAIN/anzen.json" "$MAIN/cloud/phone-seed-backup.json"
+    rm -rf -- "$MAIN/phone" "$MAIN/anzen.json" "$MAIN/cloud/phone-seed-backup.json"
+    anzen_filtered '
+        /^(Simulated phone initialized|Phone vault key:)/ { print }
+    ' "$MAIN" phone init
+    anzen "$MAIN" hww export-recovery --output "${E2E_TEST}-recovery-bundle.json"
+    anzen "$MAIN" phone import-recovery "${E2E_TEST}-recovery-bundle.json"
     expect_failure "there is no encrypted phone backup to restore" \
-        "$MAIN" hww decrypt-phone-backup "$MAIN/cloud/phone-seed-backup.json" \
-        --output "${E2E_TEST}-missing-recovery.json"
+        "$MAIN" phone restore-request "$MAIN/cloud/phone-seed-backup.json" \
+        --output "${E2E_TEST}-missing-restore.json"
     expect_failure "the HWW fallback is not mature yet" \
         "$MAIN" hww recover "$recovery_address"
     success "Missing backup confirmed; early HWW recovery blocked."
@@ -827,11 +845,17 @@ test_both_lost() {
     make_receiver recovery_address "Replacement owner"
 
     step "Simulate losing both devices while encrypted cloud data survives"
-    show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
-    rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
+    show_file_command rm -rf -- "$MAIN/phone" "$MAIN/anzen.json" "$MAIN/hww/device.json"
+    rm -rf -- "$MAIN/phone" "$MAIN/anzen.json" "$MAIN/hww/device.json"
+    anzen_filtered '
+        /^(Simulated phone initialized|Phone vault key:)/ { print }
+    ' "$MAIN" phone init
+    anzen "$MAIN" phone import-recovery "$MAIN/hww/vault-config.json"
+    anzen "$MAIN" phone restore-request "$MAIN/cloud/phone-seed-backup.json" \
+        --output "${E2E_TEST}-restore-request.json"
     expect_failure "the backup cannot be decrypted without the HWW" \
-        "$MAIN" hww decrypt-phone-backup "$MAIN/cloud/phone-seed-backup.json" \
-        --output "${E2E_TEST}-missing-hww-recovery.json"
+        "$MAIN" hww approve-restore "${E2E_TEST}-restore-request.json" \
+        --output "${E2E_TEST}-restore-response.json" --yes
     success "Both device keys lost; backup cannot be decrypted."
 
     target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
@@ -856,10 +880,16 @@ test_cloud_compromise() {
     cp "$MAIN/anzen.json" "$attacker_dir/anzen.json"
     show_file_command cp "$MAIN/cloud/phone-seed-backup.json" "$attacker_dir/cloud/phone-seed-backup.json"
     cp "$MAIN/cloud/phone-seed-backup.json" "$attacker_dir/cloud/phone-seed-backup.json"
-    expect_failure "cloud ciphertext alone cannot restore the phone" \
-        "$attacker_dir" hww decrypt-phone-backup \
+    anzen_filtered '
+        /^(Simulated phone initialized|Phone vault key:)/ { print }
+    ' "$attacker_dir" phone init
+    anzen "$attacker_dir" phone import-recovery "$attacker_dir/anzen.json"
+    anzen "$attacker_dir" phone restore-request \
         "$attacker_dir/cloud/phone-seed-backup.json" \
-        --output "${E2E_TEST}-cloud-recovery.json"
+        --output "${E2E_TEST}-cloud-restore-request.json"
+    expect_failure "cloud ciphertext alone cannot restore the phone" \
+        "$attacker_dir" hww approve-restore "${E2E_TEST}-cloud-restore-request.json" \
+        --output "${E2E_TEST}-cloud-restore-response.json" --yes
     expect_failure "cloud ciphertext alone cannot sign a cooperative sweep" \
         "$attacker_dir" phone create-sweep "$attacker_address" \
         --output "${E2E_TEST}-cloud-sweep.json"
@@ -877,7 +907,11 @@ test_social_recovery() {
     step "Create a recovery friend's OpenPGP key and add it with the HWW"
     anzen "$MAIN" social generate-friend-key --name "Alice <alice@example.test>" \
         --public-key "$friend_public" --private-key "$friend_private"
-    anzen "$MAIN" hww add-recovery-friend "$friend_public" --yes
+    anzen "$MAIN" phone add-recovery-friend "$friend_public" \
+        --output "${E2E_TEST}-backup-request.json"
+    anzen "$MAIN" hww confirm-backup "${E2E_TEST}-backup-request.json" \
+        --output "${E2E_TEST}-backup-response.json" --yes
+    anzen "$MAIN" phone store-backup "${E2E_TEST}-backup-response.json"
     printf 'Cloud backup contains one encrypted payload, one HWW key wrapper, and %s OpenPGP friend wrapper.\n' \
         "$(jq '.friends | length' "$MAIN/cloud/phone-seed-backup.json")"
     success "Phone key and descriptor protected for HWW and recovery friend."

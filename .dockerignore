@@ -1,7 +1,15 @@
 .git
 .anzen-data
 .vault-data
+.anzen-mainnet
+.vault-mainnet
+.playground-data
+.demo-data
+policy-proposal.json
+policy-approved.json
+mobile
 target
+**/target
 trezor-firmware
 **/*.swp
 **/.DS_Store

@@ -25,7 +25,7 @@ jobs:
 
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.85.0 --profile minimal --component clippy,rustfmt
+          rustup toolchain install 1.85.0 --profile minimal --component clippy,rustfmt --target thumbv7em-none-eabihf
           rustup override set 1.85.0
 
       - name: Restore Cargo build cache
@@ -35,16 +35,22 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-rust-1.85-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'cold-signer/Cargo.toml') }}
+          key: cargo-${{ runner.os }}-rust-1.85-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Check crate boundaries
+        run: ./scripts/check-boundaries.sh
 
       - name: Run unit and CLI tests
         run: cargo test --workspace --all-targets --locked
+
+      - name: Run browser transport tests
+        run: cargo test -p anzen-wallet --all-features --lib --locked
 
   real-node-tests:
     name: Real Bitcoin Core integration tests

@@ -1,0 +1,20 @@
+[package]
+name = "anzen-chain"
+description = "Chain access for Anzen hosts: the chain interface and the Bitcoin Core RPC backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["native"]
+native = ["dep:bdk_bitcoind_rpc", "dep:bitcoincore-rpc"]
+
+[dependencies]
+anyhow.workspace = true
+anzen-common.workspace = true
+bdk_bitcoind_rpc = { workspace = true, optional = true }
+bitcoin.workspace = true
+bitcoincore-rpc = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true

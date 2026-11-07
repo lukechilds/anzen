@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Anzen",
+    "slug": "anzen",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": ["./plugins/withAnzenRuntime"],
+    "ios": { "supportsTablet": false, "bundleIdentifier": "com.anzen.wallet" },
+    "android": { "package": "com.anzen.wallet", "allowBackup": false },
+    "web": { "bundler": "metro" }
+  }
+}

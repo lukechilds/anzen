@@ -1,0 +1,18 @@
+[package]
+name = "anzen-signer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Auditable, platform-independent Anzen cold-signer: review and sign protocol requests"
+
+[dependencies]
+anzen-protocol = { path = "../anzen-protocol" }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+
+[dev-dependencies]
+anzen-protocol = { path = "../anzen-protocol", features = ["software"] }
+bitcoin = { version = "0.32.9", features = ["rand-std"] }
+hex-literal = "1.1"
+serde_json = "1.0"
+sha2 = "0.10"

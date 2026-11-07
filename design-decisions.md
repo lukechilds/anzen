@@ -72,6 +72,12 @@ Phone-key rotation first uses a dynamic controller-only transaction to consume a
 
 The separation also lets rotation use the same validation path whether monthly and emergency features are enabled or disabled, and lets renewed policy reuse the normal rollover machinery. It is not a Bitcoin requirement. A future format could combine connector revocation with the cooperative sweep and make that sweep create the policy outputs directly, saving transactions and unconfirmed ancestors at the cost of coupling rotation validation to the policy layout. Because the MVP broadcasts these state transitions separately, production rotation must persist and rebroadcast each accepted transaction crash-safely before installing replacement state.
 
+## Why vault setup is a single tap
+
+Setup needs three things from the signer: its public key, its acceptance of the vault built from both keys, and its wrap of the phone's recovery-backup key. Once the phone has the signer's key, the other two are one request and one response, so setup is a single exchange while the devices are held together, as with Bitkey's hardware. The signer asks nothing during setup: no funds can move before a policy exists, the backup request is sealed by the phone key of the vault being accepted, and physical proximity both authenticates the channel and expresses consent. This replaces comparing vault addresses across a file transfer, which protected a channel the user could not see.
+
+Everything that signs remains a separate, explicit review on the signer. The spending policy is chosen after the first deposit because its presigned transactions spend real vault coins, and the signer shows it as a plain monthly amount and an emergency amount before approval. Messages are the same versioned objects over any link; a file exchange remains the fallback where no tap link exists.
+
 ## Trust and interoperability
 
 Anzen's security-critical behavior must remain enforceable without an Anzen company, server, update channel, or online cosigner. Chain backends provide data and broadcast transactions but cannot change a valid transaction or script. Cloud storage holds only encrypted recovery material and individually encrypted policy artifacts.
@@ -82,24 +88,28 @@ The protocol is intentionally split between hot-wallet and cold-wallet roles rat
 
 ## Library architecture
 
-The Rust library has three public modules with a one-way dependency boundary:
+The Rust workspace has two consumer-facing device crates over a small protocol core:
 
 ```text
-CLI / future apps
-├── hot_wallet ──┐
-├── cold_wallet ─┼──> core
-└── core ────────┘
+Wallet UI  ──> anzen-wallet ─────┬──> anzen-chain, anzen-common, anzen-storage
+Signer UI  ──> anzen-signer-app ─┤
+                                 └──> anzen-signer ──> anzen-protocol
+Ledger app ──> anzen-signer
 ```
 
-- `hot_wallet` owns phone keys, the BDK hot wallet, encrypted monthly/emergency policy transactions, phone recovery, and phone-key rotation. Future iOS and Android apps should build on this API.
-- `cold_wallet` owns the deliberately small HWW surface: backup encryption/decryption, complete policy review and signing, cooperative-sweep approval, offline HWW recovery signing, and rotation approval. It imports only `core` and has no BDK wallet, Electrum, Bitcoin Core, or `hot_wallet` dependency.
-- `core` contains shared serialized protocol objects, key derivation, Miniscript policy construction, PSBT construction and validation, authenticated encryption/OpenPGP recovery envelopes, storage formats, and chain backend interfaces. It has no dependency on either device implementation.
+- `anzen-protocol` is the one deterministic definition of the vault scripts, the annual policy graph, sweeps, revocations and their signature messages. It is `no_std` and builds every transaction from typed parameters, so the phone and every signer derive byte-identical transactions from the same request.
+- `anzen-signer` is the auditable hardware-wallet surface: it rebuilds each request with `anzen-protocol`, reports what it does, signs only what was reviewed, and keeps an epoch anchor that forces every renewal to conflict with or consume the previously approved policy. It is `no_std` and has no BDK wallet, Electrum, Bitcoin Core, filesystem or clock dependency.
+- `anzen-wallet` owns phone keys, the BDK hot wallet, encrypted monthly/emergency policy transactions, phone recovery, and phone-key rotation. Future iOS and Android apps build on this API.
+- `anzen-signer-app` hosts `anzen-signer` for the CLI, the mobile hardware-wallet mode and the browser signer: seed storage, persisted signer state, backups and restoration. It has no wallet or chain dependency.
+- `anzen-common` and `anzen-storage` hold shared host formats (keys, configuration, encrypted backups, device messages) and atomic private storage. They exist to avoid duplication, not as APIs that wallet UIs must understand; each device crate re-exports the shared types its consumers need.
 
-The Anzen CLI composes these APIs. `anzen phone *` dispatches only through `hot_wallet` and `core`; `anzen hww *` dispatches only through `cold_wallet` and `core`. Chain scanning and broadcasting for HWW recovery remain in the CLI, keeping the cold signer offline. Architecture tests enforce these boundaries.
+React Native is a presentation layer over these APIs, not a second implementation of the wallet. Policy validation, transaction construction, signing, balances, action eligibility, recovery, and durable workflow state belong to Rust. The same boundary applies to the native app and the React Native Web playground. See [Mobile application architecture](docs/mobile-architecture.md).
+
+The CLI composes only the two device crates. Chain scanning and broadcasting for HWW recovery stay outside the cold signer. `scripts/check-boundaries.sh` enforces the crate boundaries from the resolved dependency graph.
 
 ## Chain backends
 
-Bitcoin Core RPC and Electrum both implement the shared chain interface and can be used on regtest or mainnet. The CLI defaults to RPC on regtest and Electrum on mainnet for compatibility, while `--chain-backend` explicitly selects either implementation. RPC defaults to the conventional local ports; Electrum defaults to a local regtest server or a failover list of public mainnet TLS servers. `--rpc-url` and `--electrum-url` override those endpoints.
+Bitcoin Core RPC and Electrum both implement the shared chain interface. Electrum is always Electrum over WebSockets (`wss://`), through one shared Rust client in `anzen_wallet::electrum` used by the CLI, the native app and the browser; a platform supplies only the socket. Mutinynet uses two public servers with failover, and mainnet uses `wss://electrum.lu.ke`. Regtest uses Bitcoin Core RPC. The CLI defaults to RPC on regtest and Electrum on mainnet, while `--chain-backend` explicitly selects either implementation. RPC defaults to the conventional local ports; `--rpc-url` and `--electrum-url` (a `wss://` URL) override those endpoints.
 
 Both implementations verify the connected network before scanning or broadcasting. Public Electrum servers are an availability convenience, not a privacy or trust boundary; production users should prefer their own backend.
 

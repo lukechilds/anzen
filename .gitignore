@@ -1,5 +1,4 @@
 /target/
-/cold-signer/target/
 /ledger-app/target/
 /ledger-app/.benchmark-venv/
 /.anzen-data/
@@ -13,3 +12,19 @@
 *.sqlite-shm
 *.sqlite-wal
 .DS_Store
+/.playground-data/
+/mobile/node_modules/
+/mobile/.expo/
+/mobile/dist/
+/mobile/ios/
+/mobile/android/
+/mobile/test-results/
+/mobile/playwright-report/
+mobile/rust/target/
+mobile/modules/anzen-runtime/ios/AnzenMobile.xcframework*
+mobile/modules/anzen-runtime/android/src/main/jniLibs/
+mobile/modules/anzen-runtime/android/.cxx/
+mobile/modules/anzen-runtime/android/build/
+# Browser WASM is reproducibly built from mobile/wasm, not checked-in generated output.
+mobile/wasm/target/
+mobile/public/wasm/

@@ -6,54 +6,81 @@ This document describes the repository boundaries, dependency direction, and the
 
 ```text
 anzen/
-├── src/
-│   ├── core/             Shared protocol, policy, transaction, and storage logic
-│   ├── hot_wallet/       Phone-side keys, wallet state, policy execution, and recovery
-│   ├── cold_wallet/      Reference HWW role used by the CLI
-│   └── main.rs           CLI orchestration and chain interaction
-├── cold-signer/          Small `no_std` crate for embedded cold-signing logic
-├── ledger-app/           Ledger application; depends on `cold-signer`
-├── trezor-firmware/      Git submodule pointing to `lukechilds/trezor-firmware`
-├── test-vectors/         Canonical serialized vault and transaction-graph fixtures
-├── tests/                Rust architecture, CLI, and real-node integration tests
-└── scripts/              Docker, end-to-end, and firmware setup helpers
+├── crates/
+│   ├── anzen-protocol/          `no_std` protocol rules: scripts, transaction graphs, sighashes, wire requests
+│   ├── anzen-signer/            `no_std` cold signer: review and sign protocol requests, epoch state
+│   ├── anzen-signer-app/        Host HWW role (CLI, mobile hardware mode, browser signer)
+│   ├── anzen-wallet/            Phone role: hot wallet, policy execution, rotation and recovery
+│   ├── anzen-chain/             Chain interface and the Bitcoin Core RPC backend
+│   ├── anzen-common/            Shared host formats: keys, storage, backups, device messages
+│   ├── anzen-storage/           Atomic private files, protected and browser storage
+│   ├── anzen-cli/               `anzen` binary; composes the two roles for the simulation
+│   ├── anzen-playground/        Loopback regtest host for the browser playground
+│   └── anzen-integration-tests/ Cross-role, vector and real-node integration tests
+├── ledger-app/                  Ledger application; depends on `anzen-signer`
+├── mobile/                      React Native app, native (`mobile/rust`) and WASM (`mobile/wasm`) adapters
+├── trezor-firmware/             Git submodule pointing to `lukechilds/trezor-firmware`
+├── test-vectors/                Canonical serialized vault and transaction-graph fixtures
+└── scripts/                     Docker, end-to-end, boundary and firmware setup helpers
 ```
 
 The root repository is MIT licensed. `trezor-firmware/` is a separate GPLv3 repository and retains Trezor's upstream history and license. The submodule boundary prevents the firmware fork from being presented as part of the root MIT codebase.
 
 ## Dependency boundaries
 
-The desktop/reference implementation has a deliberately one-way dependency graph:
+The dependency graph is one-way. Each device role depends only on the protocol and host
+support, never on the other role:
 
 ```text
-                         ┌── hot_wallet ──┐
-Anzen CLI / future apps ─┤                ├──> core
-                         └── cold_wallet ─┘
-
-Ledger app ──> cold-signer
+anzen-cli ──────────┬──> anzen-wallet ──────┬──> anzen-chain ──┐
+mobile/rust, wasm ──┤                       │                  ├──> anzen-common ──> anzen-storage
+                    └──> anzen-signer-app ──┼──────────────────┘
+                                            └──> anzen-signer ──> anzen-protocol
+Ledger app ──────────────────────────────────────> anzen-signer ──> anzen-protocol
+anzen-playground ──> anzen-wallet (public, watch-only sync)
 
 Trezor firmware ──> independent Anzen protocol implementation
                 └──> canonical protocol test vectors
 ```
 
-- `core` contains shared serialized objects, key derivation, Miniscript policy construction, PSBT construction and validation, encryption formats, storage types, and chain interfaces. It does not depend on either device implementation.
-- `hot_wallet` owns phone keys, the BDK wallet, encrypted policy artifacts, phone-side execution, and phone recovery and rotation operations.
-- `cold_wallet` is the reference implementation of the hardware-wallet role used by the CLI. It has no hot-wallet or chain-backend dependency.
-- `cold-signer` is the small, platform-independent `no_std` surface intended for embedded hardware-wallet applications. It currently contains the deterministic signing benchmark; protocol parsing and validation should move here as those interfaces stabilize.
-- `ledger-app` is an independently built Ledger firmware crate and directly consumes `cold-signer`.
+- `anzen-protocol` is the single definition of what Anzen transactions are. It deterministically builds the vault and controller scripts, the annual policy graph, sweeps and revocations, and their BIP341 signature messages from typed parameters. It is `no_std`, has no `bitcoin` or `miniscript` dependency, and takes hashing and curve operations through a `Crypto` trait so hardware can use device primitives.
+- `anzen-signer` decides everything the hardware wallet signs. Requests carry parameters, never transactions: the signer rebuilds each transaction with `anzen-protocol`, returns a review, and signs only the reviewed request. It persists an epoch anchor so every renewed policy must conflict with or consume the previously approved one. It is `no_std`, with no filesystem, network, clock or randomness of its own.
+- `anzen-signer-app` wraps the signer for host platforms: seed storage, persisted signer state, pairing, cloud backup approval and restoration. It has no wallet or chain-backend dependency.
+- `anzen-wallet` owns phone keys, the BDK wallet, encrypted policy artifacts, policy execution, and phone recovery and rotation. It produces signer requests and checks signer approvals against the transactions it built from the same protocol code.
+- `anzen-chain` defines the chain interface and contains the Bitcoin Core RPC backend (regtest). Electrum over WebSocket, the transport for Mutinynet and mainnet on every platform, lives in `anzen-wallet` (`electrum`), together with the live-update listener (`watch`); each platform supplies only the socket. `anzen-common` holds shared host formats (device keys, configuration, encrypted backups, social recovery, device messages). `anzen-storage` provides atomic private file writes and protected storage.
+- `ledger-app` is an independently built Ledger firmware crate and directly consumes `anzen-signer`.
 - `trezor-firmware` cannot consume the Rust crate through Trezor's normal firmware architecture. It implements the same protocol independently and proves compatibility against the same deterministic vectors. Production code should live under `core/src/apps/anzen/`, with protocol messages in `common/protob/messages-anzen.proto`, Python host support in `python/src/trezorlib/anzen.py`, and device tests in `tests/device_tests/anzen/`.
 
-The tests in `tests/architecture.rs` enforce the root Rust dependency boundaries. Hardware implementations must never gain network access or depend on phone-wallet implementation code.
+`scripts/check-boundaries.sh` enforces these boundaries from the resolved dependency graph: it
+builds `anzen-protocol` and `anzen-signer` for a bare-metal target, allowlists the signer's entire
+dependency tree, and denies wallet, chain and network crates to the signer side. Hardware
+implementations must never gain network access or depend on phone-wallet implementation code.
+
+`test-vectors/policy-graphs.json` pins the protocol builder byte-for-byte across valid and rejected
+policies, and `anzen-protocol`'s tests compare its scripts, addresses, transactions and sighashes
+against `rust-bitcoin` and `miniscript`.
 
 ## Root Rust development
 
-The normal Rust checks cover the root package and `cold-signer` workspace member:
+The React Native app and two-device web playground are documented in
+[`mobile/README.md`](mobile/README.md). See the
+[mobile architecture decision](docs/mobile-architecture.md) for Rust-owned business logic,
+role-specific consumer APIs and native storage/transport boundaries. Native Rust is an
+independently built workspace, so adding a mobile target does not change CLI Docker builds.
+
+The normal Rust checks cover every workspace crate:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+./scripts/check-boundaries.sh
 cargo test --workspace --all-targets --locked
+cargo test -p anzen-wallet --all-features --lib --locked
 ```
+
+The real-node tests are ignored by default and run in Docker by `./scripts/run-tests.sh`, or
+directly against a regtest node with, for example,
+`cargo test -p anzen-integration-tests --test regtest_ceremony -- --ignored --test-threads=1`.
 
 The Ledger application uses a separate embedded target and workspace:
 
@@ -103,7 +130,7 @@ Phone restoration calls `HotWallet::request_full_scan` even if an old database s
 
 The Ledger and Trezor benchmarks reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.
 
-The resulting workload is 15 transactions and 26 HWW signatures: twelve rollover-input signatures plus one for each of fourteen future actions. Dynamic revocation and cancellation are deliberately excluded because either device constructs and signs those controller-only transactions only when requested. `cold-signer` checks every BIP341 sighash against `rust-bitcoin` and pins the controller script, first and last sighashes, and aggregate digest. Trezor independently pins those same values, preventing the two firmware implementations from silently benchmarking different graphs.
+The resulting workload is 15 transactions and 26 HWW signatures: twelve rollover-input signatures plus one for each of fourteen future actions. Dynamic revocation and cancellation are deliberately excluded because either device constructs and signs those controller-only transactions only when requested. `anzen-signer`'s benchmark checks every BIP341 sighash against `rust-bitcoin` and pins the controller script, first and last sighashes, and aggregate digest. Trezor independently pins those same values, preventing the two firmware implementations from silently benchmarking different graphs.
 
 Build Ledger Flex with the command above. From a configured Trezor Nix environment, run its focused compatibility test with:
 

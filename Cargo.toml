@@ -1,28 +1,29 @@
-[package]
-name = "anzen"
+[workspace]
+members = ["crates/*"]
+exclude = ["ledger-app", "mobile/rust", "mobile/wasm"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-description = "Anzen renewable Bitcoin vault CLI"
-autobins = false
 
-[workspace]
-members = [".", "cold-signer"]
-exclude = ["ledger-app"]
-default-members = ["."]
-resolver = "3"
-
-[[bin]]
-name = "anzen"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
+anzen-chain = { path = "crates/anzen-chain", default-features = false }
+anzen-common = { path = "crates/anzen-common" }
+anzen-protocol = { path = "crates/anzen-protocol" }
+anzen-signer = { path = "crates/anzen-signer" }
+anzen-signer-app = { path = "crates/anzen-signer-app" }
+anzen-storage = { path = "crates/anzen-storage" }
+anzen-wallet = { path = "crates/anzen-wallet", default-features = false }
 anyhow = "1.0"
+axum = "0.8"
 base64 = "0.22"
 bdk_bitcoind_rpc = "0.22.0"
-bdk_electrum = "0.23.2"
-bdk_wallet = { version = "3.1.0", features = ["keys-bip39", "rusqlite"] }
+bdk_electrum = { version = "0.23.2", default-features = false }
+bdk_wallet = "3.1.0"
+bip39 = "2.2.2"
 bitcoin = { version = "0.32.9", features = ["base64", "rand-std", "serde"] }
 bitcoincore-rpc = "0.19.0"
 chacha20poly1305 = "0.10"
@@ -32,15 +33,18 @@ hkdf = "0.12"
 miniscript = { version = "12.3.5", features = ["serde"] }
 pgp = { version = "=0.17.0", default-features = false }
 rand = "0.8"
+# Native Electrum-over-WebSocket client. TLS uses ring, which cross-compiles to iOS/Android.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 tempfile = "3.23"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "signal"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tungstenite = { version = "0.27", default-features = false, features = ["handshake"] }
+wasm-bindgen = "=0.2.126"
+webpki-roots = "1.0"
 zeroize = { version = "1.8", features = ["derive"] }
-
-[dev-dependencies]
-assert_cmd = "2.0"
-predicates = "3.1"
 
 [profile.release]
 lto = "thin"

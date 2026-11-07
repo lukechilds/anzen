@@ -1,0 +1,44 @@
+[package]
+name = "anzen-wallet"
+description = "Anzen phone wallet: hot wallet, vault policy execution, rotation and recovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["native"]
+native = ["electrum", "dep:bdk_bitcoind_rpc", "dep:bitcoincore-rpc", "dep:rustls", "dep:tungstenite", "dep:webpki-roots", "bdk_wallet/rusqlite", "anzen-chain/native"]
+# Electrum over WebSocket, the public chain transport on every platform. The browser supplies
+# the socket; `native` adds a Rust WebSocket client.
+electrum = ["dep:bdk_electrum"]
+
+[dependencies]
+anyhow.workspace = true
+anzen-chain.workspace = true
+anzen-common.workspace = true
+anzen-protocol = { workspace = true, features = ["software"] }
+anzen-storage.workspace = true
+bdk_bitcoind_rpc = { workspace = true, optional = true }
+bdk_electrum = { workspace = true, optional = true }
+bdk_wallet = { workspace = true, features = ["keys-bip39"] }
+bitcoin.workspace = true
+bitcoincore-rpc = { workspace = true, optional = true }
+chrono.workspace = true
+miniscript.workspace = true
+rand.workspace = true
+rustls = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+tungstenite = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
+zeroize.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+
+[dev-dependencies]
+anzen-signer-app.workspace = true
+axum.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

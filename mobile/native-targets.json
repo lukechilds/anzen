@@ -1,0 +1,15 @@
+{
+  "android": {
+    "minSdk": 26,
+    "minNdkMajor": 27,
+    "pageSize": 16384,
+    "targets": [
+      { "rust": "aarch64-linux-android", "abi": "arm64-v8a", "compiler": "aarch64-linux-android" },
+      { "rust": "x86_64-linux-android", "abi": "x86_64", "compiler": "x86_64-linux-android" }
+    ]
+  },
+  "ios": {
+    "deploymentTarget": "16.4",
+    "targets": ["aarch64-apple-ios", "aarch64-apple-ios-sim"]
+  }
+}

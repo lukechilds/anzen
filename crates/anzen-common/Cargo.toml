@@ -1,0 +1,30 @@
+[package]
+name = "anzen-common"
+description = "Formats and envelopes shared by the Anzen wallet and software signer applications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+anzen-protocol = { workspace = true, features = ["software"] }
+anzen-storage.workspace = true
+base64.workspace = true
+bip39 = { workspace = true, features = ["rand"] }
+bitcoin.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+miniscript.workspace = true
+pgp.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+tempfile.workspace = true

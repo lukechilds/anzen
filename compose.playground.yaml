@@ -1,0 +1,27 @@
+name: anzen-playground
+
+services:
+  bitcoind:
+    image: bitcoin/bitcoin:28.1
+    command:
+      - -regtest=1
+      - -server=1
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcuser=anzen
+      - -rpcpassword=anzen
+      - -fallbackfee=0.00001
+      # Regtest otherwise walks the entire block index after each new block. This
+      # disables Core's internal debug assertions, NOT block/script/CSV validation.
+      # Keeping it on makes the real 61k/65k-block recovery demos quadratic in height.
+      - -checkblockindex=0
+      # The disposable faucet needs a small address pool, not thousands of eager derivations.
+      - -keypool=20
+      - -printtoconsole=0
+    ports:
+      - "127.0.0.1:${ANZEN_PLAYGROUND_RPC_PORT:-18443}:18443"
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=anzen", "-rpcpassword=anzen", "getblockchaininfo"]
+      interval: 1s
+      timeout: 5s
+      retries: 30

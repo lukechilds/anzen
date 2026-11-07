@@ -18,15 +18,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "anzen-cold-signer"
-version = "0.1.0"
-
-[[package]]
 name = "anzen-ledger"
 version = "0.1.0"
 dependencies = [
- "anzen-cold-signer",
+ "anzen-signer",
  "ledger_device_sdk",
+]
+
+[[package]]
+name = "anzen-protocol"
+version = "0.1.0"
+dependencies = [
+ "bech32",
+ "serde",
+]
+
+[[package]]
+name = "anzen-signer"
+version = "0.1.0"
+dependencies = [
+ "anzen-protocol",
+ "serde",
 ]
 
 [[package]]
@@ -34,6 +46,12 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "bech32"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32637268377fc7b10a8c6d51de3e7fba1ce5dd371a96e342b34e6078db558e7f"
 
 [[package]]
 name = "bindgen"
@@ -401,6 +419,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

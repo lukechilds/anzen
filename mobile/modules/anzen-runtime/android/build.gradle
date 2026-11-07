@@ -1,0 +1,29 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.anzen'
+version = '0.1.0'
+
+def runtimeTargets = new groovy.json.JsonSlurper().parse(file('../../../native-targets.json')).android
+def supportedAbis = runtimeTargets.targets.collect { it.abi }
+def requestedAbis = (findProperty('reactNativeArchitectures') ?: supportedAbis.join(',')).split(',').collect { it.trim() }
+if (!supportedAbis.containsAll(requestedAbis)) {
+  throw new GradleException("Anzen Rust libraries support only ${supportedAbis.join(',')}; regenerate the app with its Anzen config plugin.")
+}
+
+android {
+  namespace 'expo.modules.anzen'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+    minSdkVersion runtimeTargets.minSdk
+    ndk { abiFilters(*requestedAbis) }
+    externalNativeBuild { cmake {
+      cppFlags '-std=c++17'
+      arguments "-DANZEN_ANDROID_PAGE_SIZE=${runtimeTargets.pageSize}"
+    } }
+  }
+  externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt' } }
+}

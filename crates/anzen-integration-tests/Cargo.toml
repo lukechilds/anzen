@@ -1,0 +1,26 @@
+[package]
+name = "anzen-integration-tests"
+description = "Cross-device and real-node tests of the Anzen applications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dev-dependencies]
+anyhow.workspace = true
+anzen-chain = { workspace = true, features = ["native"] }
+anzen-common.workspace = true
+anzen-protocol = { workspace = true, features = ["software"] }
+anzen-signer-app.workspace = true
+anzen-wallet = { workspace = true, features = ["native"] }
+assert_cmd = "2.0"
+bdk_electrum.workspace = true
+bdk_wallet.workspace = true
+bitcoin.workspace = true
+bitcoincore-rpc.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tungstenite.workspace = true

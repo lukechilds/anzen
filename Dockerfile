@@ -5,36 +5,41 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY cold-signer/Cargo.toml ./cold-signer/Cargo.toml
 
-# Give every workspace member source-independent placeholder targets. The release
-# and test dependency stages below can then be restored when application code changes.
-RUN mkdir -p src cold-signer/src \
-    && printf 'fn main() {}\n' > src/main.rs \
-    && printf '' > src/lib.rs \
-    && printf '' > cold-signer/src/lib.rs
+# Reduce the workspace to its manifests plus placeholder targets. Only this stage's output is
+# copied into the dependency stages, so their layers stay cached while application code changes.
+FROM base AS manifests
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN find crates -type f ! -name Cargo.toml -delete \
+    && for crate in crates/*; do \
+        mkdir -p "$crate/src" && printf '' > "$crate/src/lib.rs"; \
+    done \
+    && printf 'fn main() {}\n' > crates/anzen-cli/src/main.rs \
+    && printf 'fn main() {}\n' > crates/anzen-playground/src/main.rs \
+    && rm crates/anzen-cli/src/lib.rs crates/anzen-playground/src/lib.rs
 
 FROM base AS release-dependencies
 
-RUN cargo build --release --locked
+COPY --from=manifests /build ./
+RUN cargo build --release --locked -p anzen-cli
 
 FROM release-dependencies AS builder
 
-COPY src ./src
-RUN touch src/*.rs && cargo build --release --locked
+COPY crates ./crates
+RUN find crates -name '*.rs' -exec touch {} + && cargo build --release --locked -p anzen-cli
 
 FROM base AS test-dependencies
 
+COPY --from=manifests /build ./
 RUN cargo test --workspace --all-targets --locked --no-run
 
 FROM test-dependencies AS test
 
-COPY src ./src
-COPY cold-signer/src ./cold-signer/src
-COPY tests ./tests
+COPY crates ./crates
 COPY test-vectors ./test-vectors
-RUN touch src/*.rs cold-signer/src/*.rs tests/*.rs
+RUN find crates -name '*.rs' -exec touch {} +
 RUN cargo test --workspace --all-targets --locked --no-run
 COPY scripts ./scripts
 ENTRYPOINT ["/build/scripts/docker-test.sh"]

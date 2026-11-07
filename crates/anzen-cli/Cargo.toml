@@ -1,0 +1,31 @@
+[package]
+name = "anzen-cli"
+description = "Anzen reference CLI simulating a phone and a hardware wallet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "anzen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+anzen-chain = { workspace = true, features = ["native"] }
+anzen-common.workspace = true
+anzen-protocol = { workspace = true, features = ["software"] }
+anzen-signer-app.workspace = true
+anzen-storage.workspace = true
+anzen-wallet = { workspace = true, features = ["native"] }
+bitcoin.workspace = true
+chrono.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+serde_json.workspace = true
+tempfile.workspace = true

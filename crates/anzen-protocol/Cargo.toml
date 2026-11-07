@@ -1,0 +1,25 @@
+[package]
+name = "anzen-protocol"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Deterministic Anzen protocol rules: vault scripts, transaction graphs and signature messages"
+
+[features]
+default = []
+# Host-side hashing and curve arithmetic for std consumers and tests. Hardware wallets supply their
+# own `Crypto` implementation instead, so they can use device primitives.
+software = ["dep:sha2", "dep:secp256k1"]
+
+[dependencies]
+bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+secp256k1 = { version = "0.29", default-features = false, features = ["alloc"], optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
+
+[dev-dependencies]
+anzen-protocol = { path = ".", features = ["software"] }
+bitcoin = { version = "0.32.9", features = ["rand-std"] }
+miniscript = "12.3.5"
+serde_json = "1.0"

@@ -8,7 +8,7 @@ Ledger seed, and creates real BIP340 signatures. All outpoints and amounts
 belong to an isolated fake fixture; the benchmark returns only non-secret
 commitments to the generated values.
 
-The firmware depends on the platform-independent `anzen-cold-signer` crate and
+The firmware depends on the platform-independent `anzen-signer` crate (`crates/anzen-signer`) and
 does not depend on the Anzen CLI, hot wallet, chain backends, or filesystem
 code.
 

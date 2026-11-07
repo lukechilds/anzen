@@ -1,0 +1,9 @@
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+/wasm/*
+  Cache-Control: no-cache
+/runtime/*
+  Cache-Control: no-cache

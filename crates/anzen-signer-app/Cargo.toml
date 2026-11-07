@@ -1,0 +1,21 @@
+[package]
+name = "anzen-signer-app"
+description = "Software host for the Anzen signer: key storage, reviews, backups and the outbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+anzen-common.workspace = true
+anzen-protocol = { workspace = true, features = ["software"] }
+anzen-signer.workspace = true
+anzen-storage.workspace = true
+bitcoin.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

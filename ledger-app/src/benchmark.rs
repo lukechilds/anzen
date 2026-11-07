@@ -1,4 +1,4 @@
-use anzen_cold_signer::benchmark::{
+use anzen_signer::benchmark::{
     BenchmarkConfig, BenchmarkError as GraphError, ControllerCommitment, FIXED_SIGNING_DIGEST,
     PolicyCommitment, Sha256, VisitError, WorkloadSummary, normalize_bip340_public_key,
 };

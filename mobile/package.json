@@ -1,0 +1,51 @@
+{
+  "name": "anzen-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "web": "node scripts/web.mjs",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "build:rust:ios": "node scripts/build-rust.mjs ios",
+    "build:rust:android": "node scripts/build-rust.mjs android",
+    "check:native-config": "node scripts/check-native-config.mjs",
+    "typecheck": "tsc --noEmit",
+    "export:web": "npm run build:wasm && expo export --platform web",
+    "preview:web": "node scripts/preview-web.mjs",
+    "test:static": "npm run export:web && playwright test --config playwright.static.config.ts",
+    "test:unit": "playwright test --config playwright.unit.config.ts",
+    "test:e2e": "node scripts/test-web-regtest.mjs",
+    "test:native:regtest": "node scripts/test-native-regtest.mjs"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~57.0.15",
+    "expo": "~57.0.21",
+    "expo-blur": "~57.0.2",
+    "expo-clipboard": "~57.0.1",
+    "expo-document-picker": "~57.0.1",
+    "expo-file-system": "~57.0.6",
+    "expo-sharing": "~57.0.18",
+    "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.3",
+    "qrcode": "^1.5.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-svg": "^15.15.4",
+    "react-native-web": "^0.21.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.0.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "~19.2.2",
+    "@types/ws": "^8.18.1",
+    "jsqr": "^1.4.0",
+    "typescript": "~6.0.3",
+    "ws": "^8.21.3"
+  }
+}
