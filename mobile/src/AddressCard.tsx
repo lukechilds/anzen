@@ -8,7 +8,7 @@ import { colors, fonts, glass, styles as s } from './theme';
 
 const QR_SIZE = 182;
 
-// The mockup's QR style: rounded dot modules, solid finder squares and a cleared centre for the
+// QR style: rounded dot modules, solid finder squares and a cleared centre for the
 // badge. Quartile error correction keeps the code readable with the centre removed; the
 // `bitcoin:` URI for a Taproot address fits version 6, which has no alignment pattern there.
 function useQr(address: string) {
@@ -27,7 +27,7 @@ function useQr(address: string) {
 }
 
 // Highlights the parts people compare: the six-character bech32m checksum, and on a vault the
-// vanity "vault" prefix after the separator. Two lines of equal length, as in the mockup.
+// vanity "vault" prefix after the separator. Two lines of equal length.
 export function AddressLines({ address, vault, testID, size = 11.5 }: { address: string; vault: boolean; testID: string; size?: number }) {
   const program = address.lastIndexOf('1') + 2;
   const prefix = vault && address.slice(program, program + 5) === 'vault';

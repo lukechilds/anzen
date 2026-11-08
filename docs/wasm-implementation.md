@@ -1,8 +1,7 @@
 # Browser-local Rust and Dark UI implementation
 
-Goal: run the existing wallet/signer application APIs inside browser WASM, and match the
-Dark reference in `mockups/compare.html`. Keep native React Native as a UI over those same
-Rust APIs. Do not commit or push this work yet.
+Goal: run the existing wallet/signer application APIs inside browser WASM, with the Dark UI.
+Keep native React Native as a UI over those same Rust APIs. Do not commit or push this work yet.
 
 ## Required evidence before completion
 
@@ -15,7 +14,7 @@ Rust APIs. Do not commit or push this work yet.
 - [x] All 25 existing browser scenarios pass through WASM; add tests proving local execution
   and no private key material in backend requests/state.
 - [x] Native/CLI Rust regression suites, architecture tests and native bindings still pass.
-- [x] Wallet, Vault, privacy gate, activity, sheets, signer and setup use the Dark mockup's
+- [x] Wallet, Vault, privacy gate, activity, sheets, signer and setup use the Dark
   typography, spacing, palette, icons and surfaces. Verify rendered desktop/narrow layouts.
 - [x] The UI remains usable for all real operations, with no invented balances/history or
   mock signing. Wallet/Vault stay separate; private balances must not leak into Wallet.
@@ -39,8 +38,7 @@ independent physical devices. The browser remains an experimental testing playgr
 
 The existing app depends on native filesystem paths, atomic file replacement, SQLite and
 TCP/TLS clients. Browser bindings therefore require platform adapters, not just a target
-flag. The reference is the `themeDark` panel, not `clarity.html`. Existing dirty mockup
-changes are preserved. In-app browser discovery returned no available browsers; use the
+flag. In-app browser discovery returned no available browsers; use the
 repository's isolated Playwright browser for rendered verification.
 
 ## Verification log (2026-09-17)
@@ -91,18 +89,14 @@ capabilities, origins, unknown chain commands and extra private-key fields are r
 and encrypted cloud objects round-trip. This complements
 the architecture tests and the browser test that inspects all backend requests and host files.
 
-Rendered review compared the current UI with `#themeDark` in `mockups/compare.html`: the
+Rendered review covered the Dark UI: the
 375×812 frame, 46px rounded balance typography, muted labels, watermark/glow/grain, inset glass
 highlights, 52px action pills, stable floating tabs and rounded sheets. Setup, private Vault,
 signer policy, actual wallet activity and Receive/Deposit QR screens were inspected. The
 320px and 390px viewport checks confirm no horizontal overflow; real rendered QR images decode
-to their displayed addresses and clipboard copies match. The mockup's sample merchants,
-fiat conversions and scheduled payments are deliberately not invented in the live wallet.
+to their displayed addresses and clipboard copies match. Sample merchants, fiat conversions
+and scheduled payments are deliberately not invented in the live wallet.
 The browser's grain/status fade is browser-only; native uses its own status/safe-area treatment.
-An additional rendered-reference test passed: it loads the retained mockup and directly
-compares computed frame/screen dimensions, typography, colors, action-pill geometry and the
-floating tab bar with the real Wallet. Results and paired screenshots:
-`/tmp/anzen-dark-reference-check`.
 
 The final Dark assets were exported again and tested without a development bundle. Two real
 WASM devices initialized, paired and produced a fresh scannable receive address. Screenshot:
@@ -119,7 +113,7 @@ The browser WASM and Dark UI objective is complete. Evidence maps to the gates a
 | Durable, separate storage | `browser-platform.spec.ts` exercises encrypted persistence, path/role binding, missing-key rejection, transaction abort/atomic rename and worker locking. `browser-interruption.spec.ts` proves approved-transaction recovery after reply loss and page termination. |
 | Public-only service | `tests/architecture.rs`, `playground/test.mjs` and the main browser scenario check absent device APIs, strict request validation, public network messages and no host private-wallet files. |
 | Native/CLI compatibility | Root workspace tests, eight native C ABI tests, all six explicit root regtest cases and three native real-node scenarios passed. Native keeps its filesystem/SQLite backend. |
-| Dark style and usable real UI | `dark-reference.spec.ts` compares live rendered styles to the original mockup; `dark-ui.spec.ts` checks real QR/copy, privacy and narrow layouts. The full scenario run exercises setup, signing, payments, renewal, revocation and recovery through visible controls. |
+| Dark style and usable real UI | `dark-ui.spec.ts` checks real QR/copy, privacy and narrow layouts. The full scenario run exercises setup, signing, payments, renewal, revocation and recovery through visible controls. |
 | Build and handoff | TypeScript and 34 adapter/unit tests pass. WASM build and web export pass; the exported assets initialize/pair real devices without Metro. `mobile/README.md` documents commands, runtime requirements and security limitations. |
 
 iOS/Android installation and physical-device verification remain part of the separate native

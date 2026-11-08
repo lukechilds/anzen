@@ -12,7 +12,7 @@ export const fonts = {
 // Bitcoin amounts show at least four decimal places (₿0.1000), and every significant satoshi.
 export const formatBtc = (sats: number) =>
   (sats / 100_000_000).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 8 });
-// Raised glass: a top highlight and a hairline ring, as on the mockup's pills and sheets.
+// Raised glass: a top highlight and a hairline ring, as on the pills and sheets.
 export const glass = 'inset 0 1px 0 rgba(255,255,255,.14), 0 0 0 .5px rgba(255,255,255,.06)';
 export const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background, overflow: 'hidden', borderRadius: Platform.OS === 'web' ? 48 : 0 },

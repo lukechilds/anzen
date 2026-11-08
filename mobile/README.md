@@ -209,7 +209,7 @@ Mine a confirmation. The chain controls advance mock time by a week, 31 days or 
 each also mines eleven blocks to move Bitcoin's median-time-past, because changing wall time
 alone does not satisfy relative timelocks.
 
-The Vault home follows the Dark mockup: balance, Withdraw/Deposit buttons, and compact
+The Vault home shows the balance, Withdraw/Deposit buttons, and compact
 presigned-policy rows. Tap **Monthly allowance** or **Emergency access** for their execution
 and revocation controls. **Withdraw** also offers a cooperative transfer with the signer.
 **Vault settings** holds the recovery backup, **Lost a device?** guidance and signer

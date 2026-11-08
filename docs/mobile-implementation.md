@@ -1,8 +1,7 @@
 # Mobile app implementation and verification ledger
 
 This tracks the complete requested outcome. Unchecked items are not implemented or not
-yet verified; documentation and a rendered mockup alone do not establish completion.
-Existing mockup edits are preserved. Do not push while this work is in progress.
+yet verified; documentation alone does not establish completion.
 
 The verification history below records the earlier host-executed browser implementation.
 The current worktree now uses browser-local WASM and the Dark reference. That browser/UI

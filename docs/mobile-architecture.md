@@ -3,8 +3,8 @@
 ## Decision: device libraries own the application, React Native presents it
 
 Anzen's mobile app uses React Native and Expo. Its browser playground renders the same
-screens with React Native Web. The Dark mockup is the visual starting point, with separate
-Wallet and Vault contexts and a stable Wallet / Vault bottom navigation.
+screens with React Native Web. The Dark UI keeps separate Wallet and Vault contexts and a
+stable Wallet / Vault bottom navigation.
 
 The wallet UI depends only on `anzen-wallet`. The hardware-wallet-mode UI depends only on
 `anzen-signer-app`. Neither imports the shared host crates directly; shared public types are

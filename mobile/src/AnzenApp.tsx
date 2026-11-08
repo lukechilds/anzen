@@ -66,7 +66,7 @@ function Balance({ sats }: { sats?: number }) {
   // digits conservatively on both platforms so a long amount is never clipped/ellipsized.
   const fontSize = width ? Math.min(46, width / (text.length * .66)) : 46;
   return <View style={{ width: '100%', alignItems: 'center' }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-    {/* A little space after the ₿, as in the mockup; the text content stays "₿0.1000". */}
+    {/* A little space after the ₿; the text content stays "₿0.1000". */}
     <Text testID="bitcoin-balance" style={[s.balance, { fontSize, textAlign: 'center' }]}><Text style={{ marginRight: 3 }}>₿</Text>{digits}</Text>
   </View>;
 }

@@ -44,7 +44,7 @@ export function OptionCard({ title, value, detail, icon, onPress }: { title: str
 export function DarkSheet({ children, onClose, label }: { children: React.ReactNode; onClose: () => void; label: string }) {
   const dialog = useRef<View>(null), close = useRef(onClose);
   close.current = onClose;
-  // Slides up and fades its scrim in, as in the mockup.
+  // Slides up and fades its scrim in.
   const shown = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(shown, { toValue: 1, duration: 320, easing: Easing.bezier(.3, .9, .3, 1), useNativeDriver: Platform.OS !== 'web' }).start();

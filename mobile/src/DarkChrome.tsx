@@ -3,7 +3,7 @@ import { Platform, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import Svg, { Circle, Defs, FeTurbulence, Filter, Path, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 export type IconName = 'wallet' | 'vault' | 'vaultFine' | 'send' | 'receive' | 'refresh' | 'close' | 'settings' | 'chevron' | 'clock' | 'key' | 'phone' | 'copy' | 'scan' | 'face' | 'cloud';
-// Glyphs from the Dark mockup. Stroke widths follow it: 2 for most icons, 2.2 for the send and
+// The app's glyphs. Stroke widths follow it: 2 for most icons, 2.2 for the send and
 // receive arrows on pills, finer strokes inside the wallet and vault marks.
 export function Icon({ name, size = 18, color = 'rgba(255,255,255,.68)', strokeWidth = 2 }: { name: IconName; size?: number; color?: string; strokeWidth?: number }) {
   return <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" accessibilityElementsHidden>
@@ -92,7 +92,7 @@ export function DeviceStatus() {
     <View style={{ position: 'absolute', top: 16, left: '50%', marginLeft: -island / 2, width: island, height: 34, borderRadius: 17, backgroundColor: '#000', borderWidth: .5, borderColor: '#ffffff0f' }}/>
     <Svg width={45} height={16} viewBox="0 0 45 16" fill="rgba(255,255,255,.92)">
       {[4, 6, 8, 10].map((height, i) => <Rect key={i} x={i * 4} y={12 - height} width={2.5} height={height} rx={1}/>)}
-      {/* A 23×11.5 battery outline with a 72% fill and a dimmer terminal, as in the mockup. */}
+      {/* A 23×11.5 battery outline with a 72% fill and a dimmer terminal. */}
       <Rect x={20} y={1.75} width={21.5} height={10} rx={3.25} fill="none" stroke="rgba(255,255,255,.55)" strokeWidth={1.5}/><Rect x={22.25} y={4} width={12.25} height={5.5} rx={1.5}/><Rect x={43.25} y={4.75} width={1.5} height={4} rx={.7} fill="rgba(255,255,255,.55)"/>
     </Svg>
   </View>;
