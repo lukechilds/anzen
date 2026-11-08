@@ -22,10 +22,12 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 
 ## Current speed
 
-| Kernel | Candidates/s | `vault` (33.5M) |
-|---|---|---|
-| key | 710k (cool) | 47 s |
-| nonce | 2.64M (cool) | 13 s |
+Measured in paired runs on a cool GPU (sustained load throttles both by up to ~2×):
+
+| Kernel | Start | Now | Gain | `vault` (33.5M) |
+|---|---|---|---|---|
+| key | 710k/s | ~1.2M/s | 1.7× | ~28 s |
+| nonce | 2.64M/s | ~15M/s | 5.4× | ~2.2 s |
 
 ## Where the time goes
 
