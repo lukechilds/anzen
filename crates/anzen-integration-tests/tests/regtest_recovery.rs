@@ -208,7 +208,7 @@ fn real_regtest_enforces_the_signer_time_lock_and_rotates_the_phone_epoch() {
     let old_config = load_config(rotation_dir.path()).unwrap();
     let proposal = rotation_vault
         .wallet
-        .propose_rotation(&rpc, false, |_| {})
+        .propose_rotation(&rpc, None, |_| {})
         .unwrap();
     let review = rotation_vault
         .signer

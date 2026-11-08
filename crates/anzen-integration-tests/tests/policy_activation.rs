@@ -383,7 +383,7 @@ fn rotation_rejects_an_incompletely_signed_renewal_before_any_broadcast() {
     assert_eq!(schedule.entries.len(), 12);
     let proposal = devices
         .wallet
-        .propose_rotation(&backend, false, |_| {})
+        .propose_rotation(&backend, None, |_| {})
         .unwrap();
     let review = devices.signer.review_phone_rotation(&proposal).unwrap();
     let mut approved = devices

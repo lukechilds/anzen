@@ -80,6 +80,9 @@ enum PhoneCommand {
         /// bcrt1pvault.
         #[arg(long)]
         vanity: bool,
+        /// Grind on every CPU thread with the library code instead of the GPU.
+        #[arg(long, requires = "vanity")]
+        cpu: bool,
     },
     /// Derive and persist the next hot-wallet receive address.
     ReceiveAddress,
@@ -138,6 +141,9 @@ enum PhoneCommand {
         /// Grind until the new vault address begins with bc1pvault, tb1pvault or bcrt1pvault.
         #[arg(long)]
         vanity: bool,
+        /// Grind on every CPU thread with the library code instead of the GPU.
+        #[arg(long, requires = "vanity")]
+        cpu: bool,
         #[arg(long)]
         output: PathBuf,
     },
@@ -424,31 +430,30 @@ fn run_phone(
 ) -> Result<()> {
     let backend = || rpc_args.connect_hot(network);
     match command {
-        PhoneCommand::Init { vanity } => {
+        PhoneCommand::Init { vanity, cpu } => {
             if vanity {
                 let target = hot_wallet::vanity_address_prefix(network)?;
+                let engine = vanity_engine(cpu);
                 eprintln!(
-                    "Grinding phone vault keys across all available CPU threads for {target}..."
+                    "Grinding phone vault keys {} for {target}...",
+                    engine_label(engine)
                 );
                 let signer: PublicDeviceFile = read_artifact(
                     &wallet_data_dir(wallet).join(anzen_common::storage::HWW_PUBLIC_FILE),
                 )
                 .context("initialize the HWW before using phone init --vanity")?;
-                let result = wallet.initialize_vanity(&signer, |attempts| {
-                    eprintln!(
-                        "Vanity search: {} candidates tested...",
-                        format_number(attempts)
-                    );
-                })?;
+                let result = wallet
+                    .initialize_vanity(&signer, engine, report_vanity_progress)
+                    .map_err(|error| gpu_hint(error, engine))?;
                 println!("Simulated phone initialized ({})", network_label(network));
                 println!("Phone mnemonic: {}", result.device.mnemonic);
                 println!("Phone vault key: {}", result.device.vault_pubkey);
                 println!("Phone vault key index: {}", result.device.vault_key_index);
                 println!("Vanity vault address: {}", result.vault_address);
                 println!(
-                    "Vanity search: {} candidates across {} threads",
+                    "Vanity search: {} candidates on {}",
                     format_number(result.attempts),
-                    result.worker_count
+                    result.searcher
                 );
                 return Ok(());
             }
@@ -600,7 +605,11 @@ fn run_phone(
             let result = wallet.activate_sweep(backend()?.as_ref(), &approval)?;
             print_sweep_result("Cooperative vault sweep broadcast", &result);
         }
-        PhoneCommand::RotateKey { vanity, output } => {
+        PhoneCommand::RotateKey {
+            vanity,
+            cpu,
+            output,
+        } => {
             let backend = backend()?;
             let request = if !anzen_common::storage::config_exists(&wallet_data_dir(wallet))
                 && wallet.restored_phone().is_ok()
@@ -610,18 +619,20 @@ fn run_phone(
                 }
                 wallet.propose_restored_rotation(backend.as_ref())?
             } else {
-                if vanity {
+                let engine = vanity.then(|| vanity_engine(cpu));
+                if let Some(engine) = engine {
                     eprintln!(
-                        "Preparing a vanity phone-key rotation for {}; this may take a while...",
-                        hot_wallet::vanity_address_prefix(network)?
+                        "Preparing a vanity phone-key rotation for {} {}; this may take a while...",
+                        hot_wallet::vanity_address_prefix(network)?,
+                        engine_label(engine)
                     );
                 }
-                wallet.propose_rotation(backend.as_ref(), vanity, |attempts| {
-                    eprintln!(
-                        "Vanity search: {} candidates tested...",
-                        format_number(attempts)
-                    );
-                })?
+                wallet
+                    .propose_rotation(backend.as_ref(), engine, report_vanity_progress)
+                    .map_err(|error| match engine {
+                        Some(engine) => gpu_hint(error, engine),
+                        None => error,
+                    })?
             };
             report_rotation(&request, artifact_reports_to_stderr(&output))?;
             write_artifact(&output, &request)?;
@@ -1337,6 +1348,38 @@ fn print_recovery_activation(opens_at: u64, median_time: u64) {
             "HWW recovery: opens at median time {date} ({} days remaining)",
             (opens_at - median_time).div_ceil(86_400)
         );
+    }
+}
+
+fn vanity_engine(cpu: bool) -> hot_wallet::VanityEngine {
+    if cpu {
+        hot_wallet::VanityEngine::Cpu
+    } else {
+        hot_wallet::VanityEngine::Gpu
+    }
+}
+
+fn engine_label(engine: hot_wallet::VanityEngine) -> &'static str {
+    match engine {
+        hot_wallet::VanityEngine::Gpu => "on the GPU",
+        hot_wallet::VanityEngine::Cpu => "across all available CPU threads",
+    }
+}
+
+fn report_vanity_progress(attempts: u64) {
+    eprintln!(
+        "Vanity search: {} candidates tested...",
+        format_number(attempts)
+    );
+}
+
+/// Point a failed GPU search at the CPU fallback.
+fn gpu_hint(error: anyhow::Error, engine: hot_wallet::VanityEngine) -> anyhow::Error {
+    match engine {
+        hot_wallet::VanityEngine::Gpu => {
+            error.context("GPU vanity search failed; pass --cpu to grind on the CPU")
+        }
+        hot_wallet::VanityEngine::Cpu => error,
     }
 }
 

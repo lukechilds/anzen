@@ -68,7 +68,7 @@ impl WalletApplication {
     pub fn propose_rotation<F>(
         &self,
         backend: &dyn HotWalletBackend,
-        vanity: bool,
+        vanity: Option<super::super::VanityEngine>,
         report_progress: F,
     ) -> Result<DevicePhoneRotation>
     where
@@ -86,7 +86,7 @@ impl WalletApplication {
                 network,
                 file.vault_key_index,
             )?;
-            if vanity {
+            if vanity.is_some() {
                 let address = VaultPolicy::new_for_network(
                     phone.vault_pubkey,
                     XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
@@ -102,17 +102,18 @@ impl WalletApplication {
             }
             phone
         } else {
-            let phone = if vanity {
-                super::super::grind_vanity_phone_key(
-                    network,
-                    XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
-                    super::super::VANITY_SUFFIX,
-                    super::super::available_worker_count(),
-                    report_progress,
-                )?
-                .phone
-            } else {
-                DeviceKeys::generate_for_network(&bitcoin::key::Secp256k1::new(), network)?
+            let phone = match vanity {
+                Some(engine) => {
+                    super::super::grind_vanity_phone_key(
+                        network,
+                        XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
+                        super::super::VANITY_SUFFIX,
+                        engine,
+                        report_progress,
+                    )?
+                    .phone
+                }
+                None => DeviceKeys::generate_for_network(&bitcoin::key::Secp256k1::new(), network)?,
             };
             storage::write_json(
                 &pending_key,

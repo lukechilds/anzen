@@ -139,12 +139,23 @@ pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice
 
 pub const VANITY_SUFFIX: &str = "vault";
 
+/// Where a vanity search runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VanityEngine {
+    /// The GPU through wgpu. Builds without the `gpu` feature refuse it.
+    Gpu,
+    /// Every CPU thread, through the library code.
+    Cpu,
+}
+
 #[derive(Debug)]
 pub struct VanityInitialization {
     pub device: InitializedDevice,
     pub vault_address: String,
     pub attempts: u64,
-    pub worker_count: usize,
+    /// What ran the search, for display: a GPU adapter or a CPU thread count.
+    pub searcher: String,
 }
 
 #[derive(Debug)]
@@ -152,26 +163,21 @@ pub(crate) struct VanityPhoneKey {
     pub(crate) phone: DeviceKeys,
     pub(crate) vault_address: String,
     pub(crate) attempts: u64,
-    pub(crate) worker_count: usize,
+    pub(crate) searcher: String,
 }
 
-/// Grind the phone vault-key derivation index across all available CPU threads until the vault
-/// address with the signer's public key begins with the vanity prefix.
+/// Grind the phone vault-key derivation index until the vault address with the signer's public
+/// key begins with the vanity prefix.
 pub fn initialize_vanity<F>(
     data_dir: &Path,
     signer: &PublicDeviceFile,
+    engine: VanityEngine,
     report_progress: F,
 ) -> Result<VanityInitialization>
 where
     F: Fn(u64) + Sync,
 {
-    initialize_vanity_with_suffix(
-        data_dir,
-        signer,
-        VANITY_SUFFIX,
-        available_worker_count(),
-        report_progress,
-    )
+    initialize_vanity_with_suffix(data_dir, signer, VANITY_SUFFIX, engine, report_progress)
 }
 
 pub fn vanity_address_prefix(network: Network) -> Result<&'static str> {
@@ -187,7 +193,7 @@ fn initialize_vanity_with_suffix<F>(
     data_dir: &Path,
     signer: &PublicDeviceFile,
     suffix: &str,
-    worker_count: usize,
+    engine: VanityEngine,
     report_progress: F,
 ) -> Result<VanityInitialization>
 where
@@ -196,14 +202,11 @@ where
     signer.validate_kind("hww-public-key")?;
     let network = signer.bitcoin_network()?;
     ensure_phone_is_uninitialized(data_dir)?;
-    if worker_count == 0 {
-        bail!("vanity search requires at least one worker thread");
-    }
     let vanity = grind_vanity_phone_key(
         network,
         signer.parsed_vault_pubkey()?,
         suffix,
-        worker_count,
+        engine,
         report_progress,
     )?;
     let device = persist_phone(data_dir, network, &vanity.phone)?;
@@ -211,7 +214,7 @@ where
         device,
         vault_address: vanity.vault_address,
         attempts: vanity.attempts,
-        worker_count: vanity.worker_count,
+        searcher: vanity.searcher,
     })
 }
 
@@ -222,6 +225,93 @@ pub(crate) fn available_worker_count() -> usize {
 }
 
 pub(crate) fn grind_vanity_phone_key<F>(
+    network: Network,
+    hww_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
+    suffix: &str,
+    engine: VanityEngine,
+    report_progress: F,
+) -> Result<VanityPhoneKey>
+where
+    F: Fn(u64) + Sync,
+{
+    match engine {
+        VanityEngine::Cpu => grind_vanity_phone_key_on_cpu(
+            network,
+            hww_pubkey,
+            suffix,
+            available_worker_count(),
+            report_progress,
+        ),
+        VanityEngine::Gpu => {
+            grind_vanity_phone_key_on_gpu(network, hww_pubkey, suffix, report_progress)
+        }
+    }
+}
+
+/// The public inputs of a GPU search over the vault keys under `phone`'s vault parent.
+pub fn vanity_search_inputs(
+    phone: &DeviceKeys,
+    template: &VaultAddressTemplate,
+    suffix: &str,
+) -> Result<anzen_vanity::SearchInputs> {
+    let target = VanityTarget::new(suffix)?;
+    let secp = Secp256k1::new();
+    let parent = bitcoin::bip32::Xpub::from_priv(&secp, &phone.vault_parent_xpriv(&secp)?);
+    Ok(anzen_vanity::SearchInputs {
+        parent_public_key: parent.public_key.serialize(),
+        chain_code: parent.chain_code.to_bytes(),
+        signer_key: template.hww_pubkey(),
+        merkle_root: template.merkle_root(&mut anzen_common::protocol::SoftwareCrypto::new()),
+        target_value: target.value,
+        target_bits: target.bit_count,
+    })
+}
+
+/// Search on the GPU, then check the winner with the library code like a CPU result.
+#[cfg(feature = "gpu")]
+fn grind_vanity_phone_key_on_gpu<F>(
+    network: Network,
+    hww_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
+    suffix: &str,
+    report_progress: F,
+) -> Result<VanityPhoneKey>
+where
+    F: Fn(u64) + Sync,
+{
+    validate_supported_network(network)?;
+    let base_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
+    let template = VaultAddressTemplate::new(hww_pubkey)?;
+    let inputs = vanity_search_inputs(&base_phone, &template, suffix)?;
+    let gpu = anzen_vanity::GpuSearch::open()?;
+    let last_report = AtomicU64::new(0);
+    let result = gpu.search_blocking(&inputs, 0..anzen_vanity::MAX_INDEX + 1, |attempts| {
+        maybe_report_progress(attempts, &last_report, &report_progress)
+    })?;
+    let index = result
+        .index
+        .context("vanity search tried every index without a match")?;
+    vanity_phone_key(
+        base_phone,
+        network,
+        &template,
+        suffix,
+        index,
+        result.attempts,
+        gpu.adapter_name().to_owned(),
+    )
+}
+
+#[cfg(not(feature = "gpu"))]
+fn grind_vanity_phone_key_on_gpu<F>(
+    _network: Network,
+    _hww_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
+    _suffix: &str,
+    _report_progress: F,
+) -> Result<VanityPhoneKey> {
+    bail!("this build has no GPU vanity search; use the CPU")
+}
+
+fn grind_vanity_phone_key_on_cpu<F>(
     network: Network,
     hww_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
     suffix: &str,
@@ -297,7 +387,29 @@ where
             .context("vanity search ended without finding a matching key")?
     })?;
 
-    let phone = base_phone.with_vault_key_index(&Secp256k1::new(), winning_index)?;
+    vanity_phone_key(
+        base_phone,
+        network,
+        &template,
+        suffix,
+        winning_index,
+        attempts.load(Ordering::Relaxed),
+        format!("{worker_count} CPU threads"),
+    )
+}
+
+/// The phone key at a search's winning index, after re-deriving its address with the library
+/// code: a search result is never trusted on its own.
+fn vanity_phone_key(
+    base_phone: DeviceKeys,
+    network: Network,
+    template: &VaultAddressTemplate,
+    suffix: &str,
+    index: u32,
+    attempts: u64,
+    searcher: String,
+) -> Result<VanityPhoneKey> {
+    let phone = base_phone.with_vault_key_index(&Secp256k1::new(), index)?;
     let vault_address = template.address(
         &mut anzen_common::protocol::SoftwareCrypto::new(),
         phone.vault_pubkey,
@@ -315,8 +427,8 @@ where
     Ok(VanityPhoneKey {
         phone,
         vault_address: vault_address.to_string(),
-        attempts: attempts.load(Ordering::Relaxed),
-        worker_count,
+        attempts,
+        searcher,
     })
 }
 
@@ -1086,13 +1198,15 @@ mod tests {
         .unwrap();
 
         let signer = load_public_device(dir.path(), HWW_PUBLIC_FILE).unwrap();
-        let result = initialize_vanity_with_suffix(dir.path(), &signer, "v", 4, |_| {}).unwrap();
+        let result =
+            initialize_vanity_with_suffix(dir.path(), &signer, "v", VanityEngine::Cpu, |_| {})
+                .unwrap();
         assert!(
             result.vault_address.starts_with(prefix),
             "{}",
             result.vault_address
         );
-        assert_eq!(result.worker_count, 4);
+        assert!(result.searcher.ends_with("CPU threads"));
         assert!(result.attempts > 0);
 
         let persisted = load_device_keys(dir.path(), PHONE_DEVICE_FILE).unwrap();
@@ -1124,10 +1238,36 @@ mod tests {
     fn vanity_search_encodes_the_mainnet_prefix() {
         let network = Network::Bitcoin;
         let hww = DeviceKeys::generate_for_network(&Secp256k1::new(), network).unwrap();
-        let result = grind_vanity_phone_key(network, hww.vault_pubkey, "v", 4, |_| {}).unwrap();
+        let result =
+            grind_vanity_phone_key_on_cpu(network, hww.vault_pubkey, "v", 4, |_| {}).unwrap();
         assert!(result.vault_address.starts_with("bc1pv"));
-        assert_eq!(result.worker_count, 4);
+        assert_eq!(result.searcher, "4 CPU threads");
         assert!(result.attempts > 0);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_vanity_search_finds_a_key_the_library_confirms() {
+        if anzen_vanity::GpuSearch::open().is_err() {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
+        let network = Network::Signet;
+        let hww = DeviceKeys::generate_for_network(&Secp256k1::new(), network).unwrap();
+        // Ten bits keeps the test quick while still spanning several batches now and then.
+        let result =
+            grind_vanity_phone_key(network, hww.vault_pubkey, "va", VanityEngine::Gpu, |_| {})
+                .unwrap();
+        assert!(result.vault_address.starts_with("tb1pva"));
+        let template = VaultAddressTemplate::new(hww.vault_pubkey).unwrap();
+        let address = template
+            .address(
+                &mut anzen_common::protocol::SoftwareCrypto::new(),
+                result.phone.vault_pubkey,
+                network,
+            )
+            .unwrap();
+        assert_eq!(address.to_string(), result.vault_address);
     }
 }
 

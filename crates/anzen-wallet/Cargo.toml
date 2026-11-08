@@ -12,6 +12,8 @@ native = ["electrum", "dep:bdk_bitcoind_rpc", "dep:bitcoincore-rpc", "dep:rustls
 # Electrum over WebSocket, the public chain transport on every platform. The browser supplies
 # the socket; `native` adds a Rust WebSocket client.
 electrum = ["dep:bdk_electrum"]
+# Vanity searches on the GPU through wgpu.
+gpu = ["anzen-vanity/gpu"]
 
 [dependencies]
 anyhow.workspace = true
@@ -19,6 +21,7 @@ anzen-chain.workspace = true
 anzen-common.workspace = true
 anzen-protocol = { workspace = true, features = ["software"] }
 anzen-storage.workspace = true
+anzen-vanity.workspace = true
 bdk_bitcoind_rpc = { workspace = true, optional = true }
 bdk_electrum = { workspace = true, optional = true }
 bdk_wallet = { workspace = true, features = ["keys-bip39"] }

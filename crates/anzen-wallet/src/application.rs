@@ -80,8 +80,9 @@ pub enum WalletRequest {
     ProposeRestoredRotation,
     /// Rotate this working phone to a fresh key, preserving the vault policy.
     ProposeRotation {
+        /// Grind a vanity vault address for the new key with this engine.
         #[serde(default)]
-        vanity: bool,
+        vanity: Option<super::VanityEngine>,
     },
     #[serde(alias = "activate_restored_rotation")]
     ActivateRotation {
@@ -438,13 +439,14 @@ impl WalletApplication {
     pub fn initialize_vanity<F>(
         &self,
         signer: &PublicDeviceFile,
+        engine: super::VanityEngine,
         report_progress: F,
     ) -> Result<super::VanityInitialization>
     where
         F: Fn(u64) + Sync,
     {
         self.check_access(signer.bitcoin_network()?)?;
-        super::initialize_vanity(&self.data_dir, signer, report_progress)
+        super::initialize_vanity(&self.data_dir, signer, engine, report_progress)
     }
 
     pub fn public_identity(&self) -> Result<PublicDeviceFile> {

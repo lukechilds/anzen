@@ -138,6 +138,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "anzen-vanity"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "anzen-wallet"
 version = "0.1.0"
 dependencies = [
@@ -146,6 +153,7 @@ dependencies = [
  "anzen-common",
  "anzen-protocol",
  "anzen-storage",
+ "anzen-vanity",
  "bdk_bitcoind_rpc",
  "bdk_electrum",
  "bdk_wallet",

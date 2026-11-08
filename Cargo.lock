@@ -288,6 +288,7 @@ dependencies = [
  "anzen-protocol",
  "anzen-signer-app",
  "anzen-storage",
+ "anzen-vanity",
  "axum",
  "bdk_bitcoind_rpc",
  "bdk_electrum",

@@ -107,7 +107,7 @@ For mainnet, pass `--dangerously-enable-mainnet` to every command. Mainnet defau
 
 For Mutinynet, pass `--network mutinynet` when initializing the first device (`anzen --network mutinynet hww init`); the other device, the vault and every later command follow it, and an existing vault cannot be switched to another network. Mutinynet uses its public Electrum WebSocket servers by default; use `--chain-backend rpc --rpc-url …` for your own Mutinynet node.
 
-For a vault address beginning `vault` (`bc1pvault`, `tb1pvault` or `bcrt1pvault`), initialize the HWW first and run `anzen phone init --vanity`. It grinds phone keys on every core: about 33 million candidates on average, a few minutes on a desktop. `anzen phone rotate-key --vanity` keeps the prefix when rotating.
+For a vault address beginning `vault` (`bc1pvault`, `tb1pvault` or `bcrt1pvault`), initialize the HWW first and run `anzen phone init --vanity`. It grinds phone keys on the GPU: about 33 million candidates on average, a minute or two on a desktop. Pass `--cpu` to grind on every CPU core with the library code instead, a few minutes on a desktop. `anzen phone rotate-key --vanity` keeps the prefix when rotating.
 
 ```console
 $ anzen phone init
