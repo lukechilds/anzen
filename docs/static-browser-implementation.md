@@ -66,7 +66,7 @@ WASM build and production web export. Native device installation is not part of 
 
 The live, read-only browser smoke tests passed against both public endpoints. Fresh empty
 wallets synchronized through the real WASM/BDK transport; neither test made a POST or
-contacted `/session`, `/chain`, `/cloud`, `/node` or `/node/job`. The initial Mutinynet scan
+contacted `/session`, `/chain`, `/cloud` or `/node`. The initial Mutinynet scan
 first hit HTTP 429. The adapter now respects the deployment's two-history-requests/second
 limit across devices using a Web Lock and performs bounded GET-only retries. The passing
 live Mutinynet scan took 2.7 minutes; mainnet took 14.4 seconds. No valid or invalid

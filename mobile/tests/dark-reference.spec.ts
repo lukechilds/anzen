@@ -14,9 +14,8 @@ test('Wallet geometry and typography match the Dark reference', async ({ page, c
   try {
     await reference.goto(pathToFileURL(resolve('..', 'mockups', 'compare.html')).href, { waitUntil: 'domcontentloaded' });
     await page.goto(host.url);
-    await page.getByRole('button', { name: 'Start playground', exact: true }).click();
     const wallet = page.getByTestId('device-wallet');
-    await wallet.getByRole('button', { name: 'Create wallet', exact: true }).click();
+    await wallet.getByRole('button', { name: 'Get started', exact: true }).click();
     await expect(wallet.getByTestId('bitcoin-balance')).toBeVisible();
 
     async function styles(locator: Locator, properties: string[]) {

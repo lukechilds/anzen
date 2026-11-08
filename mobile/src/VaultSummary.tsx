@@ -21,10 +21,9 @@ export default function VaultSummary({ vault, onMonthly, onEmergency, onPolicy }
   vault: JsonObject; onMonthly: () => void; onEmergency: () => void; onPolicy: () => void;
 }) {
   return <View style={d.list}>
-    <PolicyRow title={vault.schedule ? 'Annual renewal' : 'Set monthly allowance'} detail={vault.schedule ? 'Renew with your signer' : 'Approve with your signer'} icon="clock" onPress={onPolicy}/>
+    {/* Nothing to set until there are savings to protect. */}
+    {(vault.schedule || vault.balance_sats > 0) && <PolicyRow title={vault.schedule ? 'Annual renewal' : 'Set monthly allowance'} detail={vault.schedule ? 'Renew with your signer' : 'Approve with your signer'} icon="clock" onPress={onPolicy}/>}
     {vault.schedule?.emergency_access && <PolicyRow title="Emergency access" detail="Phone only · 1 week delay" value={`≤ ₿${formatBtc(vault.config.emergency_access_limit_sats)}`} icon="phone" onPress={onEmergency}/>}
     {!!vault.schedule?.entries.length && <PolicyRow title="Monthly allowance" detail={`${vault.schedule.entries.length} presigned withdrawals`} value={`−₿${formatBtc(vault.config.monthly_limit_sats)}`} icon="wallet" onPress={onMonthly}/>}
-    {!vault.schedule && <Text style={[d.subtitle, { textAlign: 'center', marginVertical: 20, lineHeight: 19 }]}>{vault.balance_sats > 0 ? 'Choose how much reaches your wallet each month.\nYour signer approves it once a year.' : 'Deposit savings first, then choose\nyour monthly allowance.'}</Text>}
-    <Text style={[d.subtitle, { textAlign: 'center', marginTop: 14, lineHeight: 18 }]}>{'Bitcoin checks timelocks and revocations\nwhen you execute a withdrawal.'}</Text>
   </View>;
 }

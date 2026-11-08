@@ -27,12 +27,13 @@ npm run export:web
 npm run preview:web
 ```
 
-Open **http://localhost:8083**. Mutinynet is the default; choose **Dangerously enable
-mainnet** for real bitcoin. **Create wallet**, open **Vault**, choose **Set up vault**, then
-**Hold signer to phone**. Mainnet consent is required again after reopening the page.
-Returning to the plain homepage and selecting mainnet finds the saved pair automatically;
-resume it instead of creating replacement keys. Mainnet startup never overwrites that pair.
-There is no capability token, local Rust service, Bitcoin node or Docker requirement.
+Open **http://localhost:8083**. It is one emulator page: on your first visit choose
+**Mutinynet** (test bitcoin) or **Mainnet** (real bitcoin, asked once); after that it reopens
+the network and devices you used last. Switch networks in the header; each network keeps its
+own phone and signer. The wallet is created for you; open **Vault**, choose **Set up vault**,
+and the signer joins over Bluetooth. **Start over** makes a fresh pair (not offered on mainnet, so
+real-bitcoin keys are never replaced by accident). Both networks run entirely in the browser:
+there is no capability token, local Rust service, Bitcoin node or Docker requirement.
 `npm run web` on port 8081 also supports this mode when opened without a regtest link.
 
 The whole `dist/` directory is deployable as static files at a site's root. Use HTTPS and
@@ -62,10 +63,10 @@ indexer sees queried addresses/history and is trusted for its chain view; this i
 full-node/SPV verification. Mutinynet's block-one hash is checked as well as genesis,
 because ordinary signet shares that genesis but is a different chain.
 
-Mutinynet targets 30-second blocks: the unchanged 61,200/65,535-block recovery delays
-are approximately **21/23 days**, not 14/15 months. It is a test network, not a safe
-annual-timelock production configuration. The one-week time-based emergency delay is
-unchanged. There are no mining/time-travel buttons here. First discovery searches both
+Every vault timelock is time-based, so it lasts the same on every network: the signer's solo
+path opens about **388 days** after the last renewal, emergency access after one week, and
+each monthly allowance after 30 days. Mutinynet's 30-second blocks do not shorten them, and
+there are no time-travel buttons here; use regtest to see them expire. First discovery searches both
 address chains with a gap of 100 unused addresses; subsequent syncs scan known addresses.
 Socket/HTTP adapters never replay broadcasts themselves. Rust reconciles lost broadcast
 responses by querying the exact txid on failover, and may resend only the identical signed
@@ -86,17 +87,16 @@ spurious hint can delay or repeat a refresh but never changes wallet state.
   and to each watched script hash. If it drops, the wallet refreshes every 30 seconds while
   it reconnects, then refreshes once more to catch anything missed.
 - **Regtest:** the I/O worker asks the playground once a second for the tip and Bitcoin
-  Core's mempool sequence, deferring refreshes until a mining job finishes. Regtest syncs by
-  walking every block since the last sync (over a minute after a 61,200-block jump), so an
+  Core's mempool sequence. Regtest syncs by walking every block since the last sync, so an
   automatic refresh more than 1,000 blocks behind skips syncing and keeps the last synced
   balance (including a never-synced wallet on a long chain) and offers **Catch up**.
 
-The vault refreshes only while it is revealed, so opening the app still never fetches
+The vault refreshes only while it is open, so opening the app still never fetches
 savings. The native app runs the same listener on a Rust thread; the app asks it for changes
 once a second through `anzen_mobile_watch`, which never waits behind a running command.
 
 Devices, their session IDs and simulated cloud objects survive reload in this browser
-profile. **Export encrypted cloud backup** stores an encrypted object in a separate
+profile. Every new or changed recovery backup is saved automatically as an encrypted object in a separate
 IndexedDB database, not in either device database. **Download backup…** saves an off-browser
 copy; **Import encrypted cloud backup** loads it back into the simulation. Clearing site
 data can erase both devices **and** this simulated cloud, so download and keep a separate
@@ -140,9 +140,10 @@ cloud objects. Device records live in separate IndexedDB databases in this brows
 not that directory. Existing CLI wallets are never opened. The chain persists while its
 Docker container remains alive.
 
-After creating a device pair, the URL also records their public session IDs. Refresh the
-page and choose **Resume playground** to reopen that pair while the same host is running.
-Vault balances stay hidden until explicitly revealed. A host restart still creates a new
+Opened from the host's link, the emulator offers **Regtest** alongside Mutinynet and Mainnet
+and starts there. The link records the regtest devices' public IDs, so a refresh reopens the
+same pair while the same host is running.
+Vault balances stay hidden until you open the Vault tab, and hide again when you leave it or the app. A host restart still creates a new
 session; old browser device records are retained, not automatically attached to the new
 session or overwritten. Keep an exported recovery backup rather than relying on browser
 storage or the playground session as your only copy.
@@ -154,14 +155,24 @@ device concurrently. This is **not** hardware or OS-keychain protection: scripts
 the same origin can use the key, and clearing browser data removes it. The simulated devices
 are separate test instances, not independent security boundaries against a compromised origin.
 
-The two screens are independent devices. Phone and signer talk by being held together, as
-with a hardware wallet over NFC: when the phone needs its signer it shows **Hold your signer
-to your phone**, and the playground's **Hold signer to phone** button (above the signer)
-connects them. Messages cross that link as protocol JSON, never as the other device's private
-storage, and each device's Rust validates them as it would a received file.
+A new phone needs no setup: its wallet is created on first open, and a short welcome explains
+that it is protected by Face ID and backed up, encrypted, across the owner's Apple devices.
+(That backup is the intended product behaviour; the app does not implement it yet.)
 
-Setting up a vault is one tap. **Create wallet**, open **Vault** and choose **Set up vault**.
-A new signer creates its key on that first tap; in the same exchange the phone builds the
+The signer is drawn as a hardware device, a dark pebble with its display at the top and the
+Anzen logo beneath, not as a phone. Like a hardware wallet it shows one fact per screen:
+**✕** declines, **→** steps through the pages and the last page asks for approval. Anything
+that signs is approved by pressing and holding **✓**. The same React Native component will fill a phone's screen when an old phone is
+put into hardware signing mode; the playground shows the device on its own.
+
+The two devices are independent. Phone and signer talk over Bluetooth, as with a modern
+hardware wallet: when the phone needs its signer it says **Approve on your signer**, and the
+signer's screen shows whatever needs checking. The playground's devices are always in range.
+Messages cross that link as protocol JSON, never as the other device's private storage, and
+each device's Rust validates them as it would a received file.
+
+Setting up a vault is one exchange. Open **Vault** and choose **Set up vault**.
+A new signer creates its key on that first connection; in the same exchange the phone builds the
 vault, the signer accepts it and protects the phone's encrypted recovery backup, and the
 backup is saved to the (simulated) cloud. Nothing in setup can move funds, so the signer
 asks nothing. Anything that signs — a policy, a transfer, a recovery — shows its review on
@@ -172,9 +183,9 @@ card, so retrying never asks the signer to sign again.
 
 ### Resume a message exchange
 
-Messages can also travel as files, the fallback for devices without a tap link. The Rust
+Messages can also travel as files, the fallback for devices without a Bluetooth link. The Rust
 applications retain outgoing proposals and approvals. After reopening either device, open
-**Saved messages** in the private Vault tab or on the signer. Choose the message to resend;
+**Saved messages** in Vault settings, or at the bottom of the signer's screen. Choose the message to resend;
 the receiving device must still **Open received message** and perform its normal checks. A
 proposal still needs explicit signer approval. Resending an already signed approval does not
 ask the signer to sign again, and merely opening the saved-message list never broadcasts.
@@ -190,18 +201,19 @@ has already confirmed. Reload alone never approves or broadcasts a policy.
 
 ### Fund and exercise a policy
 
-After setup, reveal the vault: **Deposit** shows its address and scannable QR code to fund
-with the regtest controls. Then **Set monthly allowance** sets the monthly and emergency
-amounts in bitcoin, with suggestions sized to the balance. **Continue on signer**, hold the
-signer to the phone and approve the plain-language summary there; the phone activates it.
-Mine a confirmation. Advancing mock time also mines eleven blocks to move Bitcoin's
-median-time-past; changing wall time alone does not satisfy relative timelocks.
+After setup the Vault tab opens the vault: **Deposit** shows its address and scannable QR code to fund
+with the chain controls. Then **Set monthly allowance** sets the monthly and emergency
+amounts in bitcoin, with suggestions sized to the balance. **Continue on signer** and
+approve the plain-language summary on the signer; the phone activates it.
+Mine a confirmation. The chain controls advance mock time by a week, 31 days or 13 months;
+each also mines eleven blocks to move Bitcoin's median-time-past, because changing wall time
+alone does not satisfy relative timelocks.
 
 The Vault home follows the Dark mockup: balance, Withdraw/Deposit buttons, and compact
 presigned-policy rows. Tap **Monthly allowance** or **Emergency access** for their execution
 and revocation controls. **Withdraw** also offers a cooperative transfer with the signer.
-**Vault settings** holds backup export, signer replacement, recovery and retired-vault
-monitoring. Every sheet has a close control (Escape also works on the web).
+**Vault settings** holds the recovery backup, **Lost a device?** guidance and signer
+recovery. Every sheet has a close control (Escape also works on the web).
 
 Wallet and Vault have separate receive/deposit addresses; their QR codes encode the actual
 address displayed, not a sample. Wallet activity comes from the Rust wallet's transaction
@@ -210,68 +222,60 @@ are shown. A saved policy is not proof that an action remains spendable; Rust ch
 chain and Bitcoin enforces timelocks/revocations at execution.
 
 Available screens include ordinary receive/payments, policy/renewal, monthly execution,
-soft limits and revocation, emergency initiation/withdrawal/cancellation, cooperative
-vault transfers, and phone-only recovery to an explicit destination. A fresh phone can
-**Recover with your signer** to receive the vault's public details, then request HWW fallback
-or blanket action revocation for the signer to review and sign. The fallback still requires 65,535 blocks; revocation spends both live connectors,
-not the main vault balance. Neither transfer rotates keys or renews policy yet.
+soft limits and revocation, emergency initiation/withdrawal/cancellation and cooperative
+vault transfers. The phone alone can never move savings: it is a second factor with a
+bounded monthly allowance and emergency access. A fresh phone can **Recover with your
+signer** to receive the vault's public details, then request HWW fallback or blanket action
+revocation for the signer to review and sign. The fallback opens only about 388 days after
+the vault was last renewed; revocation spends both live connectors, not the main vault
+balance. Neither transfer rotates keys or renews policy yet.
 
-Use **New wallet phone** / **New signer device** and the device selectors beneath the frames
-to simulate an unavailable device. Each device keeps independent state; original keys are
-retained so you can switch back and test whether an attack is rejected, never copied to the
-replacement. These test controls are absent in mainnet mode.
+Use **New phone** / **New signer** beneath the devices to simulate losing one: the new device
+takes its place, with fresh keys. The playground keeps the replaced device's state, never
+copied to the replacement, so the browser tests can bring it back and check an attack is
+rejected. These test controls are absent in mainnet mode.
 
-Recovery mining runs
-as a background job with block-count progress and cancellation at batch boundaries.
-Reloading and resuming the same host session reconnects to that job; already mined blocks
-are retained if you cancel.
-New playground nodes disable Bitcoin Core's `checkblockindex` debugging pass, which otherwise
-repeatedly walks the entire block tree during these long regtest runs. This does not disable
-transaction, script or timelock validation. All recovery delay blocks are still actually mined.
-The named CLI scenarios have browser counterparts. See the verification ledger for current
-combined and targeted test results; installed native-app verification remains unfinished.
+**+13 months** moves the chain clock past the signer's time lock, as if a year's renewal
+had been missed. The named CLI scenarios have browser counterparts. See the verification
+ledger for current combined and targeted test results; installed native-app verification
+remains unfinished.
 
 ### Lost-phone recovery
 
-1. Setup already saved an encrypted recovery backup to the cloud. **Export encrypted cloud
-   backup** saves the current one again, e.g. after adding a contact.
-2. Choose **New wallet phone** and create it. In **Vault**, choose **Recover with your signer**,
-   hold the signer to the phone and **Share vault details** on it. Then **Load latest exported
+1. Setup saved an encrypted recovery backup to the cloud, and every change saves it again.
+2. Choose **New phone**. In **Vault**, choose **Recover with your signer**,
+   then **Share vault details** on the signer. Then **Load latest exported
    backup** from the cloud controls (or select a saved backup after reloading).
-3. **Request phone key recovery** and hold the signer to the phone. Compare the new phone
+3. **Request phone key recovery**. Compare the new phone
    identity on both devices and approve recovery on the signer. The old key is recovered
    separately from the replacement phone's fresh key; this step alone does not move funds.
 4. **Propose restored vault rotation** and approve it on the signer. This broadcasts the vault
    transfer, revokes old connectors and renews the same reviewed monthly/emergency limits with
    a fresh backup. Mine a confirmation.
-5. **Finish on signer**, hold it to the phone and select **Use the rotated vault**. Export the
+5. **Finish on signer** and select **Use the rotated vault** on it. Export the
    new encrypted cloud backup from the replacement phone.
 6. **Review recovered wallet funds** to move the old ordinary hot-wallet balance too. Review
    its exact amount/fee and confirm; mine another confirmation. Switch to the original phone
    to check that its old vault actions can no longer spend the rotated funds.
 
 The signer reports its **last approved** limits; being offline, it cannot know whether that
-approval was activated on-chain. Rotation preserves the contacts authenticated from the old
-backup. Compare their fingerprints in the rotation review and export the new backup afterwards.
-If a recovered key predates contact metadata, repeat phone-key recovery before rotating; the
-app refuses to guess that the contact list was empty. Contact-assisted vault sweeping has a
-separate path below.
+approval was activated on-chain. The rotation's new backup is saved automatically.
 Native devices use the same Rust actions and separate OS backup sharing;
 the device builds themselves remain unverified.
 
 ### Phone unavailable, with no exported backup
 
-1. Create a fresh wallet phone, choose **Recover with your signer** in Vault, hold the
-   surviving signer to it and **Share vault details**. Leave the cloud-backup field empty.
-2. **Check recovery timing**. Rust reports the remaining blocks and eligible amount for
-   each key. A mature phone path is not useful without the missing phone key.
+1. Create a fresh wallet phone, choose **Recover with your signer** in Vault, then
+   **Share vault details** on the surviving signer. Leave the cloud-backup field empty.
+2. **Check recovery timing**. Rust reports how many days remain before the signer can move
+   the savings alone, and the amount already eligible.
 3. Choose **Use this wallet’s fresh address**, or enter a verified destination, then
-   **Request HWW fallback** and hold the signer to the phone. Review the destination, amount
+   **Request HWW fallback**. Review the destination, amount
    and fee on the signer and **Approve offline action**.
-4. The phone rejects an early broadcast; **Cancel** keeps the approval. Mine the remaining
-   recovery blocks in the playground, then **Finish** to submit the same approved transaction.
-   The HWW path requires 65,535 blocks from each input's confirmation; advancing dates alone
-   cannot unlock it. Mine a confirmation and sync the receiving wallet.
+4. The phone rejects an early broadcast; **Cancel** keeps the approval. Use **+13 months**,
+   then **Finish** to submit the same approved transaction. Bitcoin accepts it only once the
+   chain's median time past is 65,535 × 512 seconds (about 388 days) past each input's
+   confirmation. Mine a confirmation and sync the receiving wallet.
 
 This transfers funds, not the lost phone key. HWW fallback needs no cloud backup. A newer
 deposit does not postpone older savings: the review uses up to 1,000 mature inputs, or the
@@ -282,129 +286,49 @@ oldest confirmation group if none are mature yet. Check again for leftovers or l
 The device selectors retain old test devices so their keys and presigned actions can be
 exercised after recovery; the replacement never receives their private files.
 
-- **Stolen phone:** use its ordinary wallet to make a payment. An early phone-only cold
-  transfer fails; reject a cooperative sweep on the legitimate signer. Follow lost-phone
+- **Stolen phone:** use its ordinary wallet to make a payment. The phone has no way to move
+  savings alone; reject its cooperative sweep on the legitimate signer. Follow lost-phone
   recovery on a separate new phone, rotate, and recover the remaining ordinary wallet funds.
   Returning to the stolen phone shows that its old policy actions cannot spend the moved funds.
   Already-confirmed stolen hot funds remain with the attacker.
 - **Cloud-only attacker:** give unrelated new devices the old encrypted backup and public
   recovery-vault message. The unrelated signer cannot approve restoration or an HWW fallback.
 - **Both devices compromised:** both keys can approve an immediate cooperative vault
-  transfer. The recovery delays do not protect against compromise of both devices.
+  transfer. The signer's time lock does not protect against compromise of both devices.
 
 Run these three browser scenarios with `npm run test:e2e -- compromise.spec.ts`.
 
-With **both devices lost and no enrolled contact**, unrelated new keys cannot decrypt the
-old exported backup or spend its vault, even after both recovery delays expire. To reproduce
-this, create fresh phone/signer devices, import only the old public recovery-vault message and
-encrypted backup, then try phone-key recovery and HWW fallback before and after mining the
-displayed HWW delay. Neither delay creates a missing private key. The dedicated case is
-`npm run test:e2e -- --grep "both devices lost without"`.
+With **both devices lost**, restore the signer from the backup its maker gave you: it is the
+same key, so after the time lock it can move the savings alone. If that backup is lost too,
+unrelated new keys cannot decrypt the old exported backup or spend its vault, even after the
+time lock opens. To reproduce this, create fresh phone/signer devices, import only the old
+public recovery-vault message and encrypted backup, then try phone-key recovery and HWW
+fallback before and after **+13 months**. Time never creates a missing private key. The
+dedicated case is `npm run test:e2e -- --grep "signer’s own backup"`.
 
 ### Forgotten annual renewal
 
-1. Set and approve a policy, then use **Advance 31 days** to pass the annual renewal date.
-   Open **Signer recovery and revocation** and **Check recovery timing**. Calendar advancement
-   alone does not mature either block-based recovery path.
-2. Mine the displayed phone delay. It reaches zero while the signer's later path remains
-   locked for another 4,335 blocks. Mine those blocks too: both keys can now recover.
-3. With both legitimate devices still available, **Renew current policy**. Review and approve
+1. Set and approve a policy. Open **Signer recovery and revocation** and **Check recovery
+   timing**: the signer's solo path opens in about 388 days.
+2. Use **+13 months**. The signer could now move the savings alone; the phone still cannot.
+3. With both legitimate devices still available, **Renew for another year**. Review and approve
    the unchanged limits on the signer, activate on the phone, and mine a confirmation.
-4. **Check recovery timing** again. The new outputs restart both delays; immediate monthly,
-   phone-recovery and HWW-recovery attempts remain locked by their new timelocks.
+4. **Check recovery timing** again. The new outputs restart the time lock at about 388 days,
+   and an HWW fallback is again refused as not mature.
 
-The dedicated browser case is selected with `npm run test:e2e -- --grep "forgotten rollover"`.
+The dedicated browser case is selected with `npm run test:e2e -- --grep "missed renewal"`.
 
 ### Lost-signer recovery
 
-1. Keep the surviving wallet phone and choose **New signer device**. Already approved monthly
-   withdrawals can still be executed by the phone while the old signer is unavailable.
-2. In **Vault settings**, choose **Replace lost signer**, then **Connect new signer** and hold
-   the new signer to the phone. The replacement screen shows the new vault address, the
-   selected amount versus the total, and the delay for that group. Younger deposits do not
-   postpone older savings.
-3. **Propose signer replacement** and hold the new signer to the phone. Check both device
-   identities and the preserved monthly/emergency limits, then **Approve signer replacement**.
-4. The phone rejects early activation without broadcasting anything; **Cancel** keeps the
-   approval as a **Finish** card. Use recovery mining to reach the required block height, then
-   **Finish**. Changing calendar time alone is insufficient.
-5. Mine a confirmation. **Finish on signer**, hold it to the phone and select **Use the
-   replacement vault**.
-   Export the new encrypted cloud backup. The phone key and ordinary wallet remain unchanged;
-   the new vault's policy and recovery delays restart on confirmation.
-6. Check **Retired vaults** for funds left at the old address. **Review old vault funds**,
-   check the destination/amount/fee, and **Confirm previous vault transfer** once that group
-   is mature. Mine confirmation and **Sync vault**; repeat for any younger group. Cancel a
-   review before submission with **Cancel previous vault transfer**.
+A vault never changes signer. Restore a lost signer from the backup its maker gave you: it
+comes back as the same key, so the vault, its policy and the phone are unchanged. **Lost a
+device?** in Vault settings explains this. Anzen does not hold or restore signer seeds.
 
-The new signer signs only its new policy, never the old vault's recovery input. Neither its
-approval nor the app can bypass Bitcoin's 61,200-block phone delay. Contacts in the phone's
-stored backup are retained: compare their fingerprints on the new signer and export the new
-backup once replacement is complete.
-
-The old address remains tracked on this phone even when empty, and is rescanned by vault
-syncs; there is no background warning service yet. Avoid new payments to it. The retired-address
-history is not yet included in cloud recovery onto another phone. Moving these deposits back
-to the current vault preserves the limits but does not rewrite its existing presigned policy.
-
-To simulate a stolen signer, keep its test-device entry. During the phone-priority window,
-switch to that old signer, share its public recovery vault, and request an HWW fallback from
-the phone: it is still too early. Return to the legitimate new signer and complete replacement.
-After recovering any younger groups, advance past the old HWW deadlines and check its old
-address again; it has no remaining inputs to recover. All approvals remain explicit.
-
-### Enroll a recovery contact
-
-1. In the regtest controls, choose **Add recovery contact device**. On that third phone,
-   **Create wallet**, then **Be a recovery contact**. Enter a name and create the contact key.
-2. **Share contact public key**, then **Send contact public key**. The owner's phone receives
-   only the public certificate and fingerprint; the private OpenPGP key stays on the contact.
-3. On the owner's phone, open the message, compare the fingerprint with the contact, and
-   **Propose recovery contact** and hold the signer to the phone.
-4. Compare the fingerprint on the signer and **Approve recovery backup**, then **Export
-   encrypted cloud backup** separately.
-
-The contact's device survives page reload/resume, and recreating a backup preserves its contacts.
-Any one configured contact can recover the phone key with the backup; this is not threshold
-sharing. Both phone rotation and signer replacement retain contacts and create a fresh backup;
-export it after each rotation. Do not rely on this prototype as your only social-recovery route.
-
-### Recover after losing both vault devices
-
-1. Enroll a contact and export the updated backup as above. Choose **New wallet phone** and
-   **New signer device** to make both original devices unavailable. **Create wallet** on the
-   fresh phone; the replacement signer is not used for this recovery.
-2. On the contact, **Share contact public key** and **Send contact public key**. On the fresh
-   phone, **Open received message** and load the latest exported cloud backup using the
-   playground's cloud controls (or paste it into the recovery screen).
-3. **Request contact recovery**, **Send to contact**, then **Open received message** on the
-   contact. Independently compare the new phone's identity before **Approve contact recovery**.
-   **Send recovery approval**, then open it on the new phone. The old vault address is recovered
-   from the backup without either original device or a separate configuration export.
-4. **Check recovered vault balance and delay**, then **Use new wallet address** or enter a
-   destination. **Review recovered vault transfer** shows the exact amount, fee and inputs.
-   **Confirm recovered vault transfer** refuses to sign before the Bitcoin delay has expired.
-5. Use recovery mining to reach the required height, retry confirmation, and mine a confirmation.
-  Mature vault funds arrive at the destination. Newer deposits may need a later recovery sweep.
-6. **Review recovered wallet funds** separately to recover the old ordinary hot-wallet balance.
-   It has no vault CSV delay. Check the exact amount, fee and this phone's fresh destination,
-   then **Confirm recovered wallet transfer** and mine confirmation. Sync the Wallet tab to
-   see the received balance. **Cancel recovered wallet transfer** works before submission;
-   it cannot undo a transaction whose submission has started. Repeat for later deposits.
-
-After reload, open **Recover with a contact**, then **Check stored contact recovery**. The
-fresh phone's identity stays independent from the restored key. The cloud backup contains the
-key and descriptor, not the old spending-policy history: the UI reports that history as
-unavailable, and this transfer does not renew the policy. Ordinary hot-wallet funds can be
-recovered immediately; contact approval cannot bypass the 61,200-block delay on vault funds.
-
-The legacy host-backed mainnet option (when using a private regtest-style host link) requires
-**both** the browser's explicit danger action and starting the Rust host with
-`--dangerously-enable-mainnet`. It uses real Electrum servers and
-new isolated keys. Mining/funding controls are hidden for mainnet; the node-control
-endpoint itself independently refuses a non-regtest node. Browser keys stay in the device's
-browser-local WASM/storage workers; only public chain information or signed transactions
-cross the chain proxy. Browser mainnet mode remains experimental and is not a production wallet.
+Mainnet never uses the Rust host, even when the page was opened from its link: it runs in the
+browser against real Electrum servers, so the host has no mainnet option. Chain controls
+exist only on regtest, and the node-control endpoint independently refuses a
+non-regtest node. Browser keys stay in the device's browser-local WASM/storage workers.
+Browser mainnet mode remains experimental and is not a production wallet.
 
 ## Native builds
 
@@ -456,11 +380,10 @@ release-age policy currently prevents installing those recommended patches. It h
 disabled; the current dependency set remains installable. Android additionally needs a JDK,
 SDK and NDK. Native device support is not yet verified.
 
-Native builds do not have a tap link yet (NFC or Bluetooth is the next step), so the app falls
+Native builds do not have the Bluetooth link yet, so the app falls
 back to exchanging JSON files:
 
-1. On the sender, use **Send to signer**, **Send to wallet**, or the corresponding contact
-   action. Choose how to transfer the file from the OS share sheet.
+1. On the sender, use **Send to signer** or **Send to wallet**. Choose how to transfer the file from the OS share sheet.
 2. Save/receive the file on the other device. Choose **Receive a file or message** →
    **Choose protocol message file**. Pasting protocol JSON is also supported; never paste seeds.
 3. Return to Vault if it was hidden while switching apps, and explicitly **Open received
@@ -469,8 +392,9 @@ back to exchanging JSON files:
 4. A closed share sheet does not prove delivery. The outgoing message stays available to
    retry; **Saved messages** can resend retained Rust outbox copies after an app restart.
 
-**Export encrypted cloud backup** is a separate action. Save that file independently from
-the signer/contact and verify that the saved copy exists—the app cannot confirm delivery.
+Natively the recovery backup is offered as a file whenever it changes. Save that file
+independently from the signer and verify that the saved copy exists—the app cannot
+confirm delivery.
 On a replacement wallet-mode phone, use **Receive a file or message** → **Choose encrypted
 backup file**, then open the appropriate recovery action in Vault. Signer mode does not offer
 backup-file import. Do not store the backup on the signer or in a shared account accessible
@@ -488,7 +412,6 @@ recovery also remain unfinished.
 
 ## Verified checks
 
-Wallet **Settings** contains **Be a recovery contact** and **Recover with a contact**.
 The Wallet home shows only the ordinary spending balance and its actual BDK transaction
 history. No fiat conversion or merchant labels are fabricated when those sources are absent.
 
@@ -510,8 +433,8 @@ npm run test:static
 npm run test:e2e
 npm run test:native:regtest
 
-# Or just the independent contact/ordinary-wallet recovery native test
-npm run test:native:regtest -- contact_recovers_hot_funds
+# Or just the native policy and payment review test
+npm run test:native:regtest -- encrypted_native_devices
 ```
 
 `test:static` serves production assets with no Rust host or Docker. It covers browser-local

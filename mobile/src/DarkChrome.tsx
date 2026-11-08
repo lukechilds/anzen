@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import Svg, { Circle, Defs, FeTurbulence, Filter, Path, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 
-export type IconName = 'wallet' | 'vault' | 'vaultFine' | 'send' | 'receive' | 'refresh' | 'close' | 'settings' | 'chevron' | 'clock' | 'key' | 'phone' | 'copy' | 'scan';
+export type IconName = 'wallet' | 'vault' | 'vaultFine' | 'send' | 'receive' | 'refresh' | 'close' | 'settings' | 'chevron' | 'clock' | 'key' | 'phone' | 'copy' | 'scan' | 'face' | 'cloud';
 // Glyphs from the Dark mockup. Stroke widths follow it: 2 for most icons, 2.2 for the send and
 // receive arrows on pills, finer strokes inside the wallet and vault marks.
 export function Icon({ name, size = 18, color = 'rgba(255,255,255,.68)', strokeWidth = 2 }: { name: IconName; size?: number; color?: string; strokeWidth?: number }) {
@@ -20,6 +20,8 @@ export function Icon({ name, size = 18, color = 'rgba(255,255,255,.68)', strokeW
     {name === 'key' && <Path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>}
     {name === 'phone' && <><Rect x="5" y="2" width="14" height="20" rx="3"/><Path d="M12 18h.01"/></>}
     {name === 'copy' && <><Rect x="9" y="9" width="11" height="11" rx="2.5"/><Path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></>}
+    {name === 'face' && <><Path d="M4 8V6.5A2.5 2.5 0 0 1 6.5 4H8M16 4h1.5A2.5 2.5 0 0 1 20 6.5V8M20 16v1.5a2.5 2.5 0 0 1-2.5 2.5H16M8 20H6.5A2.5 2.5 0 0 1 4 17.5V16"/><Path d="M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.5 15.5a3.5 3.5 0 0 0 5 0"/></>}
+    {name === 'cloud' && <Path d="M7.5 18.5h9.5a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7 9.6a4.5 4.5 0 0 0 .5 8.9z"/>}
     {name === 'scan' && <Path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/>}
     {name === 'settings' && <><Circle cx="12" cy="12" r="3"/><Path d="m9 3-.5 2-2 1-2-.5-2 3 1.5 1.5v3L2.5 15l2 3 2-.5 2 1 .5 2h4l.5-2 2-1 2 .5 2-3-1.5-1.5v-3L21 9l-2-3-2 .5-2-1-.5-2z"/></>}
   </Svg>;
@@ -67,12 +69,26 @@ export function DarkEffects() {
 }
 
 // Device chrome exists only in the browser playground. Native uses the actual OS status bar.
+// The status bar's clock, as an iPhone shows it: hours and minutes, no AM/PM.
+function useClock() {
+  const read = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '');
+  const [time, setTime] = useState(read);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => { setTime(read()); timer = setTimeout(tick, 60_000 - Date.now() % 60_000); };
+    timer = setTimeout(tick, 60_000 - Date.now() % 60_000);
+    return () => clearTimeout(timer);
+  }, []);
+  return time;
+}
+
 export function DeviceStatus() {
   const [width, setWidth] = useState(355);
+  const time = useClock();
   if (Platform.OS !== 'web') return null;
   const island = Math.min(122, width - 148);
   return <View pointerEvents="none" onLayout={event => setWidth(event.nativeEvent.layout.width)} style={{ height: 44, zIndex: 20, paddingTop: 24, paddingHorizontal: width < 300 ? 20 : 32, flexDirection: 'row', justifyContent: 'space-between' }}>
-    <Text style={{ color: 'rgba(255,255,255,.92)', fontSize: width < 300 ? 13 : 15, fontWeight: '600', lineHeight: 18 }}>9:41</Text>
+    <Text style={{ color: 'rgba(255,255,255,.92)', fontSize: width < 300 ? 13 : 15, fontWeight: '600', lineHeight: 18 }}>{time}</Text>
     <View style={{ position: 'absolute', top: 16, left: '50%', marginLeft: -island / 2, width: island, height: 34, borderRadius: 17, backgroundColor: '#000', borderWidth: .5, borderColor: '#ffffff0f' }}/>
     <Svg width={45} height={16} viewBox="0 0 45 16" fill="rgba(255,255,255,.92)">
       {[4, 6, 8, 10].map((height, i) => <Rect key={i} x={i * 4} y={12 - height} width={2.5} height={height} rx={1}/>)}

@@ -3,6 +3,7 @@ import SavedMessages from './SavedMessages';
 import { parseEncryptedBackup } from './fileExchange';
 import { ActivityIndicator, AppState, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { BlurView } from 'expo-blur';
+import Svg, { Path } from 'react-native-svg';
 import { DarkBackground, DarkEffects, DeviceStatus, Icon } from './DarkChrome';
 import { ActionPill, Activity, DarkSheet, IconButton, MenuRow, WalletHistory } from './DarkSurfaces';
 import AddressCard, { AddressLines } from './AddressCard';
@@ -10,6 +11,9 @@ import VaultSummary from './VaultSummary';
 import { VaultSettings, WithdrawalOptions } from './VaultControls';
 import { PolicyEditor } from './VaultControls';
 import { DECLINED, TapArt, TapPurpose, TapSheet, TapState } from './Tap';
+import SignerDevice from './SignerDevice';
+import { useSimulatedFaceId } from './FaceId';
+import { Code, Note, Page, Pager, Review } from './SignerScreens';
 import { colors, fonts, formatBtc, styles as s } from './theme';
 import { Deliver, DeviceTransport, JsonObject, ProtocolMessage, SignerLink, Tap, TransferResult, signerBound } from './transport';
 
@@ -19,19 +23,40 @@ type Props = {
   incoming: ProtocolMessage | null;
   dismissIncoming: () => void;
   deliver: Deliver;
-  // Holding the phone and signer together. Without it, messages travel as files.
+  // The Bluetooth link to the signer. Without it, messages travel as files.
   tap?: Tap;
   saveBackup?: (backup: JsonObject) => Promise<TransferResult>;
   cloudBackup?: JsonObject | null;
+  // Asks the owner to confirm it's them (Face ID or passcode) before the app opens, the vault
+  // opens or money moves. Without it, the browser emulator plays a simulated Face ID check.
+  authenticate?: () => Promise<boolean>;
 };
 type Kind = ProtocolMessage['kind'];
-type ReviewKind = 'policy' | 'sweep' | 'backup' | 'offline-action' | 'restore' | 'rotation' | 'rotation-adoption' | 'signer-replacement' | 'signer-adoption' | 'share-vault';
+type ReviewKind = 'policy' | 'sweep' | 'backup' | 'offline-action' | 'restore' | 'rotation' | 'rotation-adoption' | 'share-vault';
 // These finish only after the phone's transaction confirms, so the phone offers them later.
-const deferred: Kind[] = ['phone-rotation-completed', 'signer-replacement-completed'];
+const deferred: Kind[] = ['phone-rotation-completed'];
 const purposeOf = (kind: Kind): TapPurpose => kind === 'signer-hello' ? 'setup'
   : kind === 'recovery-vault-request' ? 'recover' : deferred.includes(kind) ? 'finish' : 'approve';
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const btc = (sats: number = 0) => formatBtc(sats);
+// The signer's round display is small: the same review layout, set tighter.
+const r = { ...s, ...StyleSheet.create({
+  heading: { ...s.heading, fontSize: 18, lineHeight: 23, marginTop: 10, marginBottom: 6 },
+  row: { ...s.row, paddingVertical: 11 },
+  rowValue: { ...s.rowValue, fontSize: 18, marginTop: 3 },
+  subtext: { ...s.subtext, fontSize: 11.5, lineHeight: 17, marginVertical: 8 },
+  tiny: { ...s.tiny, fontSize: 10.5, lineHeight: 15 },
+  mono: { ...s.mono, fontSize: 10, lineHeight: 15 },
+  errorText: { ...s.errorText, fontSize: 11, lineHeight: 16 },
+}) };
+
+// The signer's idle mark: radio waves, mint while a phone is connected.
+function Waves({ on }: { on: boolean }) {
+  const tint = on ? colors.mint : 'rgba(255,255,255,.55)';
+  return <Svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke={tint} strokeWidth={1.6} strokeLinecap="round" accessibilityElementsHidden>
+    <Path d="M8.5 9a4.5 4.5 0 0 1 0 6M12 6.5a8 8 0 0 1 0 11M15.5 4a11.5 11.5 0 0 1 0 16"/><Path d="M5 12h.01" strokeWidth={2.6}/>
+  </Svg>;
+}
 
 function Balance({ sats }: { sats?: number }) {
   const [width, setWidth] = useState(0);
@@ -74,13 +99,21 @@ function Field({ label, value, onChange, numeric = false }: { label: string; val
     style={s.input} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} /></>;
 }
 
-export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, network = 'regtest' }: Props) {
+export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest' }: Props) {
   const signer = transport.role === 'signer';
   const [identity, setIdentity] = useState<JsonObject | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [tab, setTab] = useState<'wallet' | 'vault'>('wallet');
   const [page, setPage] = useState('home');
   const [vaultVisible, setVaultVisible] = useState(false);
+  const [revealError, setRevealError] = useState('');
+  const faceId = useSimulatedFaceId();
+  const authenticate = deviceAuthenticate ?? (Platform.OS === 'web' ? faceId.authenticate : undefined);
+  // An existing wallet stays covered until its owner is confirmed.
+  const [locked, setLocked] = useState(!signer && Boolean(authenticate));
+  // Moving money needs the owner too.
+  const secure = async (action: () => unknown) => { if (authenticate && !await authenticate()) return; await action(); };
+  const opening = useRef(false);
   const [wallet, setWallet] = useState<JsonObject | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
   const [vault, setVault] = useState<JsonObject | null>(null);
@@ -89,18 +122,13 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const [backupStored, setBackupStored] = useState(false);
   const [tapState, setTapState] = useState<TapState | null>(null);
   const [linked, setLinked] = useState(false);
+  // A new phone gets its wallet straight away; this explains, once, how it is protected.
+  const [welcome, setWelcome] = useState(false);
+  const autoCreated = useRef(false);
   // A signer's approval the phone could not finish with yet, e.g. before a timelock matures.
   const [retained, setRetained] = useState<ProtocolMessage | null>(null);
   const [review, setReview] = useState<JsonObject | null>(null);
   const [reviewKind, setReviewKind] = useState<ReviewKind>('policy');
-  const [signerCandidate, setSignerCandidate] = useState<JsonObject | null>(null);
-  const [contact, setContact] = useState<JsonObject | null>(null);
-  const [contactName, setContactName] = useState('');
-  const [receivedContact, setReceivedContact] = useState<JsonObject | null>(null);
-  const [contactRestoreReview, setContactRestoreReview] = useState<JsonObject | null>(null);
-  const [contactRecovery, setContactRecovery] = useState<JsonObject | null>(null);
-  const [contactStatus, setContactStatus] = useState<JsonObject | null>(null);
-  const [contactSweep, setContactSweep] = useState<JsonObject | null>(null);
   const [recoverySource, setRecoverySource] = useState<JsonObject | null>(null);
   const [recoveryTiming, setRecoveryTiming] = useState<JsonObject | null>(null);
   const [backupText, setBackupText] = useState('');
@@ -116,8 +144,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const [payment, setPayment] = useState('10000');
   const [paymentReview, setPaymentReview] = useState<JsonObject | null>(null);
   const [recoveredPayment, setRecoveredPayment] = useState<JsonObject | null>(null);
-  const [previousRecovery, setPreviousRecovery] = useState<JsonObject | null>(null);
   const [softLimit, setSoftLimit] = useState('1000000');
+  const [moreMonthly, setMoreMonthly] = useState(false);
   const [busy, setBusy] = useState(false);
   const [liveError, setLiveError] = useState<{ wallet?: string; vault?: string }>({});
   const [error, setError] = useState('');
@@ -142,7 +170,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       setMonthly(round(set ? vault.config.monthly_limit_sats : vault.balance_sats / 24));
       setEmergency(round(set ? vault.config.emergency_access_limit_sats : vault.balance_sats / 4));
     }
-    setPage(next); setError(''); setNotice(''); screenScroll.current?.scrollTo({ y: 0, animated: false });
+    setPage(next); setMoreMonthly(false); setError(''); setNotice(''); screenScroll.current?.scrollTo({ y: 0, animated: false });
   };
   useEffect(() => { if (cloudBackup) setBackupText(JSON.stringify(cloudBackup)); }, [cloudBackup]);
   // Switching devices away mid-tap moves the phone away from its signer.
@@ -154,6 +182,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     transport.execute({ method: 'session' }).then(session => {
       if (!active) return;
       setIdentity(session.identity);
+      if (!signer && session.identity && authenticate) void authenticate(true).then(() => { if (active) setLocked(false); });
+      else setLocked(false);
       setPaired(Boolean(session.paired || session.config));
       setBackupStored(Boolean(session.backup_stored));
       if (signer && session.config) setPairing(session.config);
@@ -162,7 +192,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   }, [transport]);
 
   // Presentation privacy only. Wallet operations/authorization are exclusively Rust-owned.
-  const hideVault = () => { privacyGeneration.current += 1; setVaultVisible(false); setVault(null); setRecoveredPayment(null); setPreviousRecovery(null); setPage('home'); setTab('wallet'); setError(''); setNotice(''); };
+  const hideVault = () => { privacyGeneration.current += 1; setRevealError(''); setVaultVisible(false); setVault(null); setRecoveredPayment(null); setPage('home'); setTab('wallet'); setError(''); setNotice(''); };
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => { if (state !== 'active') hideVault(); });
     return () => subscription.remove();
@@ -218,7 +248,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       // Keep completed protocol results, but never reveal late private notices after hiding.
       if (!stillVisible()) { setNotice(''); setError(''); return result; }
       if (result.txid) {
-        setNotice(`Broadcast ${result.txid}`);
+        setNotice(`Sent · ${result.txid.slice(0, 8)}`);
         if (!signer && tab === 'wallet') {
           try { setWallet(await transport.execute({ method: 'wallet_snapshot' })); }
           catch (e) { if (stillVisible()) setError(`Transaction broadcast; balance refresh failed: ${String(e)}. Sync again to refresh the display.`); }
@@ -260,7 +290,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   async function connectAndSend() {
     const request = tapMessage.current;
     if (!request || !tap) return;
-    const purpose: TapPurpose = request.kind === 'signer-hello' && paired && backupStored ? 'replace' : purposeOf(request.kind);
+    const purpose = purposeOf(request.kind);
     const abort = new AbortController();
     tapAbort.current = abort;
     setBusy(true);
@@ -271,7 +301,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
         const connected = await tap.connect(abort.signal);
         if (abort.signal.aborted) { connected.close(); return; }
         link.current = connected;
-        setTapState(purpose === 'setup' || purpose === 'replace' ? { purpose, phase: 'working', step: 'Connected to your signer' } : { purpose, phase: 'review' });
+        setTapState(purpose === 'setup' ? { purpose, phase: 'working', step: 'Connected to your signer' } : { purpose, phase: 'review' });
         tapReply.current = await connected.request(request);
       }
       await handleMessage(tapReply.current);
@@ -311,7 +341,14 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const initialize = () => run({ method: 'initialize', network }, value => {
     setIdentity(value);
     if (signer && !tap) void send('signer-identity', value);
+    if (!signer) setWelcome(true);
   });
+  // There is nothing to choose on a new phone, so its wallet is created without asking.
+  useEffect(() => {
+    if (signer || !sessionLoaded || identity || autoCreated.current) return;
+    autoCreated.current = true;
+    void initialize();
+  }, [signer, sessionLoaded, identity]);
   // Retry / Catch up: an explicit full sync, which also reports its own errors.
   const syncWallet = () => run({ method: 'wallet_snapshot' }, value => {
     setWallet(value); setLiveError(current => ({ ...current, wallet: undefined }));
@@ -322,22 +359,27 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       if (generation === privacyGeneration.current) { setVault(value); setLiveError(current => ({ ...current, vault: undefined })); }
     });
   };
-  const reveal = () => {
+  // Opening the Vault tab opens the vault: savings stay hidden until then, and hide again on
+  // leaving the tab or the app. The owner unlocks first where the device can ask.
+  async function reveal() {
+    if (opening.current) return;
+    opening.current = true; setBusy(true); setRevealError('');
     const generation = privacyGeneration.current;
-    return run({ method: 'vault_snapshot' }, value => {
+    try {
+      if (authenticate && !await authenticate()) throw new Error('The vault stays locked.');
+      const value = await call({ method: 'vault_snapshot' });
       if (generation === privacyGeneration.current) { setVault(value); setVaultVisible(true); }
-    });
-  };
+    } catch (e) { if (generation === privacyGeneration.current) setRevealError(message(e)); }
+    finally { opening.current = false; setBusy(false); }
+  }
+  useEffect(() => {
+    if (signer || tab !== 'vault' || page !== 'home' || !paired || !backupStored || vaultVisible || busy || tapState || revealError) return;
+    void reveal();
+  }, [signer, tab, page, paired, backupStored, vaultVisible, busy, tapState, revealError]);
   const reviewRecovered = () => {
     const generation = privacyGeneration.current;
     return run({ method: 'review_recovered_wallet' }, value => {
       if (generation === privacyGeneration.current) setRecoveredPayment(value);
-    });
-  };
-  const reviewPrevious = (vault_id: string) => {
-    const generation = privacyGeneration.current;
-    return run({ method: 'review_previous_vault_recovery', vault_id }, value => {
-      if (generation === privacyGeneration.current) setPreviousRecovery(value);
     });
   };
   function proposal(method = 'propose_policy') {
@@ -346,34 +388,19 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     if (Object.values(limits).some(Number.isNaN)) { setError('Enter amounts in bitcoin, like 0.05.'); return; }
     void propose({ method, ...limits }, 'policy-proposal', () => setPage('home'));
   }
-  async function exportBackup() {
-    if (busy) return;
-    setBusy(true); setError('');
-    const generation = privacyGeneration.current;
-    try {
-      const backup = await transport.execute({ method: 'export_backup' });
-      if (saveBackup) {
-        const result = await saveBackup(backup);
-        if (generation === privacyGeneration.current) setNotice(result === 'offered'
-          ? 'Backup file offered for export. Check it was saved separately from the signer; the app cannot confirm delivery.'
-          : 'Encrypted backup exported separately from the signer.');
-      }
-      else if (generation === privacyGeneration.current) { setBackupText(JSON.stringify(backup)); setNotice('Encrypted backup ready to copy. Keep it separately from your signer.'); }
-    } catch (e) { if (generation === privacyGeneration.current) setError(String(e)); }
-    finally { setBusy(false); }
-  }
   function requestRestore() {
     let backup: JsonObject;
     try { backup = parseEncryptedBackup(backupText); }
     catch (e) { setError(`Cannot read the encrypted cloud backup: ${String(e)}`); return; }
     void propose({ method: 'propose_restore', backup }, 'restore-proposal');
   }
-  function requestContactRestore() {
-    try {
-      void run({ method: 'propose_contact_restore', backup: parseEncryptedBackup(backupText), contact: receivedContact }, value => void send('contact-restore-proposal', value));
-    } catch (e) { setError(`Cannot read the encrypted cloud backup: ${String(e)}`); }
-  }
 
+  // The recovery backup goes to the cloud whenever it changes; there is nothing to export.
+  async function saveToCloud() {
+    if (!saveBackup) return;
+    try { await saveBackup(await call({ method: 'export_backup' })); }
+    catch { setNotice('Saving the recovery backup failed. Change it again from Vault settings to retry.'); }
+  }
   // Every received message, by file or by tap, on either device. Rust validates each one;
   // this only routes it and shows what comes back. Throws so the sender learns of failure.
   async function handleMessage(received: ProtocolMessage) {
@@ -388,29 +415,20 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       const value = await call({ method, ...args });
       setReview(value); setReviewKind(kind); if (keep) setReviewMessage(body);
     };
-    const broadcast = (result: JsonObject) => { if (result.txid) setNotice(`Broadcast ${result.txid}`); };
+    const broadcast = (result: JsonObject) => { if (result.txid) setNotice(`Sent · ${result.txid.slice(0, 8)}`); };
     switch (received.kind) {
-      case 'recovery-contact': setReceivedContact(await call({ method: 'inspect_recovery_contact', contact: body })); showPrivate(paired ? 'add-contact' : 'contact-recover'); return;
-      case 'contact-restore-proposal':
-        setContactRestoreReview(await call({ method: 'review_contact_restore', request: body }));
-        setReviewMessage(body); setVault(null); setVaultVisible(false); showPrivate('contact-approve'); return;
-      case 'contact-restore-approved':
-        setContactRecovery(await call({ method: 'store_contact_restored_key', message: body }));
-        setRecoverySource(null); showPrivate('contact-recover'); setNotice('Contact-assisted key recovery complete. Moving vault funds still requires the Bitcoin recovery delay.'); return;
       // Signer: a phone asks who this is. A new signer creates its key on its first tap.
       case 'signer-hello': {
-        // Setup and replacement both need a signer without a vault, or this phone's own when
-        // finishing an interrupted setup. Refusing here keeps the phone from pairing with it.
+        // Setup needs a signer without a vault, or this phone's own when finishing an
+        // interrupted setup. Refusing here keeps the phone from pairing with it.
         if (pairing && pairing.phone_vault_pubkey !== body.phone) throw new Error('This signer already protects another vault.');
         let own = identity;
         if (!own) { own = await call({ method: 'initialize', network }); setIdentity(own); }
         await send('signer-identity', own!); return;
       }
       case 'signer-identity':
-        if (paired && backupStored) {
-          setSignerCandidate(await call({ method: 'inspect_signer_replacement', signer: body })); showPrivate('replace-signer');
-          return;
-        }
+        // A lost signer comes back from its own backup as the same key; a vault never changes signer.
+        if (paired && backupStored) throw new Error('This vault already has a signer.');
         progress('Creating your vault');
         { const setup = await call({ method: 'setup_vault', signer: body }); setPaired(true); await send('vault-setup', setup); }
         return;
@@ -420,24 +438,20 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
         await send('vault-accepted', accepted); return;
       }
       case 'vault-accepted':
-        // A signer finishing a rotation or replacement only confirms it switched vaults.
+        // A signer finishing a rotation only confirms it switched vaults.
         if (!body.backup) { setNotice('Your signer now uses the new vault.'); return; }
         progress('Saving your recovery backup');
         await call({ method: 'store_backup', message: body.backup }); setBackupStored(true);
-        if (saveBackup) {
-          try { await saveBackup(await call({ method: 'export_backup' })); }
-          catch { setNotice('Vault ready. Saving the recovery backup failed: export it from Vault settings.'); }
-        }
-        return;
+        await saveToCloud(); return;
       case 'recovery-vault-request':
         if (!pairing) throw new Error('This signer has no vault yet.');
         setReview({ vault_address: pairing.vault_address }); setReviewKind('share-vault'); return;
       case 'policy-proposal': await reviewWith('review_policy', 'policy', { request: body }); return;
       case 'sweep-proposal': await reviewWith('review_sweep', 'sweep', { request: body }); return;
-      case 'sweep-approved': broadcast(await call({ method: 'activate_sweep', approval: body })); return;
+      case 'sweep-approved': broadcast(await call({ method: 'activate_sweep', approval: body })); void refreshInBackground(); return;
       case 'recovery-vault': setRecoverySource(await call({ method: 'import_recovery_bundle', bundle: body })); showPrivate('signer-recovery'); return;
       case 'offline-action-proposal': await reviewWith('review_offline_action', 'offline-action', { request: body }); return;
-      case 'offline-action-approved': broadcast(await call({ method: 'activate_offline_action', approval: body })); return;
+      case 'offline-action-approved': broadcast(await call({ method: 'activate_offline_action', approval: body })); void refreshInBackground(); return;
       case 'restore-proposal': await reviewWith('review_restore', 'restore', { request: body }); return;
       case 'restore-approved':
         setRestored(await call({ method: 'store_restored_key', message: body })); showPrivate();
@@ -445,29 +459,22 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       case 'phone-rotation-proposal': await reviewWith('review_phone_rotation', 'rotation', { request: body }, true); return;
       case 'phone-rotation-approved': {
         const completed = await call({ method: 'activate_rotation', approval: body });
+        await saveToCloud();
         setPaired(true); setBackupStored(true); setRestored(null); setRecoverySource(null); setVault(null); setVaultVisible(false); showPrivate('home');
         await send('phone-rotation-completed', completed);
         setNotice('Vault rotation broadcast. Once it confirms, finish on your signer.'); return;
       }
       case 'phone-rotation-completed': setReview(body); setReviewKind('rotation-adoption'); return;
-      case 'signer-replacement-proposal': await reviewWith('review_signer_replacement', 'signer-replacement', { request: body }, true); return;
-      case 'signer-replacement-approved': {
-        const completed = await call({ method: 'activate_signer_replacement', approval: body });
-        setSignerCandidate(null); setVault(null); setVaultVisible(false); showPrivate('home');
-        await send('signer-replacement-completed', completed);
-        setNotice('Signer replacement broadcast. Once it confirms, finish on your new signer.'); return;
-      }
-      case 'signer-replacement-completed': setReview(body); setReviewKind('signer-adoption'); return;
       case 'backup-proposal': await reviewWith('review_backup', 'backup', { message: body }, true); return;
       case 'backup-approved': {
         const value = await call({ method: 'store_backup', message: body });
-        setBackupStored(true);
+        setBackupStored(true); await saveToCloud();
         setVault(previous => previous ? { ...previous, recovery_backup_stored: value.stored } : previous);
-        setNotice('Encrypted cloud backup stored locally. The signer can recover the phone key.'); return;
+        setNotice('Recovery backup saved.'); return;
       }
       case 'policy-approved':
         await call({ method: 'activate_policy', approval: body });
-        setNotice(network === 'regtest' ? 'Policy activated. Confirm its rollover with the regtest controls.' : 'Policy broadcast. Wait for network confirmation, then sync the vault.'); return;
+        setNotice('Allowance approved.'); void refreshInBackground(); return;
       default: throw new Error('Unsupported Anzen protocol message. Check that both devices use a compatible app version.');
     }
   }
@@ -514,148 +521,23 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   }, [signer, tap]);
   const inPrivate = signer || tab === 'vault';
   const walletSheet = Boolean(identity && !signer && tab === 'wallet' && ['send', 'receive', 'confirm-send', 'transaction'].includes(page));
-  const vaultSheetLabels: Record<string, string> = { settings: 'Vault settings', policy: 'Vault policy', withdraw: 'Withdraw', monthly: 'Monthly allowance', emergency: 'Emergency access', deposit: 'Vault deposit', sweep: 'Move vault funds', recovery: 'Phone recovery' };
+  const vaultSheetLabels: Record<string, string> = { lost: 'Lost a device', 'saved-messages': 'Saved messages', settings: 'Vault settings', policy: 'Vault policy', withdraw: 'Withdraw', monthly: 'Monthly allowance', emergency: 'Emergency access', deposit: 'Vault deposit', sweep: 'Move vault funds' };
   const vaultSheet = Boolean(identity && !signer && tab === 'vault' && vaultVisible && vaultSheetLabels[page]);
-  const anySheet = walletSheet || vaultSheet || Boolean(tapState);
+  const anySheet = walletSheet || vaultSheet || Boolean(tapState) || welcome;
   const feedback = <>
     {(busy || !sessionLoaded) && <ActivityIndicator color={colors.mint} style={{ margin: 20 }} />}
     {!!notice && <View style={s.notice}><Text selectable style={s.noticeText}>{notice}</Text></View>}
     {!!error && <View style={[s.notice, s.error]}><Text selectable accessibilityRole="alert" style={s.errorText}>{error}</Text></View>}
   </>;
   // The block the revealed vault reflects, as a data attribute: lets tests wait for live updates.
-  return <View style={s.screen} testID="device-screen" {...({ dataSet: { vaultHeight: vaultVisible && vault ? vault.chain_height : '' } } as object)}>
-    <DarkBackground/><DeviceStatus/><DarkEffects/>
-    {identity && !signer && <View style={{ position: 'absolute', top: Platform.OS === 'web' ? 56 : 14, left: 26, right: 26, flexDirection: 'row', justifyContent: 'space-between', zIndex: 10 }} pointerEvents="box-none">
-      <IconButton label={page !== 'home' && !anySheet ? (tab === 'wallet' ? 'Back to wallet' : 'Back to vault') : 'Settings'} name={page !== 'home' && !anySheet ? 'close' : 'settings'} onPress={() => go(page !== 'home' ? 'home' : 'settings')} disabled={tab === 'vault' && !vaultVisible && page === 'home'}/>
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-
-        {tab === 'vault' && <IconButton label="Hide vault" name="close" onPress={hideVault}/>}
-      </View>
-    </View>}
-    <ScrollView ref={screenScroll} contentContainerStyle={[s.content, tab === 'vault' && page !== 'home' && !vaultSheet && { paddingTop: 56 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} accessibilityElementsHidden={anySheet} importantForAccessibility={anySheet ? 'no-hide-descendants' : 'auto'}>
-      {!identity && !(signer && tap) ? <>
-        <View style={s.hero}><Text style={s.eyebrow}>{signer ? 'Your second device' : 'Cold storage made easy'}</Text>
-          <Text style={[s.balance, { fontSize: 34 }]}>{signer ? 'Your policy.\nYour approval.' : 'Everyday simple.\nBitcoin secure.'}</Text></View>
-        <Text style={s.subtext}>{signer ? 'Use this separate device to review and approve vault policy. It never needs your wallet phone’s private storage.' : 'Create your everyday wallet, then add a signer to protect your savings.'}</Text>
-        {signer && <Text style={s.tiny}>A second phone is not a secure-element hardware wallet. Do not run both roles on the same phone for independent protection.</Text>}
-        <Button title={signer ? 'Create signer' : 'Create wallet'} primary onPress={initialize} disabled={busy || !sessionLoaded} />
-      </> : <>
+  // One set of screens: on a phone they scroll in the app; a signer shows them on its round display.
+  const screenContent = <>
+      {!identity ? <View style={[s.hero, { paddingTop: 260 }]}>
+        {error ? <Button title="Try again" primary onPress={initialize} disabled={busy}/> : <Text style={s.tiny}>Creating your wallet…</Text>}
+      </View> : <>
         {incoming && <View style={s.notice}><Text style={s.noticeText}>Incoming · {incoming.kind.replaceAll('-', ' ')}</Text><Button title="Open received message" onPress={importMessage} disabled={busy} /></View>}
         {retained && inPrivate && <View style={s.notice}><Text style={s.noticeText}>Approved on your signer · not finished yet</Text><Button title="Finish" onPress={() => void finishRetained()} disabled={busy} /></View>}
-        {signer ? <>
-          {review ? <View style={s.hero}><Text style={s.eyebrow}>Review & approve</Text></View> : tap ? <>
-            {/* A signer has nothing to press until a phone asks: it is held to the phone. */}
-            <View style={[s.hero, { paddingTop: 72 }]}><Text style={s.eyebrow}>Signer</Text>
-              <TapArt phase={linked ? 'working' : 'idle'}/>
-              <Text style={[s.balance, { fontSize: 32, lineHeight: 40, textAlign: 'center', marginTop: 30 }]}>{paired ? 'Ready.' : 'Hold me near\nyour phone.'}</Text>
-              <Text style={s.balanceCaption}>{linked ? 'Connected to your phone' : paired ? 'Hold near your phone to approve.' : 'On your phone, open Vault and choose Set up vault.'}</Text></View>
-            {pairing && <View style={{ marginTop: 40, alignItems: 'center' }}><Text style={[s.tiny, { color: colors.quiet }]}>Your vault</Text><AddressLines address={pairing.vault_address} vault testID="signer-vault-address"/></View>}
-          </> : <>
-            <View style={s.hero}><Text style={s.eyebrow}>Signer</Text><Text style={[s.balance, { fontSize: 38 }]}>{paired ? 'Ready.' : 'Your second key.'}</Text><Text style={s.balanceCaption}>Your policy. Your approval.</Text></View>
-            {!pairing && <Button title="Share signer public key" onPress={() => void send('signer-identity', identity!)} disabled={busy} />}
-            {pairing && <><Text style={s.heading}>Your vault</Text><Text selectable style={s.mono}>{pairing.vault_address}</Text></>}
-            {paired && <Button title="Share public recovery vault" disabled={busy} onPress={() => run({ method: 'export_recovery_bundle' }, value => void send('recovery-vault', value))} />}
-          </>}
-          {review && reviewKind === 'share-vault' && <><Text style={s.heading}>Share your vault with this phone?</Text>
-            <Text selectable style={s.mono}>{review.vault_address}</Text>
-            <Text style={s.subtext}>The phone gets your vault’s public details to start a recovery. It cannot move funds without this signer or Bitcoin’s recovery delay.</Text>
-            <Button title="Share vault details" primary disabled={busy} onPress={() => run({ method: 'export_recovery_bundle' }, value => { void send('recovery-vault', value); setReview(null); })} />
-            <Button title="Don’t share" disabled={busy} onPress={() => { setReview(null); decline(); }} />
-          </>}
-          {review && reviewKind === 'offline-action' && <><Text style={s.heading}>{review.action === 'hww_recovery' ? 'Recover vault funds' : 'Revoke all vault actions'}</Text>
-            <Text style={s.tiny}>Vault</Text><Text selectable style={s.mono}>{review.vault_address}</Text>
-            <Text style={s.tiny}>Destination</Text><Text selectable style={s.mono}>{review.destination}</Text>
-            <View style={s.row}><Text style={s.tiny}>Amount</Text><Text testID="offline-action-amount" style={s.rowValue}>{btc(review.amount_sats)} BTC</Text></View>
-            <View style={s.row}><Text style={s.tiny}>Fee</Text><Text style={s.rowValue}>{review.fee_sats} sats</Text></View>
-            <Text style={s.subtext}>{review.recovery_delay_blocks
-              ? `Bitcoin requires ${review.recovery_delay_blocks} blocks since each input confirmed. This offline signer cannot check maturity; signing does not unlock funds early.`
-              : 'Spend the reviewed live connectors to disable their monthly and emergency actions. Vault savings stay in place; only connector change goes to this destination. Revocation wins only once confirmed before a conflicting action.'}</Text>
-            <Button title="Approve offline action" primary disabled={busy} onPress={() => run({ method: 'approve_offline_action', review_id: review.review_id }, value => { void send('offline-action-approved', value); setReview(null); })} />
-            <Button title="Reject offline action" danger disabled={busy} onPress={() => run({ method: 'reject_offline_action', review_id: review.review_id }, () => { setReview(null); decline(); })} />
-          </>}
-          {review && reviewKind === 'policy' && <><Text style={s.heading}>Annual vault policy</Text>
-            {[
-              ['Vault balance', `₿${btc(review.vault_input_sats)}`, ''],
-              ['Monthly allowance', `₿${btc(review.monthly_limit_sats)} a month`, `To your wallet · ${review.funded_withdrawals} of 12 months funded`],
-              ['Emergency access', review.emergency_delay_seconds ? `Up to ₿${btc(review.emergency_access_limit_sats)}` : 'Off', review.emergency_delay_seconds ? `Phone only, after a one-week delay (${review.emergency_delay_seconds.toLocaleString('en-US')} seconds)` : 'No emergency withdrawal'],
-            ].map(([label, value, detail]) => <View key={label} style={[s.row, { paddingVertical: 14 }]}><Text style={s.tiny}>{label}</Text><Text style={[s.rowValue, { marginTop: 6 }]}>{value}</Text>{!!detail && <Text style={[s.tiny, { marginTop: 5 }]}>{detail}</Text>}</View>)}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 18 }}><Text style={s.tiny}>Rollover fee</Text><Text style={s.tiny}>{review.rollover_fee_sats} sats</Text></View>
-            <Text style={s.subtext}>One approval signs {review.transaction_count} transactions. The signer rebuilds every transaction from these parameters before signing.</Text>
-            {review.funding_warning && <Text style={s.errorText}>{review.funding_warning}</Text>}
-            {review.previous_policy_warning && <Text style={s.errorText}>{review.previous_policy_warning}</Text>}
-            <Button title="Approve and sign policy" primary disabled={busy} onPress={() => run({ method: 'approve_policy', review_id: review.review_id }, value => {
-              void send('policy-approved', value); setReview(null);
-            })} />
-            <Button title="Reject policy" danger disabled={busy} onPress={() => run({ method: 'reject_policy', review_id: review.review_id }, () => { setReview(null); decline(); })} />
-          </>}
-          {review && reviewKind === 'sweep' && <><Text style={s.heading}>Move vault funds</Text>
-            <View style={s.row}><Text style={s.tiny}>Destination</Text><Text selectable style={s.mono}>{review.destination}</Text></View>
-            <View style={s.row}><Text style={s.tiny}>Amount</Text><Text style={s.rowValue}>{btc(review.amount_sats)} BTC</Text></View>
-            <View style={s.row}><Text style={s.tiny}>Fee</Text><Text style={s.rowValue}>{review.fee_sats} sats</Text></View>
-            <Text style={s.subtext}>This immediately moves the reviewed vault outputs. It does not create a new annual policy. Verify the destination independently.</Text>
-            <Button title="Approve vault transfer" primary disabled={busy} onPress={() => run({ method: 'approve_sweep', review_id: review.review_id }, value => { void send('sweep-approved', value); setReview(null); })} />
-            <Button title="Reject vault transfer" danger disabled={busy} onPress={() => run({ method: 'reject_sweep', review_id: review.review_id }, () => { setReview(null); decline(); })} />
-          </>}
-          {review && reviewKind === 'backup' && <><Text style={s.heading}>Protect phone recovery</Text>
-            <Text selectable style={s.mono}>{review.vault_address}</Text>
-            <Text style={s.subtext}>Protect the backup’s random encryption key. The phone seed and its ciphertext stay on the wallet/cloud side, not on this signer. This does not approve spending.</Text>
-            <Text style={s.rowValue}>Recovery contacts: {review.friend_fingerprints?.length ?? 0}</Text>
-            {review.friend_fingerprints?.map((fingerprint: string) => <Text key={fingerprint} selectable style={s.mono}>{fingerprint}</Text>)}
-            {!!review.friend_fingerprints?.length && <Text style={s.subtext}>Compare each fingerprint with the contact. Any one of these contacts plus the cloud backup can recover the phone key; the Bitcoin recovery delay still applies. This is not threshold sharing.</Text>}
-            <Button title="Approve recovery backup" primary disabled={busy} onPress={() => run({ method: 'approve_backup', review_id: review.review_id, message: reviewMessage }, value => { void send('backup-approved', value); setReview(null); setReviewMessage(null); })} />
-            <Button title="Reject recovery backup" danger disabled={busy} onPress={() => run({ method: 'reject_backup', review_id: review.review_id }, () => { setReview(null); setReviewMessage(null); decline(); })} />
-          </>}
-          {review && reviewKind === 'restore' && <><Text style={s.heading}>Unlock phone recovery</Text>
-            <Text style={s.tiny}>Recovery vault</Text><Text selectable style={s.mono}>{review.vault_address}</Text>
-            <Text style={s.tiny}>Replacement phone identity · compare on both devices</Text><Text selectable style={s.mono}>{review.recipient_public_key}</Text>
-            <Text style={s.tiny}>Cloud backup fingerprint</Text><Text selectable style={s.mono}>{review.backup_id}</Text>
-            <Text style={s.subtext}>Release this backup’s decryption key only to the verified replacement phone. This signer cannot inspect the cloud payload; the phone authenticates it. Rotate the recovered vault key afterwards.</Text>
-            <Button title="Approve phone recovery" primary disabled={busy} onPress={() => run({ method: 'approve_restore', review_id: review.review_id }, value => { void send('restore-approved', value); setReview(null); })} />
-            <Button title="Reject phone recovery" danger disabled={busy} onPress={() => run({ method: 'reject_restore', review_id: review.review_id }, () => { setReview(null); decline(); })} />
-          </>}
-          {review && reviewKind === 'rotation' && <><Text style={s.heading}>Rotate the recovered vault</Text>
-            <Text style={s.tiny}>New phone identity · compare on the replacement phone</Text><Text selectable style={s.mono}>{review.new_phone_public_key}</Text>
-            <Text style={s.tiny}>Old vault</Text><Text selectable style={s.mono}>{review.old_vault_address}</Text>
-            <Text style={s.tiny}>New vault</Text><Text selectable style={s.mono}>{review.new_vault_address}</Text>
-            <Text style={s.rowValue}>{btc(review.amount_sats)} BTC transferred</Text>
-            <Text style={s.subtext}>Preserve {btc(review.monthly_limit_sats)} BTC monthly and {btc(review.emergency_access_limit_sats)} BTC emergency. {review.funded_withdrawals} monthly withdrawals funded.</Text>
-            <Text style={s.subtext}>Vault transfer fee: {review.sweep_fee_sats} sats. {review.revokes_connectors ? 'Revoke the old connectors and return their change to the new vault.' : 'No live old connectors were supplied.'}</Text>
-            {review.previous_policy_warning && <Text style={s.errorText}>{review.previous_policy_warning}</Text>}
-            <Text style={s.subtext}>Renew the policy timelocks and protect a fresh encrypted phone backup. Old wallet funds are separate from this vault transfer. The node must accept and confirm these transactions.</Text>
-            <Text style={s.rowValue}>Recovery contacts: {review.friend_fingerprints?.length ?? 0}</Text>
-            {review.friend_fingerprints?.map((fingerprint: string) => <Text key={fingerprint} selectable style={s.mono}>{fingerprint}</Text>)}
-            {!!review.friend_fingerprints?.length && <Text style={s.subtext}>Compare these fingerprints with your existing contacts. Each contact receives access to the new backup; any one contact plus that backup can recover the new phone key.</Text>}
-            <Button title="Approve phone rotation" primary disabled={busy} onPress={() => run({ method: 'approve_phone_rotation', review_id: review.review_id, request: reviewMessage }, value => { void send('phone-rotation-approved', value); setReview(null); setReviewMessage(null); })} />
-            <Button title="Reject phone rotation" danger disabled={busy} onPress={() => run({ method: 'reject_phone_rotation', review_id: review.review_id }, () => { setReview(null); setReviewMessage(null); decline(); })} />
-          </>}
-          {review && reviewKind === 'rotation-adoption' && <><Text style={s.heading}>Finish rotation pairing</Text>
-            <Text selectable style={s.mono}>{review.new_vault_address}</Text>
-            <Text style={s.subtext}>The phone reports its approved rotation was broadcast. Check confirmation on the phone before selecting the new vault here. This offline signer cannot check the chain.</Text>
-            <Button title="Use the rotated vault" primary disabled={busy} onPress={() => run({ method: 'adopt_phone_rotation', request_id: review.request_id }, value => { setPairing(value); setReview(null); setNotice('Signer paired with the rotated vault. The spending limits are preserved.'); void send('vault-accepted', { vault_address: value.vault_address }); })} />
-            <Button title="Keep previous pairing" disabled={busy} onPress={() => { setReview(null); decline(); }} />
-          </>}
-          {review && reviewKind === 'signer-replacement' && <><Text style={s.heading}>Replace the unavailable signer</Text>
-            <Text style={s.tiny}>Current vault</Text><Text selectable style={s.mono}>{review.old_vault_address}</Text>
-            <Text style={s.tiny}>Surviving phone identity · compare on the phone</Text><Text selectable style={s.mono}>{review.phone_public_key}</Text>
-            <Text style={s.tiny}>New signer identity</Text><Text selectable style={s.mono}>{review.signer_public_key}</Text>
-            <Text style={s.tiny}>New vault</Text><Text selectable style={s.mono}>{review.new_vault_address}</Text>
-            <Text style={s.rowValue}>{btc(review.amount_sats)} BTC to move</Text>
-            <Text style={s.subtext}>Preserve {btc(review.monthly_limit_sats)} BTC monthly and {btc(review.emergency_access_limit_sats)} BTC emergency. {review.funded_withdrawals} monthly withdrawals funded.</Text>
-            <Text style={s.subtext}>The phone recovery transaction requires {review.recovery_delay_blocks} blocks ({network === 'signet' ? '~21 days on Mutinynet' : '~14 months'}) on every old vault input. Approval on this new signer cannot unlock it early. This signer does not check chain maturity.</Text>
-            <Text style={s.tiny}>Recovery transfer: {review.input_count} inputs · {review.recovery_fee_sats} sats fee. Included old connectors return to the new vault; its policy delays restart on confirmation.</Text>
-            <Text style={s.rowValue}>Recovery contacts: {review.friend_fingerprints?.length ?? 0}</Text>
-            {review.friend_fingerprints?.map((fingerprint: string) => <Text key={fingerprint} selectable style={s.mono}>{fingerprint}</Text>)}
-            {!!review.friend_fingerprints?.length && <Text style={s.subtext}>Compare these fingerprints with your existing contacts. The fresh backup keeps these contacts and is protected by this new signer.</Text>}
-            <Button title="Approve signer replacement" primary disabled={busy} onPress={() => run({ method: 'approve_signer_replacement', review_id: review.review_id, request: reviewMessage }, value => { void send('signer-replacement-approved', value); setReview(null); setReviewMessage(null); })} />
-            <Button title="Reject signer replacement" danger disabled={busy} onPress={() => run({ method: 'reject_signer_replacement', review_id: review.review_id }, () => { setReview(null); setReviewMessage(null); decline(); })} />
-          </>}
-          {review && reviewKind === 'signer-adoption' && <><Text style={s.heading}>Pair the replacement signer</Text>
-            <Text selectable style={s.mono}>{review.new_vault_address}</Text>
-            <Text style={s.subtext}>The phone reports the approved recovery was broadcast. Check confirmation on the phone before pairing. This offline signer cannot verify the chain.</Text>
-            <Button title="Use the replacement vault" primary disabled={busy} onPress={() => run({ method: 'adopt_signer_replacement', request_id: review.request_id }, value => { setPairing(value); setPaired(true); setReview(null); setNotice('Replacement signer paired. The phone key and spending limits are unchanged.'); void send('vault-accepted', { vault_address: value.vault_address }); })} />
-            <Button title="Wait before pairing" disabled={busy} onPress={() => { setReview(null); decline(); }} />
-          </>}
-        </> : tab === 'wallet' ? <>
+        {tab === 'wallet' ? <>
           {(page === 'home' || walletSheet) && <><View style={s.hero}><Text style={s.eyebrow}>Wallet</Text><Balance sats={wallet?.available_sats} /><Text style={s.balanceCaption}>Available bitcoin</Text>
             <SyncStatus error={liveError.wallet} behind={wallet?.behind_blocks} busy={busy} onSync={() => void syncWallet()}/>
             {wallet && wallet.pending_sats > 0 && <Text style={s.tiny}>{btc(wallet.pending_sats)} BTC awaiting confirmation</Text>}
@@ -664,159 +546,69 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
             <WalletHistory items={wallet?.activity || []} loaded={Boolean(wallet)} onSelect={entry => { setSelectedActivity(entry); setPage('transaction'); }}/></>}
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
             <View style={{ marginTop: 48, marginHorizontal: 4 }}>
-              <MenuRow title="Be a recovery contact" subtitle="Help someone protect their bitcoin" disabled={busy} onPress={() => run({ method: 'recovery_contact' }, value => { setContact(value.contact); setPage('contact'); })}/>
-              <MenuRow title="Recover with a contact" subtitle="Restore with a trusted person's help" disabled={busy} onPress={() => { setTab('vault'); setPage('contact-recover'); }}/>
               <Text style={s.footnote}>anzen · {identity?.network || network}</Text>
             </View></>}
-          {page === 'contact' && <><Text style={s.heading}>Help someone recover</Text>
-            <Text style={s.subtext}>Create a separate OpenPGP recovery key on this device. Only the public key is shared. Keep this device safe: it can help recover someone’s phone key if they approve it as a contact.</Text>
-            {contact ? <><Text style={s.rowValue}>{contact.name}</Text><Text selectable testID="contact-fingerprint" style={s.mono}>{contact.fingerprint}</Text>
-              <Button title="Share contact public key" disabled={busy} onPress={() => void send('recovery-contact', contact)} />
-            </> : <><Field label="Recovery contact name" value={contactName} onChange={setContactName} />
-              <Button title="Create recovery contact key" primary disabled={busy} onPress={() => run({ method: 'generate_recovery_contact', name: contactName }, setContact)} />
-            </>}
-            <Button title="Back to wallet" onPress={() => setPage('home')} />
-          </>}
         </> : !vaultVisible ? page === 'home' && (paired && backupStored ? <>
-          <View style={[s.hero, { paddingBottom: 28 }]}><Text style={s.eyebrow}>Private space</Text><Text style={[s.balance, { fontSize: 34 }]}>Your vault.</Text><Text style={s.balanceCaption}>Savings stay hidden until you’re ready.</Text></View>
-          <Button title="Reveal vault" primary onPress={reveal} disabled={busy} />
+          <View style={[s.hero, { paddingBottom: 20 }]}><Text style={s.eyebrow}>Vault</Text>
+            <Text style={[s.balance, { fontSize: 34 }]}>{revealError ? 'Still locked.' : 'Opening…'}</Text></View>
+          {!!revealError && <><Text accessibilityRole="alert" style={[s.errorText, { textAlign: 'center' }]}>{revealError}</Text>
+            <Button title="Try again" primary onPress={() => setRevealError('')} /></>}
         </> : <>
           {/* Setup is one tap: the signer's key, the vault and the recovery backup in one go. */}
           <View style={[s.hero, { paddingTop: 72 }]}><Text style={s.eyebrow}>Vault</Text>
             <TapArt phase="idle"/>
             <Text style={[s.balance, { fontSize: 32, lineHeight: 40, textAlign: 'center', marginTop: 30 }]}>{paired ? 'Almost there.' : 'Protect your\nsavings.'}</Text>
-            <Text style={[s.balanceCaption, { lineHeight: 18, maxWidth: 270 }]}>{paired ? 'Hold your signer to your phone once more to save your recovery backup.' : 'A vault needs two keys: this phone and a signer you keep somewhere safe.'}</Text></View>
+            <Text style={[s.balanceCaption, { lineHeight: 18, maxWidth: 270 }]}>{paired ? 'Connect your signer once more to finish.' : 'Your phone and a signer, together.'}</Text></View>
           {tap ? <View style={{ marginTop: 34 }}>
             <Button title={paired ? 'Finish setup' : 'Set up vault'} primary onPress={setupVault} disabled={busy} />
-            {paired ? <Button title="Reveal vault" onPress={reveal} disabled={busy} />
-              : <Button title="Recover with your signer" onPress={() => toSigner(async () => ({ kind: 'recovery-vault-request', body: {} }))} disabled={busy} />}
+            {paired ? <Button title="Open vault" onPress={() => void reveal()} disabled={busy} />
+              : <Pressable accessibilityRole="button" accessibilityLabel="Recover with your signer" disabled={busy} onPress={() => void toSigner(async () => ({ kind: 'recovery-vault-request', body: {} }))} style={({ pressed }) => ({ alignSelf: 'center', padding: 12, opacity: pressed ? .6 : 1 })}>
+                <Text style={[s.tiny, { color: colors.quiet }]}>Recover with your signer</Text>
+              </Pressable>}
           </View> : <>
             <Text style={[s.subtext, { textAlign: 'center' }]}>{paired ? 'Waiting for your signer to accept the vault.' : 'Receive your signer’s public key to set up your vault.'}</Text>
-            {paired && <Button title="Reveal vault" primary onPress={reveal} disabled={busy} />}
+            {paired && <Button title="Open vault" primary onPress={() => void reveal()} disabled={busy} />}
           </>}
         </>) : (page === 'home' || vaultSheet) && <>
-          <View style={s.hero}><Text style={s.eyebrow}>Vault</Text><Balance sats={vault?.balance_sats} /><Text style={s.balanceCaption}>Confirmed bitcoin · protected by two keys</Text>
+          <View style={s.hero}><Text style={s.eyebrow}>Vault</Text><Balance sats={vault?.balance_sats} /><Text style={s.balanceCaption}>Protected by two keys</Text>
           <SyncStatus error={liveError.vault} busy={busy} onSync={() => void syncVault()}/>
             <View style={s.actions}><ActionPill title="Withdraw" icon="send" onPress={() => go('withdraw')}/><ActionPill title="Deposit" icon="receive" onPress={() => go('deposit')}/></View>
           </View>
           {vault && <VaultSummary vault={vault} onMonthly={() => go('monthly')} onEmergency={() => go('emergency')} onPolicy={() => go('policy')}/>}
-          <View style={{ marginTop: 26 }}><MenuRow title="Vault settings" subtitle="Policy, backups and recovery" icon="settings" onPress={() => go('settings')}/></View>
         </>}
       </>}
       {identity && !signer && tab === 'vault' && <>
         {page === 'recovered-wallet' && !recoveredPayment && <><Text style={s.heading}>Recovered wallet</Text><Text style={s.subtext}>Check the old phone’s ordinary wallet for funds you can move to this phone.</Text><Button title="Review recovered wallet funds" disabled={busy} onPress={reviewRecovered}/></>}
-        {page === 'retired' && <><Text style={s.heading}>Retired vaults</Text>
-          <Text style={s.subtext}>Old addresses remain monitored. Each new deposit has its own recovery delay.</Text>
-          {vault?.previous_vaults?.map((old: JsonObject) => <View key={old.vault_id} testID={`previous-vault-${old.vault_id}`} style={s.row}>
-            <Text selectable style={s.mono}>{old.vault_address}</Text>
-            <Text testID="previous-vault-balance" style={s.rowValue}>{btc(old.phone.total_sats)} BTC</Text>
-            {old.phone.blocks_remaining === null ? <Text style={s.tiny}>No confirmed funds. This address remains monitored for later deposits.</Text> : <>
-              <Text testID="previous-phone-blocks" style={s.subtext}>{old.phone.blocks_remaining} blocks until phone recovery</Text>
-              <Text testID="previous-hww-blocks" style={s.tiny}>{old.hww.blocks_remaining} blocks until the old HWW can recover</Text>
-              <Text testID="previous-hww-height" style={s.tiny}>Old HWW next-block height: {old.hww.earliest_next_block_height}</Text>
-              <Text style={s.tiny}>{btc(old.phone.mature_sats)} BTC eligible now</Text>
-            </>}
-            {!old.can_recover && <Text style={s.tiny}>The previous phone key is required. This phone can only monitor the address.</Text>}
-            <Button title="Review old vault funds" disabled={busy || !old.can_recover || old.phone.blocks_remaining === null} onPress={() => reviewPrevious(old.vault_id)}/>
-          </View>)}
-        </>}
-        {page === 'contact-approve' && contactRestoreReview && <><Text style={s.heading}>Approve contact recovery</Text>
-          <Text style={s.tiny}>Replacement phone identity · compare independently</Text><Text selectable style={s.mono}>{contactRestoreReview.recipient_public_key}</Text>
-          <Text style={s.tiny}>Your contact fingerprint</Text><Text selectable style={s.mono}>{contactRestoreReview.contact_fingerprint}</Text>
-          <Text style={s.tiny}>Backup commitment</Text><Text selectable style={s.mono}>{contactRestoreReview.backup_id}</Text>
-          <Text style={s.subtext}>Release the backup decryption key only to the verified replacement phone. This contact cannot inspect the absent cloud payload. Recovery does not unlock the vault early.</Text>
-          <Button title="Approve contact recovery" primary disabled={busy} onPress={() => run({ method: 'approve_contact_restore', review_id: contactRestoreReview.review_id, request: reviewMessage }, value => { void send('contact-restore-approved', value); setContactRestoreReview(null); setReviewMessage(null); })} />
-          <Button title="Reject contact recovery" danger disabled={busy} onPress={() => run({ method: 'reject_contact_restore', review_id: contactRestoreReview.review_id }, () => { setContactRestoreReview(null); setReviewMessage(null); })} />
-        </>}
-        {page === 'contact-recover' && <><Text style={s.heading}>Recover with your contact</Text>
-          <Text style={s.subtext}>Use a fresh phone, your encrypted cloud backup, and an enrolled contact. Neither original vault device is needed.</Text>
-          <Text style={s.tiny}>This phone’s identity · compare on the contact’s screen</Text><Text selectable testID="contact-recipient-identity" style={s.mono}>{identity.vault_pubkey}</Text>
-          {receivedContact && <><Text style={s.rowValue}>{receivedContact.name}</Text><Text selectable style={s.mono}>{receivedContact.fingerprint}</Text></>}
-          {!contactRecovery && <><Text style={s.subtext}>Have your contact share their public contact key here, then load or paste the encrypted backup.</Text>
-            <TextInput accessibilityLabel="Social recovery cloud backup JSON" multiline style={[s.input, { minHeight: 90 }]} value={backupText} onChangeText={setBackupText} autoCapitalize="none" autoCorrect={false} />
-            <Button title="Request contact recovery" primary disabled={busy || !receivedContact || !backupText} onPress={requestContactRestore} />
-          </>}
-          <Button title="Check stored contact recovery" disabled={busy} onPress={() => run({ method: 'contact_recovery_state' }, setContactRecovery)} />
-          {contactRecovery && <><Text style={s.rowValue}>Recovered vault</Text><Text selectable style={s.mono}>{contactRecovery.config.vault_address}</Text>
-            <Text style={s.subtext}>Your old ordinary wallet has no vault recovery delay. Review its balance separately to move it to this phone’s fresh wallet.</Text>
-            <Button title="Review recovered wallet funds" disabled={busy} onPress={reviewRecovered} />
-            {!contactRecovery.spending_policy_available && <Text style={s.subtext}>Spending policy unavailable: this backup contains the key and descriptor, not the old allowance history. This recovery transfers funds; it does not renew a policy.</Text>}
-            <Button title="Check recovered vault balance and delay" disabled={busy} onPress={() => run({ method: 'contact_recovery_status' }, setContactStatus)} />
-            {contactStatus && <><Text style={s.rowValue}>{btc(contactStatus.balance_sats)} BTC recoverable</Text><Text style={s.subtext}>{btc(contactStatus.mature_balance_sats)} BTC mature now. Later deposits can be recovered separately.</Text><Text testID="contact-recovery-blocks" style={s.subtext}>{contactStatus.blocks_remaining ?? 'No confirmed funds;'} blocks remaining</Text></>}
-            <Field label="Social recovery destination" value={destination} onChange={setDestination} />
-            <Button title="Use new wallet address" disabled={busy} onPress={() => run({ method: 'receive_address' }, value => setDestination(value.address))} />
-            <Button title="Review recovered vault transfer" primary disabled={busy || !destination} onPress={() => run({ method: 'review_contact_sweep', destination }, setContactSweep)} />
-            {contactSweep && <><Text style={s.heading}>Review social recovery transfer</Text><Text style={s.rowValue}>{contactSweep.amount_sats} sats</Text><Text selectable style={s.mono}>{contactSweep.destination}</Text>
-              <Text style={s.subtext}>{contactSweep.input_count} inputs · {contactSweep.fee_sats} sats fee. {contactSweep.blocks_remaining} blocks remaining at review. Confirmation checks maturity again.</Text>
-              <Button title="Confirm recovered vault transfer" primary disabled={busy} onPress={() => run({ method: 'confirm_contact_sweep', review_id: contactSweep.review_id }, () => { setContactSweep(null); setContactStatus(null); })} />
-              <Button title="Cancel recovered vault transfer" danger disabled={busy} onPress={() => run({ method: 'reject_contact_sweep', review_id: contactSweep.review_id }, () => setContactSweep(null))} />
-            </>}
-          </>}
-        </>}
-        {page === 'add-contact' && receivedContact && <><Text style={s.heading}>Add a recovery contact</Text>
-          <Text style={s.rowValue}>{receivedContact.name}</Text><Text selectable style={s.mono}>{receivedContact.fingerprint}</Text>
-          <Text style={s.subtext}>Compare this fingerprint with your contact independently. Your signer must approve the updated encrypted backup. Any one contact can recover the phone key with the cloud backup; Bitcoin still enforces the recovery delay.</Text>
-          <Text style={s.tiny}>Check your contact fingerprints when rotating and export the new backup afterwards. Do not rely on this prototype as your only recovery route.</Text>
-          <Button title="Propose recovery contact" primary disabled={busy || !paired} onPress={() => propose({ method: 'propose_backup_with_contact', contact: receivedContact }, 'backup-proposal', () => { setReceivedContact(null); setPage('home'); })} />
-          <Button title="Cancel adding contact" onPress={() => { setReceivedContact(null); setPage('home'); }} />
-        </>}
-        {page === 'replace-signer' && <><Text style={s.heading}>Replace the lost signer</Text>
-          <Text style={s.subtext}>{tap ? 'Hold a new signer to your phone.' : 'Create a fresh device in hardware wallet mode and send its public identity here.'} Your phone key stays the same. Bitcoin still requires the phone recovery delay before moving old vault funds.</Text>
-          {tap && <Button title={signerCandidate ? 'Connect a different signer' : 'Connect new signer'} primary={!signerCandidate} disabled={busy} onPress={setupVault} />}
-          {signerCandidate && <>
-            <Text style={s.tiny}>Phone identity · compare on the new signer</Text><Text selectable style={s.mono}>{identity.vault_pubkey}</Text>
-            <Text style={s.tiny}>New vault · compare on the new signer</Text><Text selectable style={s.mono}>{signerCandidate.new_config.vault_address}</Text>
-            <Text testID="signer-replacement-blocks" style={s.subtext}>{signerCandidate.recovery_blocks_remaining ?? 'No confirmed vault inputs;'} blocks remaining</Text>
-            <Text testID="signer-replacement-selection" style={s.subtext}>{btc(signerCandidate.selected_sats)} of {btc(signerCandidate.total_sats)} BTC in this replacement group</Text>
-            <Text style={s.tiny}>Up to 1,000 mature inputs, or the oldest group before maturity. New deposits cannot delay older savings. Funds left behind stay visible under Retired vaults after replacement.</Text>
-            <Button title="Refresh replacement readiness" disabled={busy} onPress={() => run({ method: 'inspect_signer_replacement', signer: signerCandidate.signer }, setSignerCandidate)} />
-            <Button title="Propose signer replacement" primary disabled={busy} onPress={() => propose({ method: 'propose_signer_replacement', signer: signerCandidate.signer }, 'signer-replacement-proposal')} />
-            <Text style={s.tiny}>You can prepare and sign before maturity. An early activation is rejected without broadcasting, and the same approved request can be retried after mining.</Text>
-          </>}
-          <Button title="Close signer replacement" onPress={() => { setPage('home'); setSignerCandidate(null); }} />
-        </>}
-        {previousRecovery && <><Text style={s.heading}>Recover retired vault funds</Text>
-          <Text style={s.tiny}>From the old vault</Text><Text selectable style={s.mono}>{previousRecovery.source_address}</Text>
-          <Text style={s.rowValue}>{btc(previousRecovery.amount_sats)} BTC to your current vault</Text>
-          <Text selectable style={s.mono}>{previousRecovery.destination}</Text>
-          <Text style={s.subtext}>Fee: {previousRecovery.fee_sats} sats · {previousRecovery.input_count} inputs · {previousRecovery.blocks_remaining} blocks remaining</Text>
-          <Text style={s.tiny}>Review the destination. This moves only the selected group; it does not change your monthly or emergency limits. Sync the vault after confirmation to check for leftovers.</Text>
-          <Button title="Confirm previous vault transfer" primary disabled={busy} onPress={() => run({ method: 'confirm_previous_vault_recovery', review_id: previousRecovery.review_id }, () => setPreviousRecovery(null))} />
-          <Button title="Cancel previous vault transfer" disabled={busy} onPress={() => run({ method: 'reject_previous_vault_recovery', review_id: previousRecovery.review_id }, () => setPreviousRecovery(null))} />
-        </>}
         {recoveredPayment && <><Text style={s.heading}>Recover the old wallet balance</Text>
           <Text style={s.subtext}>{recoveredPayment.amount_sats} sats to this phone’s fresh wallet address. Fee: {recoveredPayment.fee_sats} sats.</Text>
           <Text selectable style={s.mono}>{recoveredPayment.destination}</Text>
-          <Text style={s.tiny}>Only spendable coins found by the wallet scan are included. Immature coinbase outputs need more confirmations. You can scan again for later deposits.</Text>
-          <Button title="Confirm recovered wallet transfer" primary disabled={busy} onPress={() => run({ method: 'confirm_recovered_wallet', review_id: recoveredPayment.review_id }, () => setRecoveredPayment(null))} />
+          <Button title="Confirm recovered wallet transfer" primary disabled={busy} onPress={() => void secure(() => run({ method: 'confirm_recovered_wallet', review_id: recoveredPayment.review_id }, () => setRecoveredPayment(null)))} />
           <Button title="Cancel recovered wallet transfer" disabled={busy} onPress={() => run({ method: 'reject_recovered_wallet', review_id: recoveredPayment.review_id }, () => setRecoveredPayment(null))} />
         </>}
-        {!vaultVisible && page === 'home' && paired && backupStored && <MenuRow title="Signer recovery and revocation" icon="key" disabled={busy} onPress={() => run({ method: 'recovery_source' }, value => { setRecoverySource(value); go('signer-recovery'); })}/>}
         {page === 'signer-recovery' && recoverySource && <>
           <Text style={s.heading}>Signer recovery and revocation</Text>
-          <Text style={s.subtext}>Public recovery source. No original phone key is needed to prepare these requests. The separate signer must approve them.</Text>
           <Text selectable style={s.mono}>{recoverySource.vault_address}</Text>
           {tap && <Button title="Load vault from signer" disabled={busy} onPress={() => void toSigner(async () => ({ kind: 'recovery-vault-request', body: {} }))} />}
-          <Text style={s.subtext}>Last approved policy: {btc(recoverySource.monthly_limit_sats)} BTC monthly · {btc(recoverySource.emergency_access_limit_sats)} BTC emergency. The offline signer cannot confirm whether that approval was activated on-chain.</Text>
+          <Text style={s.tiny}>Last policy: {btc(recoverySource.monthly_limit_sats)} BTC monthly · {btc(recoverySource.emergency_access_limit_sats)} BTC emergency</Text>
           <Button title="Check recovery timing" disabled={busy} onPress={() => run({ method: 'recovery_snapshot' }, setRecoveryTiming)} />
           {recoveryTiming && recoveryTiming.vault_address === recoverySource.vault_address && <>
             <Text style={s.rowValue}>{btc(recoveryTiming.hww.total_sats)} BTC in the recovery vault</Text>
-            <Text style={s.tiny}>As of block {recoveryTiming.chain_height}. Timelocks do not replace a missing key.</Text>
             {recoveryTiming.utxo_count === 0 ? <Text style={s.subtext}>No confirmed vault outputs remain.</Text> : <>
-              <Text style={s.label}>Phone recovery</Text><Text testID="source-phone-recovery-blocks" style={s.subtext}>{recoveryTiming.phone.blocks_remaining} blocks remaining</Text>
-              <Text style={s.tiny}>{btc(recoveryTiming.phone.mature_sats)} BTC eligible by the phone timelock</Text>
-              <Text style={s.label}>HWW recovery</Text><Text testID="source-hww-recovery-blocks" style={s.subtext}>{recoveryTiming.hww.blocks_remaining} blocks remaining</Text>
-              <Text style={s.tiny}>{btc(recoveryTiming.hww.mature_sats)} BTC eligible by the HWW timelock</Text>
+              <Text style={s.label}>Signer alone</Text>
+              <Text testID="source-hww-recovery-days" style={s.subtext}>{recoveryTiming.hww.seconds_remaining > 0
+                ? `${Math.ceil(recoveryTiming.hww.seconds_remaining / 86_400)} days remaining · from ${new Date(recoveryTiming.hww.opens_at * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}`
+                : 'Available now'}</Text>
+              <Text style={s.tiny}>{btc(recoveryTiming.hww.mature_sats)} BTC your signer can move alone</Text>
             </>}
           </>}
           <Text style={s.heading}>Restore from cloud backup</Text>
           <Text style={s.tiny}>This phone’s identity · verify on the signer</Text><Text selectable style={s.mono}>{identity.vault_pubkey}</Text>
           <Text style={s.label}>Encrypted cloud backup JSON</Text>
           <TextInput accessibilityLabel="Encrypted cloud backup JSON" multiline value={backupText} onChangeText={setBackupText} maxLength={8 * 1024 * 1024} autoCapitalize="none" autoCorrect={false} style={[s.input, { height: 90 }]} />
-          {!backupText && <Text style={s.subtext}>No cloud backup loaded. HWW fallback does not need a backup, but it still requires the surviving signer and the Bitcoin recovery delay.</Text>}
+          {!backupText && <Text style={s.tiny}>No cloud backup loaded.</Text>}
           <Button title="Request phone key recovery" disabled={busy || !backupText} onPress={requestRestore} />
           <Button title="Check restored key" disabled={busy} onPress={() => run({ method: 'restored_phone' }, setRestored)} />
-          {restored && <><Text style={s.noticeText}>Old key recovered: {restored.old_phone_public_key}. Rotation is still required; recovering a backup does not move funds.</Text>
+          {restored && <><Text style={s.noticeText}>Old key recovered: {restored.old_phone_public_key}. Rotation is still required.</Text>
             <Button title="Propose restored vault rotation" primary disabled={busy} onPress={() => propose({ method: 'propose_restored_rotation' }, 'phone-rotation-proposal')} />
             <Button title="Review recovered wallet funds" disabled={busy} onPress={reviewRecovered} />
           </>}
@@ -824,19 +616,150 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
           <Button title="Use this wallet’s fresh address" disabled={busy} onPress={() => run({ method: 'receive_address' }, value => setDestination(value.address))} />
           <Button title="Request all-action revocation" danger disabled={busy} onPress={() => propose({ method: 'propose_offline_action', action: 'revoke_actions', destination }, 'offline-action-proposal')} />
           <Button title="Request HWW fallback" disabled={busy} onPress={() => propose({ method: 'propose_offline_action', action: 'hww_recovery', destination }, 'offline-action-proposal')} />
-          <Text style={s.tiny}>Fallback keeps the 65,535-block ({network === 'signet' ? '~23 days on Mutinynet' : '~15 months'}) delay. A request includes up to 1,000 mature outputs, or the oldest group if none is mature. Newer deposits can be recovered later. It transfers funds only; it does not rotate keys or renew the annual policy.</Text>
           <Button title="Close signer recovery" onPress={() => { setRecoverySource(null); go('home'); }} />
         </>}
       </>}
-      {outgoing && (inPrivate || outgoing.kind === 'signer-identity' || outgoing.kind === 'vault-setup' || outgoing.kind === 'recovery-contact') && <View style={s.notice}>
+      {outgoing && (inPrivate || outgoing.kind === 'signer-identity' || outgoing.kind === 'vault-setup') && <View style={s.notice}>
         <Text style={s.noticeText}>{!signer && tap && deferred.includes(outgoing.kind) ? 'Once it confirms, finish on your signer' : `Ready to share · ${outgoing.kind.replaceAll('-', ' ')}`}</Text>
-        <Button title={outgoing.kind === 'recovery-contact' ? 'Send contact public key' : outgoing.kind === 'contact-restore-proposal' ? 'Send to contact' : outgoing.kind === 'contact-restore-approved' ? 'Send recovery approval' : signer ? 'Send to wallet'
+        <Button title={signer ? 'Send to wallet'
           : tap && signerBound.includes(outgoing.kind) ? (deferred.includes(outgoing.kind) ? 'Finish on signer' : 'Continue on signer') : 'Send to signer'} disabled={busy} onPress={shareOutgoing} />
       </View>}
-      {identity && inPrivate && (signer || paired) && <SavedMessages transport={transport} deliver={deliver} />}
       {!anySheet && feedback}
+  </>;
+  // The signer's reviews, one fact per page. Rust validated each request when it arrived; the
+  // pages show what an approval signs, and the last one asks for it.
+  function signerReview(): Review | null {
+    if (!review) return null;
+    const approve = (method: string, kind: Kind, extra: JsonObject = {}) => () =>
+      void run({ method, review_id: review.review_id, ...extra }, value => { void send(kind, value); setReview(null); setReviewMessage(null); });
+    const reject = (method: string) => () =>
+      void run({ method, review_id: review.review_id }, () => { setReview(null); setReviewMessage(null); decline(); });
+    switch (reviewKind) {
+      case 'policy': return {
+        pages: [
+          <Page title="Annual vault policy" value={`₿${btc(review.vault_input_sats)}`}><Note>in your vault. Approving renews it for another year.</Note></Page>,
+          <Page eyebrow="Monthly allowance" value={`₿${btc(review.monthly_limit_sats)} a month`}>
+            <Note>To your wallet · {review.funded_withdrawals} of 12 months funded</Note>
+            {review.funding_warning && <Note warning>{review.funding_warning}</Note>}
+          </Page>,
+          <Page eyebrow="Emergency access" value={review.emergency_delay_seconds ? `Up to ₿${btc(review.emergency_access_limit_sats)}` : 'Off'}>
+            <Note>{review.emergency_delay_seconds ? `Phone only, after a one-week delay (${review.emergency_delay_seconds.toLocaleString('en-US')} seconds)` : 'No emergency withdrawal'}</Note>
+          </Page>,
+          <Page eyebrow="Sign" value={`${review.transaction_count} transactions`}>
+            <Note>Rollover fee {review.rollover_fee_sats} sats. This signer rebuilt every transaction from these limits.</Note>
+            {review.previous_policy_warning && <Note warning>{review.previous_policy_warning}</Note>}
+          </Page>,
+        ],
+        reject: { label: 'Reject policy', onPress: reject('reject_policy') },
+        confirm: { label: 'Approve and sign policy', onPress: approve('approve_policy', 'policy-approved'), hold: true },
+      };
+      case 'sweep': return {
+        pages: [
+          <Page title="Move vault funds" value={`₿${btc(review.amount_sats)}`}><Note>Fee {review.fee_sats} sats · moves immediately</Note></Page>,
+          <Page eyebrow="To"><Code>{review.destination}</Code><Note>Check this address independently.</Note></Page>,
+          <Page eyebrow="Sign"><Note>Moves every reviewed vault output now. It does not renew the policy.</Note></Page>,
+        ],
+        reject: { label: 'Reject vault transfer', onPress: reject('reject_sweep') },
+        confirm: { label: 'Approve vault transfer', onPress: approve('approve_sweep', 'sweep-approved'), hold: true },
+      };
+      case 'backup': return {
+        pages: [
+          <Page title="Protect phone recovery"><Code>{review.vault_address}</Code><Note>Lets this signer help restore your phone key. It does not approve spending.</Note></Page>,
+        ],
+        reject: { label: 'Reject recovery backup', onPress: reject('reject_backup') },
+        confirm: { label: 'Approve recovery backup', onPress: approve('approve_backup', 'backup-approved', { message: reviewMessage }) },
+      };
+      case 'offline-action': return {
+        pages: [
+          <Page title={review.action === 'hww_recovery' ? 'Recover vault funds' : 'Revoke all vault actions'} value={`₿${btc(review.amount_sats)}`} testID="offline-action-amount"><Note>Fee {review.fee_sats} sats</Note></Page>,
+          <Page eyebrow="To"><Code>{review.destination}</Code></Page>,
+          <Page eyebrow="From vault"><Code>{review.vault_address}</Code></Page>,
+          <Page eyebrow="Sign"><Note>{review.recovery_delay_seconds
+            ? `Bitcoin accepts this only ${Math.round(review.recovery_delay_seconds / 86_400)} days after each input confirmed, so a yearly renewal keeps it locked. This offline signer cannot check the time; signing does not unlock funds early.`
+            : 'Spends the live connectors to disable their monthly and emergency actions. Savings stay in the vault; only connector change goes to this address.'}</Note></Page>,
+        ],
+        reject: { label: 'Reject offline action', onPress: reject('reject_offline_action') },
+        confirm: { label: 'Approve offline action', onPress: approve('approve_offline_action', 'offline-action-approved'), hold: true },
+      };
+      case 'restore': return {
+        pages: [
+          <Page title="Unlock phone recovery"><Code>{review.vault_address}</Code><Note>Releases the backup key to a replacement phone.</Note></Page>,
+          <Page eyebrow="Replacement phone"><Code>{review.recipient_public_key}</Code><Note>Compare with the phone’s screen.</Note></Page>,
+          <Page eyebrow="Cloud backup"><Code>{review.backup_id}</Code><Note>This signer cannot read the backup; the phone checks it. Rotate the vault afterwards.</Note></Page>,
+        ],
+        reject: { label: 'Reject phone recovery', onPress: reject('reject_restore') },
+        confirm: { label: 'Approve phone recovery', onPress: approve('approve_restore', 'restore-approved'), hold: true },
+      };
+      case 'rotation': return {
+        pages: [
+          <Page title="Rotate the recovered vault" value={`₿${btc(review.amount_sats)}`}><Note>moves to a new vault with a fresh phone key.</Note></Page>,
+          <Page eyebrow="New phone"><Code>{review.new_phone_public_key}</Code><Note>Compare with the replacement phone.</Note></Page>,
+          <Page eyebrow="From"><Code>{review.old_vault_address}</Code><Text style={[r.tiny, { textAlign: 'center', marginTop: 12 }]}>To</Text><Code>{review.new_vault_address}</Code></Page>,
+          <Page eyebrow="Policy">
+            <Note>Preserve {btc(review.monthly_limit_sats)} BTC monthly and {btc(review.emergency_access_limit_sats)} BTC emergency. {review.funded_withdrawals} monthly withdrawals funded.</Note>
+            <Note>Transfer fee {review.sweep_fee_sats} sats. {review.revokes_connectors ? 'Revoke the old connectors and return their change to the new vault.' : 'No live old connectors were supplied.'}</Note>
+            {review.previous_policy_warning && <Note warning>{review.previous_policy_warning}</Note>}
+          </Page>,
+        ],
+        reject: { label: 'Reject phone rotation', onPress: reject('reject_phone_rotation') },
+        confirm: { label: 'Approve phone rotation', onPress: approve('approve_phone_rotation', 'phone-rotation-approved', { request: reviewMessage }), hold: true },
+      };
+      case 'rotation-adoption': return {
+        pages: [<Page title="Finish rotation pairing"><Code>{review.new_vault_address}</Code><Note>The phone reports its rotation was broadcast. Check it confirmed on the phone first; this signer cannot see the chain.</Note></Page>],
+        reject: { label: 'Keep previous pairing', onPress: () => { setReview(null); decline(); } },
+        confirm: { label: 'Use the rotated vault', onPress: () => void run({ method: 'adopt_phone_rotation', request_id: review.request_id }, value => {
+          setPairing(value); setReview(null); setNotice('Signer paired with the rotated vault. The spending limits are preserved.'); void send('vault-accepted', { vault_address: value.vault_address });
+        }) },
+      };
+      case 'share-vault': return {
+        pages: [<Page title="Share your vault with this phone?"><Code>{review.vault_address}</Code><Note>The phone gets your vault’s public details to start a recovery. It cannot move funds without this signer.</Note></Page>],
+        reject: { label: 'Don’t share', onPress: () => { setReview(null); decline(); } },
+        confirm: { label: 'Share vault details', onPress: () => void run({ method: 'export_recovery_bundle' }, value => { void send('recovery-vault', value); setReview(null); }) },
+      };
+    }
+  }
+  // Between requests the signer has little to show: whether it is ready, and for files (the
+  // fallback without a tap link) the messages to carry.
+  const signerIdle = <>
+    {!identity && !tap ? <Page title="Your second key.">
+      <Note>Use this separate device to approve vault policy. A second phone is not a secure-element hardware wallet.</Note>
+      <View style={{ alignSelf: 'stretch', marginTop: 12 }}><Button title="Create signer" primary onPress={initialize} disabled={busy || !sessionLoaded}/></View>
+    </Page> : tap ? <View style={{ alignItems: 'center' }}>
+      <Waves on={linked}/>
+      <Text style={{ color: colors.text, fontSize: 24, lineHeight: 29, fontWeight: '500', letterSpacing: -.4, textAlign: 'center', marginTop: 14 }}>{linked ? 'Connected' : paired ? 'Ready.' : 'Ready to pair.'}</Text>
+      <Text style={[s.tiny, { color: colors.quiet, textAlign: 'center', marginTop: 8 }]}>{linked ? 'Talking to your phone.' : paired ? 'Requests from your phone appear here.' : 'On your phone, open Vault and choose Set up vault.'}</Text>
+      {pairing && !linked && <AddressLines address={pairing.vault_address} vault size={9.5} testID="signer-vault-address"/>}
+    </View> : <Page title={paired ? 'Ready.' : 'Your second key.'}>
+      {pairing ? <Code>{pairing.vault_address}</Code> : <View style={{ alignSelf: 'stretch', marginTop: 12 }}><Button title="Share signer public key" onPress={() => void send('signer-identity', identity!)} disabled={busy}/></View>}
+      {paired && <View style={{ alignSelf: 'stretch', marginTop: 8 }}><Button title="Share public recovery vault" disabled={busy} onPress={() => run({ method: 'export_recovery_bundle' }, value => void send('recovery-vault', value))}/></View>}
+    </Page>}
+    {incoming && <View style={[s.notice, { marginTop: 14 }]}><Text style={[s.noticeText, { textAlign: 'center' }]}>Incoming · {incoming.kind.replaceAll('-', ' ')}</Text><Button title="Open received message" onPress={importMessage} disabled={busy}/></View>}
+    {outgoing && <View style={[s.notice, { marginTop: 14 }]}><Text style={[s.noticeText, { textAlign: 'center' }]}>Ready to share · {outgoing.kind.replaceAll('-', ' ')}</Text><Button title="Send to wallet" onPress={shareOutgoing} disabled={busy}/></View>}
+    {!!notice && <Note>{notice}</Note>}
+    {!!error && <Text selectable accessibilityRole="alert" style={[r.errorText, { textAlign: 'center', marginTop: 10 }]}>{error}</Text>}
+    {(busy || !sessionLoaded) && <ActivityIndicator color={colors.mint} style={{ marginTop: 12 }}/>}
+    {identity && <SavedMessages transport={transport} deliver={deliver}/>}
+  </>;
+  if (signer) {
+    const current = signerReview();
+    return <SignerDevice screen={(_, height) => current
+      ? <Pager key={review?.review_id ?? review?.request_id ?? reviewKind} review={current} busy={busy} inset={16}/>
+      : <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ minHeight: height, justifyContent: 'center', padding: 18 }}>
+        {signerIdle}
+      </ScrollView>}/>;
+  }
+  return <View style={s.screen} testID="device-screen" {...({ dataSet: { vaultHeight: vaultVisible && vault ? vault.chain_height : '' } } as object)}>
+    <DarkBackground/><DeviceStatus/><DarkEffects/>
+    {identity && !signer && <View style={{ position: 'absolute', top: Platform.OS === 'web' ? 56 : 14, left: 26, right: 26, flexDirection: 'row', justifyContent: 'space-between', zIndex: 10 }} pointerEvents="box-none">
+      {/* A closed vault has nothing to configure or hide yet. */}
+      {tab === 'vault' && !vaultVisible && page === 'home' ? <View/> : <IconButton label={page !== 'home' && !anySheet ? (tab === 'wallet' ? 'Back to wallet' : 'Back to vault') : 'Settings'} name={page !== 'home' && !anySheet ? 'close' : 'settings'} onPress={() => go(page !== 'home' ? 'home' : 'settings')}/>}
+      {tab === 'vault' && (vaultVisible || page !== 'home') && <IconButton label="Hide vault" name="close" onPress={hideVault}/>}
+    </View>}
+    <ScrollView ref={screenScroll} contentContainerStyle={[s.content, tab === 'vault' && page !== 'home' && !vaultSheet && { paddingTop: 56 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} accessibilityElementsHidden={anySheet} importantForAccessibility={anySheet ? 'no-hide-descendants' : 'auto'}>
+      {screenContent}
     </ScrollView>
-    {!signer && <View style={s.tabs}><BlurView pointerEvents="none" tint="dark" intensity={48} style={[StyleSheet.absoluteFill, { borderRadius: 30 }]}/>{(['wallet', 'vault'] as const).map(value => <Pressable key={value} accessibilityRole="tab" accessibilityLabel={value === 'wallet' ? 'Wallet' : 'Vault'} aria-selected={tab === value}
+    {!signer && identity && <View style={s.tabs}><BlurView pointerEvents="none" tint="dark" intensity={48} style={[StyleSheet.absoluteFill, { borderRadius: 30 }]}/>{(['wallet', 'vault'] as const).map(value => <Pressable key={value} accessibilityRole="tab" accessibilityLabel={value === 'wallet' ? 'Wallet' : 'Vault'} aria-selected={tab === value}
       onPress={() => { screenScroll.current?.scrollTo({ y: 0, animated: false }); if (value === 'wallet') hideVault(); else { setTab('vault'); setPage('home'); setError(''); setNotice(''); } }} style={[s.tab, tab === value && s.selectedTab]}>
       <Icon name={value} size={16} color={tab === value ? colors.text : colors.faint}/><Text style={[s.tabText, tab === value && s.selectedText]}>{value === 'wallet' ? 'Wallet' : 'Vault'}</Text>
     </Pressable>)}</View>}
@@ -859,7 +782,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
           </Pressable>
         </View></>}
       {page === 'confirm-send' && paymentReview && <><Text style={s.sheetEyebrow}>Confirm payment</Text><Text style={s.rowValue}>{paymentReview.amount_sats} sats</Text><Text selectable style={s.mono}>{paymentReview.destination}</Text><Text style={s.subtext}>Fee: {paymentReview.fee_sats} sats · Total: {paymentReview.total_sats} sats</Text>
-        <Button title="Confirm and send" primary disabled={busy} onPress={() => run({ method: 'confirm_payment', review_id: paymentReview.review_id }, () => setPage('home'))} /><Button title="Go back" onPress={() => run({ method: 'reject_payment', review_id: paymentReview.review_id }, () => { setPaymentReview(null); setPage('send'); })} disabled={busy} /></>}
+        <Button title="Confirm and send" primary disabled={busy} onPress={() => void secure(() => run({ method: 'confirm_payment', review_id: paymentReview.review_id }, () => setPage('home')))} /><Button title="Go back" onPress={() => run({ method: 'reject_payment', review_id: paymentReview.review_id }, () => { setPaymentReview(null); setPage('send'); })} disabled={busy} /></>}
       {page === 'transaction' && selectedActivity && <><Text style={s.sheetEyebrow}>Transaction details</Text>
         <Text style={[s.balance, { fontSize: 30, textAlign: 'center' }]}>{selectedActivity.balance_change_sats < 0 ? '−' : '+'}₿{btc(Math.abs(selectedActivity.balance_change_sats))}</Text>
         <Text style={s.subtext}>{selectedActivity.confirmed ? 'Confirmed' : 'Awaiting confirmation'} · wallet balance change{selectedActivity.balance_change_sats < 0 ? ', including fees' : ''}</Text>
@@ -872,43 +795,66 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       {page === 'deposit' && <AddressCard address={vault.config.vault_address} vault/>}
       {page === 'withdraw' && <WithdrawalOptions go={go} vault={vault}/>}
       {page === 'settings' && <VaultSettings vault={vault} disabled={busy}
-        go={next => next === 'signer-recovery' ? void run({ method: 'recovery_source' }, value => { setRecoverySource(value); go(next); }) : go(next)}
-        backup={() => propose({ method: 'propose_backup' }, 'backup-proposal', () => setPage('home'))}
-        exportBackup={exportBackup} reviewRecovered={() => { go('recovered-wallet'); void reviewRecovered(); }}/>
+        go={go} backup={() => propose({ method: 'propose_backup' }, 'backup-proposal', () => setPage('home'))}
+        reviewRecovered={() => { go('recovered-wallet'); void reviewRecovered(); }}/>
       }
+      {page === 'lost' && <View style={{ gap: 18, marginTop: 22, marginHorizontal: 6 }}>
+        {([['key', 'Lost your signer?', 'Restore it from the backup its maker gave you. It comes back as the same key, so your vault doesn’t change.'],
+          ['phone', 'Lost your phone?', 'On a new phone, open Vault and recover with your signer. Your cloud backup restores this phone’s key.'],
+          ['clock', 'Lost both?', 'Nobody can move your savings. Restore your signer from its backup: it can move them alone a year after your last renewal.']] as const).map(([icon, title, detail]) =>
+          <View key={icon} style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
+            <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.06)' }}><Icon name={icon} size={18}/></View>
+            <View style={{ flex: 1 }}><Text style={{ color: colors.text, fontSize: 14, fontWeight: '500' }}>{title}</Text><Text style={[s.tiny, { color: colors.quiet, marginTop: 2 }]}>{detail}</Text></View>
+          </View>)}
+        <MenuRow title="Signer recovery and revocation" subtitle="Restore a phone or disable vault actions" disabled={busy}
+          onPress={() => void run({ method: 'recovery_source' }, value => { setRecoverySource(value); go('signer-recovery'); })}/>
+      </View>}
+      {page === 'saved-messages' && <SavedMessages transport={transport} deliver={deliver} open/>}
       {page === 'policy' && <PolicyEditor vault={vault} monthly={monthly} setMonthly={setMonthly} emergency={emergency} setEmergency={setEmergency}
         disabled={busy} onPropose={() => proposal()} onRenew={() => proposal('refresh_policy')}/>}
       {page === 'monthly' && <>
         <Text style={[s.balance, { fontSize: 34, textAlign: 'center', marginTop: 12 }]}>₿{btc(vault.config.monthly_limit_sats)}</Text>
-        <Text style={[s.subtext, { textAlign: 'center' }]}>From your vault to your everyday wallet.</Text>
-        <Field label="Allowance step" value={step} onChange={setStep} numeric/>
-        <Button title="Withdraw monthly allowance" primary disabled={busy} onPress={() => run({ method: 'monthly', step: Number(step), action: 'authorization' })}/>
+        <Text style={[s.balanceCaption, { marginBottom: 18 }]}>a month, to your wallet</Text>
+        <Button title="Withdraw monthly allowance" primary disabled={busy} onPress={() => void secure(() => run({ method: 'monthly', step: Number(step), action: 'authorization' }))}/>
         <Button title="Revoke remaining allowances" danger disabled={busy} onPress={() => run({ method: 'monthly', step: Number(step), action: 'revocation' })}/>
-        <Text style={s.tiny}>Revocation disables this step and every later allowance once confirmed.</Text>
-        <Field label="Soft limit in sats" value={softLimit} onChange={setSoftLimit} numeric/>
-        <Button title="Apply soft limit" disabled={busy} onPress={() => run({ method: 'apply_soft_limit', step: Number(step), limit_sats: Number(softLimit) })}/>
-        <Text style={s.tiny}>After withdrawal, return funds above your soft limit to the vault, less transaction fees.</Text>
+        {!moreMonthly ? <Pressable accessibilityRole="button" accessibilityLabel="More options" onPress={() => setMoreMonthly(true)} style={{ alignSelf: 'center', padding: 12 }}>
+          <Text style={[s.tiny, { color: colors.quiet }]}>More options</Text></Pressable> : <>
+          <Field label="Allowance step" value={step} onChange={setStep} numeric/>
+          <Field label="Soft limit in sats" value={softLimit} onChange={setSoftLimit} numeric/>
+          <Button title="Apply soft limit" disabled={busy} onPress={() => run({ method: 'apply_soft_limit', step: Number(step), limit_sats: Number(softLimit) })}/>
+          <Text style={s.tiny}>Returns anything above the soft limit to the vault.</Text>
+        </>}
       </>}
       {page === 'emergency' && <>
         <Text style={[s.balance, { fontSize: 34, textAlign: 'center', marginTop: 12 }]}>₿{btc(vault.config.emergency_access_limit_sats)}</Text>
-        <Text style={[s.subtext, { textAlign: 'center' }]}>One-week delay after activation confirms. Cancel before withdrawal confirms to keep the funds in cold storage.</Text>
-        <Button title="Start emergency access" primary disabled={busy} onPress={() => run({ method: 'initiate_emergency' })}/>
-        <Button title="Withdraw emergency funds" disabled={busy} onPress={() => run({ method: 'withdraw_emergency' })}/>
+        <Text style={[s.balanceCaption, { marginBottom: 18 }]}>Phone only · arrives a week after you start</Text>
+        <Button title="Start emergency access" primary disabled={busy} onPress={() => void secure(() => run({ method: 'initiate_emergency' }))}/>
+        <Button title="Withdraw emergency funds" disabled={busy} onPress={() => void secure(() => run({ method: 'withdraw_emergency' }))}/>
         <Button title="Cancel emergency access" danger disabled={busy} onPress={() => run({ method: 'cancel_emergency' })}/>
       </>}
-      {(page === 'sweep' || page === 'recovery') && <>
+      {page === 'sweep' && <>
         <Field label="Vault transfer destination" value={destination} onChange={setDestination}/>
-        {page === 'sweep' ? <>
-          <Text style={s.subtext}>Both devices approve an immediate transfer of all confirmed vault outputs. This does not renew the monthly policy.</Text>
-          <Button title="Propose vault transfer" primary disabled={busy} onPress={() => propose({ method: 'propose_sweep', destination }, 'sweep-proposal', () => setPage('home'))}/>
-        </> : <>
-          <Text style={s.subtext}>Phone recovery requires {vault.config.phone_recovery_blocks} blocks ({network === 'signet' ? '~21 days on Mutinynet' : '~14 months'}) since confirmation. Earliest next-block height: {vault.phone_recovery_next_block_height ?? 'No confirmed funds'}. Verify the destination before continuing.</Text>
-          <Button title="Confirm phone recovery transfer" danger disabled={busy} onPress={() => run({ method: 'phone_recovery', destination }, () => setPage('home'))}/>
-        </>}
+        <Text style={s.subtext}>Both devices approve an immediate transfer of all confirmed vault outputs. This does not renew the monthly policy.</Text>
+        <Button title="Propose vault transfer" primary disabled={busy} onPress={() => propose({ method: 'propose_sweep', destination }, 'sweep-proposal', () => setPage('home'))}/>
         <Button title="Cancel vault transfer" onPress={() => go('home')}/>
       </>}
       {feedback}
     </DarkSheet>}
+    {welcome && <DarkSheet label="Welcome" onClose={() => setWelcome(false)}>
+      <Text style={[s.balance, { fontSize: 24, lineHeight: 30, textAlign: 'center', marginTop: 26 }]}>Your wallet is ready</Text>
+      <View style={{ gap: 18, marginTop: 26, marginHorizontal: 6 }}>
+        {([['face', 'Protected by Face ID', 'Only you can open it.'],
+          ['cloud', 'Backed up for you', 'Encrypted across your Apple devices. Nothing to write down.'],
+          ['phone', 'Lost your phone?', 'Recover on a new iPhone with your Face ID.']] as const).map(([icon, title, detail]) =>
+          <View key={icon} style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
+            <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.06)' }}><Icon name={icon} size={18}/></View>
+            <View style={{ flex: 1 }}><Text style={{ color: colors.text, fontSize: 14, fontWeight: '500' }}>{title}</Text><Text style={[s.tiny, { color: colors.quiet, marginTop: 2 }]}>{detail}</Text></View>
+          </View>)}
+      </View>
+      <View style={{ marginTop: 28 }}><Button title="Get started" primary onPress={() => setWelcome(false)}/></View>
+    </DarkSheet>}
+    {locked && <View style={[StyleSheet.absoluteFill, { zIndex: 85, backgroundColor: colors.background }]}/>}
+    {faceId.prompt}
     {tapState && <TapSheet state={tapState} onCancel={cancelTap} onRetry={() => void connectAndSend()} onDone={() => setTapState(null)}/>}
   </View>;
 }

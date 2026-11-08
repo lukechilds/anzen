@@ -40,15 +40,16 @@ wallet. It is a separate signing device, with the security properties of its OS 
 Using both roles on the same physical phone does not provide independent compromise domains.
 These limitations must be visible in setup, not hidden behind the phrase "hardware wallet".
 
-Setup is one tap, modelled on Bitkey: the phone and signer are held together and talk over a
-short link (in-page in the playground; NFC or Bluetooth on devices). In one exchange the signer
+Setup is one exchange over the Bluetooth link between phone and signer (in-page in the
+playground), modelled on Bitkey's simplicity. In one exchange the signer
 returns its public identity (a new signer creates its key then), the phone builds the vault from
 its key and the signer's public key and sends it with a sealed backup-key request, and the
 signer independently reconstructs the expected script/address, checks its own key, accepts the
-vault and wraps the phone's recovery-backup key (`setup_vault` / `accept_setup`). Physical
-proximity is the user's consent and authenticates the channel, so there is no address
-comparison or approval prompt: nothing in setup can move funds, and a backup naming recovery
-contacts is refused here and must be reviewed. A paired signer refuses a different vault, and a
+vault and wraps the phone's recovery-backup key (`setup_vault` / `accept_setup`). Bluetooth
+pairing authenticates the channel: on devices the first connection must confirm a code shown
+on both screens, as hardware wallets do (the playground, with both devices in one page, skips
+it). There is no address comparison or approval prompt: nothing in setup can move funds. A
+paired signer refuses a different vault, and a
 received package cannot silently change the accepted key, network or vault; changes require
 their own review flow. Repeating an interrupted setup with the same signer resends the same
 vault.
@@ -58,9 +59,9 @@ reviewed request. Merely receiving a message must never sign. Response packages 
 by the wallet before activation/broadcast. Rejection, retries, interruption, duplicates and
 stale requests are first-class states. No approval is inferred from a successful transport.
 
-The versioned message format is independent of transport. Over a tap, the phone sends a
+The versioned message format is independent of transport. Over the link, the phone sends a
 request and the signer answers; an answer that signs waits for the user's approval on the
-signer, and moving the phone away abandons it. The browser playground connects its two visible
+signer, and disconnecting abandons it. The browser playground connects its two visible
 app instances this way. Physical devices use the same format through file/QR
 exchange; large presigning packages require files or a chunked/animated transport rather
 than assuming they fit in one QR. Private backup material requires authenticated encryption;
@@ -87,18 +88,11 @@ The browser requires cross-origin isolation (COOP/COEP). The supplied web launch
 those headers through a loopback proxy. No isolation or storage failure can switch signing
 back to the server. See [WASM implementation gates](wasm-implementation.md).
 
-Host-backed links select regtest. A separate control panel can fund a chosen address, mine confirmation
-blocks, advance mock time, and mine the blocks needed for relative recovery delays. All
-transactions and consensus checks use a real Bitcoin Core node. Calendar time and block
-height are distinct: changing mock time alone does not satisfy a block-based CSV delay.
-Long operations report progress and remain observable through reconnection.
-
-The playground's node disables only `-checkblockindex`, a Core-internal debugging consistency
-pass that regtest enables by default. It traverses the entire block index repeatedly; across
-several full recovery delays this adds quadratic work. Block/transaction/script validation
-and both absolute/relative timelocks are unchanged. See the pinned
-[Core 28.1 check](https://github.com/bitcoin/bitcoin/blob/v28.1/src/validation.cpp#L4791) and
-[regtest default](https://github.com/bitcoin/bitcoin/blob/v28.1/src/kernel/chainparams.cpp#L551).
+Host-backed links select regtest. A separate control panel can fund a chosen address, mine
+confirmation blocks, and advance mock time by a week, 31 days or 13 months (at most 400 days
+per step). All transactions and consensus checks use a real Bitcoin Core node. Every vault
+timelock is time-based, so each time step also mines eleven blocks at the new time: relative
+locks are judged against median time past, which wall time alone does not move.
 
 The local host binds to loopback, restricts origins and authenticates requests with
 per-session capabilities. Device-local workers enforce wallet/signer roles; the offline
@@ -139,8 +133,8 @@ not off-device recovery, and clearing site data can destroy it along with the wa
 Mutinynet stores the explicit name `mutinynet`; Bitcoin's `Network::Signet` supplies its
 address encoding. Its genesis and pinned block-one hash identify the deployment. Ordinary
 signet is not supported. Its [30-second blocks](https://github.com/MutinyWallet/mutiny-net/blob/master/README.md)
-mean unchanged recovery delays are approximately 21/23 days, not 14/15 months. This is not
-an annual-delay security configuration. The public indexer remains trusted for chain data;
+do not shorten any vault timelock: all are time-based, so the signer's ~388-day path is the
+same as on mainnet. The public indexer remains trusted for chain data;
 the checkpoint check is not full-node validation. The history rate limit is respected with
 cross-device request pacing. No real-fund broadcasts are part of automated verification.
 
@@ -256,9 +250,8 @@ key-wrapping transcript, lacks the encrypted recovery payload. Its review file c
 only public configuration and a request hash, not the request or cloud backup. Approval
 requires resupplying the exact request matching that hash. Stale responses cannot replace a
 newer phone backup draft. Both UIs receive ciphertext or public review fields, never seeds.
-Backup recreation and the device-separated key-rotation paths preserve recovery contacts.
-Rotation reviews show the new backup's contact fingerprints before approval; the user must
-export that new backup separately after activation.
+Only the signer can unwrap the backup key; there are no other recipients. A rotation creates
+a fresh backup, which the user must export separately after activation.
 
 The channel uses libsecp256k1 ECDH on the existing vault keys normalized to even Y, followed
 by the existing HKDF/XChaCha20-Poly1305 implementation. Direction, both identities, vault
@@ -307,12 +300,6 @@ Ordinary hot-wallet funds have a separate exact-amount/fee review and confirmati
 key scans both wallet keychains, then sends its spendable balance to a freshly derived address
 owned by the replacement phone. Immature coins and later deposits can be recovered in a later
 scan. This step does not require the signer. The recovered key is retained encrypted.
-
-Phone rotation preserves the contact list authenticated during successful backup recovery.
-The recovered-key record stores that list and the payload together under authenticated
-encryption, in one atomic write. A later, unapproved restore request cannot change it. Legacy
-recovered-key records without contact metadata still allow fund recovery, but rotation asks
-the user to repeat backup recovery instead of assuming there were no contacts.
 
 ### Retaining outgoing protocol messages
 
@@ -371,7 +358,7 @@ never modified or deleted. Incoming files are currently in-memory UI state, not 
 workflow journal.
 
 Backup export/import is a separate wallet-mode action. It must not send the phone-seed
-ciphertext to the signer or recovery contact. The user still chooses the recipient/storage
+ciphertext to the signer. The user still chooses the recipient/storage
 destination, so the OS share sheet cannot enforce that separation: keep the backup in an
 independent location, not on the signer or in storage accessible to a stolen signer. Sharing
 the same cloud account across both devices can defeat this intended independence.
@@ -385,55 +372,12 @@ API references: [Expo DocumentPicker](https://docs.expo.dev/versions/latest/sdk/
 [FileSystem](https://docs.expo.dev/versions/latest/sdk/filesystem/) and
 [Sharing](https://docs.expo.dev/versions/latest/sdk/sharing/).
 
-### Replace an unavailable signer with the surviving phone
+### A lost signer is restored, not replaced
 
-The surviving phone imports a fresh signer's public identity. `anzen-wallet` preserves the
-phone key, ordinary wallet descriptors and current approved spending limits, and constructs
-a new vault with the new HWW key. Its recovery transfer uses the old vault's phone-only
-61,200-block CSV path. The new signer has no authority to release the old funds early.
-
-The proposal includes authenticated previous transactions, the phone-signed recovery transfer,
-any old-connector revocation, a phone-signed renewal bound to the new vault output, and a
-confidential backup-key-wrapping request. `anzen-signer-app` independently validates the proposal
-and presents the old/new addresses, device identities, transfer amount/fee, retained limits,
-funded withdrawal count and backup contact fingerprints. Explicit approval signs only the new vault policy and wraps its
-backup key. A disabled policy stays disabled; no presigned withdrawals are invented.
-
-Before broadcasting anything, `anzen-wallet` checks that every proposed recovery input remains
-confirmed, unspent and mature. It selects up to 1,000 mature inputs, or the oldest confirmation
-group if none are mature yet. A new deposit, or a younger continuing monthly-chain output,
-cannot postpone older savings. The phone displays the selected amount alongside the total;
-the renewal can be partially funded while preserving the approved limits. The offline signer
-makes no claim about confirmation heights.
-Bitcoin enforces the fixed CSV sequence even if local preflight is bypassed. Confirmation
-of the replacement/renewal restarts the new vault's recovery and spending timelocks.
-
-Activation saves the approval and encrypted backup before submitting transactions. Submission
-intents and exact-transaction receipts support retry after a lost broadcast response without
-claiming that an attempted broadcast succeeded. The fresh signer adopts its approved vault
-only after a separate confirmation; replaying that completion cannot undo a later policy.
-The ordinary hot-wallet key remains unchanged, so it does not need a balance migration.
-
-Contacts in the surviving phone's locally stored backup are rewrapped into the fresh backup.
-Their public certificates, not private keys, are needed. The old encrypted backup is retained
-in the pending operation; the user must separately export the new backup for the replacement
-signer. Contact recovery authenticates and decrypts that new backup without either original
-device. It does not reuse an old encrypted payload for a different vault.
-
-Before the first submission, the phone records the retired vault's public configuration in
-its protected storage. Private vault snapshots continue scanning those addresses, including
-ones with zero balance. **Retired vaults** therefore survives a UI restart and shows later
-deposits with their separate phone/HWW deadlines. Monitoring here means explicit vault syncs,
-not background alerts. The archive is currently device-local; moving this history through
-cloud recovery to another phone remains unfinished.
-
-The surviving phone can review a fixed-CSV transfer of an eligible group back to its current
-vault, without either signer. The review binds the source, recipient phone, current destination,
-exact transaction and fee. Confirmation rechecks maturity/unspent inputs, and preserves the
-signed transaction for retries. Cancellation is permitted only before submission. This uses
-the same Rust review/submission code as contact-assisted recovery; neither screen implements
-timelock logic. Recovering deposits this way does not alter limits or automatically add them
-to the already presigned policy.
+A vault never changes signer. A lost signer is restored from the backup its hardware-wallet
+maker provides, which yields the same key, so the vault, its policy and the phone are
+unchanged. Anzen holds no signer seed and has no signer-replacement protocol. The **Lost a
+device?** sheet explains this alongside lost-phone recovery and the signer's solo path.
 
 ## Offline fallback and controller revocation
 
@@ -442,18 +386,23 @@ stores that as a separate watch-only recovery source, without replacing its own 
 It scans the source and packages input outpoints with their complete previous transactions.
 No original phone key or seed backup is needed for this coordination.
 
-The hot facade exposes a recovery snapshot with both fixed script delays, next-block
-activation heights, remaining blocks and mature amounts. The UI displays this data; it does
-not calculate Bitcoin maturity or assume that a mature path implies possession of its key.
+The vault is `tr(NUMS,{multi_a(2,phone,hww),and_v(v:older(4259839),pk(hww))})`: both
+devices, or the signer alone once the longest BIP68 time lock, 65,535 × 512 seconds (about
+388 days), has passed since a coin confirmed. Each annual renewal moves every coin and so
+restarts it. The phone has no path of its own.
+
+The hot facade exposes a recovery snapshot for that path: the delay, the median time at which
+the oldest coin's lock opens, the seconds remaining and the mature amount. BIP68 counts from
+the median time past of the block before each coin's, so Rust reads those times from the
+chain backend. The UI displays the remaining days; it does not calculate Bitcoin maturity.
 HWW fallback selects mature inputs, or the oldest confirmation cohort before maturity,
 bounded to 1,000 inputs with higher-value inputs first. New deposits cannot postpone older
-savings, and callers can review another batch for leftovers. Contact-assisted sweeping uses
-the same selection and timing helpers as signer replacement.
+savings, and callers can review another batch for leftovers.
 
 The cold library checks transaction IDs, input values/scripts, duplicates, network and the
 accepted vault. It reconstructs the transaction and presents its destination, amount, fee
-and action before a separate hash-bound approval. HWW fallback retains the 65,535-block CSV
-sequence. The offline signer does **not** claim to know confirmation heights or unspent
+and action before a separate hash-bound approval. HWW fallback carries the time-based CSV
+sequence `0x40FFFF`. The offline signer does **not** claim to know the time or unspent
 status; the wallet preflights maturity and Bitcoin ultimately enforces it.
 
 Blanket revocation spends the live connectors in one transaction and returns their change
@@ -467,63 +416,4 @@ These transfers do not yet implement key rotation or policy renewal. The browser
 to a fresh wallet/signer and back to the retained original test device; keys are never copied.
 This makes unavailable-device and attacker behavior testable without deleting recovery data.
 
-## Recovery contacts and recovery without either original device
-
-Social recovery retains the CLI's **1-of-N OpenPGP** model: any configured contact plus the
-cloud backup can recover the phone key. It is not threshold sharing and does not grant an
-immediate Bitcoin spending path. The recovered key remains subject to the vault's phone delay.
-
-A contact uses a separate wallet-mode app instance. `anzen-wallet` generates and stores its
-private OpenPGP key on that device; JavaScript receives only the name, fingerprint, public
-certificate and public transport key. Existing keys cannot be silently regenerated. Native persistence uses the same protected
-storage scope as the wallet seed. The browser's optional third phone has its own WASM workers,
-encrypted IndexedDB database and device lock; it never copies its private key to the owner's
-phone or signer. These are logical device boundaries, not protection against a compromised
-browser origin.
-
-The owner imports the public contact and compares its fingerprint independently. The hot
-library validates the certificate/fingerprint, preserves current contacts, encrypts a fresh
-backup and proposes its encryption-key wrapping to the signer. Only the random encryption key,
-public contact keys and backup commitment cross that encrypted channel. The cold library
-validates the contact keys and lists their fingerprints for explicit approval. Merely importing
-or rejecting a proposal does not replace the owner's active backup. After approval, the owner
-stores and separately exports the updated envelope. Recreating a backup retains its contacts.
-
-The device protocol caps this list at 32 contacts and each public certificate at 64 KiB to bound
-untrusted cryptographic work. Names are display labels, not authenticated real-world identities.
-Fingerprint comparison and protecting the contact's own device remain important.
-
-If both original devices are unavailable, a fresh wallet-mode phone imports the cloud backup
-and the contact's public identity. Rust selects that contact's wrapper and sends only the wrapper,
-backup commitment and new recipient identity to the contact. The contact never receives the
-encrypted phone seed. Its user independently compares the recipient identity and explicitly
-approves releasing the unwrapped encryption key to that recipient over the encrypted device
-channel. The approval is bound to the exact reviewed request; rejection does not release a key.
-
-The replacement phone authenticates and decrypts the cloud payload in Rust. It reconstructs
-the fixed vault configuration from the backed-up descriptor and phone key, validating the
-complete script against Anzen's supported construction. Neither original device nor a separate
-configuration export is needed. The recovered old key is stored encrypted under the fresh
-phone's key, separately from its own identity; native storage adds the OS-key protection layer.
-No seed or unwrapped backup key is returned to JavaScript.
-
-The cloud backup does not contain spending-policy history. Without a separately saved signed
-recovery bundle, the public recovery snapshot explicitly marks that history **unavailable**.
-Zero placeholders in the reconstructed configuration are not evidence of a disabled policy.
-The UI describes this as fund recovery, not a policy-preserving rotation or renewal.
-
-Rust scans the recovered vault, reports mature versus total funds, and prepares an unsigned
-exact-transaction review to a chosen destination. Confirmation checks the reviewed inputs are
-still unspent and their 61,200-block phone delay is mature before signing and broadcasting.
-Newer deposits are left for a later sweep; they cannot postpone already-mature funds. A saved
-submission permits retrying the same transaction after a lost response. Deleting a local review
-cannot cancel a submitted transaction. Bitcoin remains the final timelock enforcer.
-
-The same screen separately offers the existing Rust ordinary-wallet recovery operation. It
-scans the recovered phone key's normal receive/change chains and reviews a transfer to a fresh
-address owned by the replacement phone. These funds have no vault CSV delay. Cancellation is
-allowed before submission starts. The exact signed transaction is persisted before broadcasting,
-so an ambiguous/lost response can retry the same bytes; a stored receipt avoids another broadcast.
-This does not move or unlock the timelocked vault. Later ordinary-wallet deposits can be recovered
-with a new review. Neither original device is required. Existing CLI social recovery is unchanged.
 See the verification ledger for tested boundaries and remaining work.

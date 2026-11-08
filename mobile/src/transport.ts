@@ -18,8 +18,6 @@ export const protocolKinds = [
   'sweep-proposal', 'sweep-approved', 'backup-proposal', 'backup-approved', 'recovery-vault',
   'offline-action-proposal', 'offline-action-approved', 'restore-proposal', 'restore-approved',
   'phone-rotation-proposal', 'phone-rotation-approved', 'phone-rotation-completed',
-  'signer-replacement-proposal', 'signer-replacement-approved', 'signer-replacement-completed',
-  'recovery-contact', 'contact-restore-proposal', 'contact-restore-approved',
   // Requests that exist only during a tap: the phone asks; the signer answers with
   // signer-identity or recovery-vault.
   'signer-hello', 'recovery-vault-request',
@@ -45,10 +43,10 @@ export interface Tap {
   // Signer: answer phones held close. Returns an unsubscribe function.
   answer(handler: TapAnswer): () => void;
 }
-// Messages a phone sends to its own signer, which therefore travel by tap. Rotation and
-// replacement completions wait for confirmation first, so the phone offers them later.
+// Messages a phone sends to its own signer, which therefore travel by tap. A rotation's
+// completion waits for confirmation first, so the phone offers it later.
 export const signerBound: readonly ProtocolMessage['kind'][] = [
   'signer-hello', 'recovery-vault-request', 'vault-setup', 'policy-proposal', 'sweep-proposal',
   'backup-proposal', 'offline-action-proposal', 'restore-proposal', 'phone-rotation-proposal',
-  'phone-rotation-completed', 'signer-replacement-proposal', 'signer-replacement-completed',
+  'phone-rotation-completed',
 ];

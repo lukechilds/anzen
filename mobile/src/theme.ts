@@ -48,7 +48,8 @@ export const styles = StyleSheet.create({
   noticeText: { color: colors.mint, fontSize: 12, lineHeight: 19 },
   error: { backgroundColor: '#efaca30a' },
   errorText: { color: colors.red, fontSize: 12, lineHeight: 19 },
-  mono: { fontFamily: fonts.mono, color: colors.muted, fontSize: 11, lineHeight: 17 },
+  // Addresses and keys have no spaces, so let them wrap anywhere rather than overflow.
+  mono: { fontFamily: fonts.mono, color: colors.muted, fontSize: 11, lineHeight: 17, ...(Platform.OS === 'web' ? { wordBreak: 'break-all' } as object : {}) },
   // Sheet titles are smaller and brighter than page eyebrows.
   sheetEyebrow: { color: colors.quiet, textTransform: 'uppercase', letterSpacing: 3, fontSize: 9.5, lineHeight: 12, textAlign: 'center', marginTop: 16 },
   // Status footers under settings, e.g. "mainnet · block 908,391".

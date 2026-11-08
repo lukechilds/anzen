@@ -85,11 +85,7 @@ export interface Activity {
 export function WalletHistory({ items, loaded, onSelect }: { items: Activity[]; loaded: boolean; onSelect: (entry: Activity) => void }) {
   let previousMonth = '';
   return <View style={d.list}>
-    {items.length === 0 && <View style={d.empty}>
-      <View style={d.avatar}><Icon name="wallet" size={18}/></View>
-      <Text style={[d.title, { marginTop: 16 }]}>{loaded ? 'Your everyday bitcoin' : 'Your wallet, at a glance'}</Text>
-      <Text style={[d.subtitle, { marginTop: 8, textAlign: 'center', lineHeight: 19 }]}>{loaded ? 'Received and sent payments will appear here.' : 'Sync to see your balance and recent payments.'}</Text>
-    </View>}
+    {items.length === 0 && loaded && <Text style={[d.subtitle, { textAlign: 'center', marginTop: 40 }]}>No payments yet</Text>}
     {items.map(entry => {
       const date = entry.timestamp === null ? null : new Date(entry.timestamp * 1000);
       const year = date && date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' as const } : {};

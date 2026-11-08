@@ -21,7 +21,7 @@ export async function browserCloud(scope: string, operation: JsonObject): Promis
     if (operation.method === 'save') {
       const text = JSON.stringify(operation.backup);
       const backup = parseEncryptedBackup(text);
-      if (backup.version !== 1 || backup.kind !== 'vault-cloud-recovery') throw new Error('Unsupported encrypted cloud backup');
+      if (backup.version !== 2 || backup.kind !== 'vault-cloud-recovery') throw new Error('Unsupported encrypted cloud backup');
       const id = await hash(text), tx = db.transaction('backups', 'readwrite', { durability: 'strict' });
       const done = new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error || new Error('Backup write aborted')); });
       tx.objectStore('backups').put({ scope: namespace, id, text });

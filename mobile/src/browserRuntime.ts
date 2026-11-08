@@ -58,6 +58,11 @@ export async function openBrowserDevice(device: BrowserDevice, settings: Setting
   try { await runtime.ready; return runtime; }
   catch (error) { runtimes.delete(device.id); runtime.close(); throw error; }
 }
+// Stop a device's workers, e.g. when switching networks. Opening it again starts afresh.
+export function closeBrowserDevice(id: string) {
+  runtimes.get(id)?.close();
+  runtimes.delete(id);
+}
 class BrowserRuntime implements DeviceTransport {
   readonly role: Role;
   readonly ready: Promise<JsonObject>;

@@ -106,7 +106,7 @@ export default function NativeApp() {
       <Button title="Choose protocol message file" primary disabled={fileBusy} onPress={() => void receiveFile()} />
       {role === 'wallet' && <>
         <Text style={s.label}>Encrypted recovery backup</Text>
-        <Text style={s.subtext}>Load a backup saved separately from the signer. Never send this file to your signer or recovery contact.</Text>
+        <Text style={s.subtext}>Load a backup saved separately from the signer. Never send this file to your signer.</Text>
         <Button title="Choose encrypted backup file" disabled={fileBusy} onPress={() => void receiveFile(true)} />
       </>}
       <Text style={s.label}>Or paste a protocol message</Text>

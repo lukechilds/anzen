@@ -51,10 +51,8 @@ tests, policy-activation retry tests, Electrum recovery and transaction-vector s
 The explicit regtest tests remain opt-in in that command.
 
 `cargo test --manifest-path mobile/rust/Cargo.toml --locked --lib` passed all eight C ABI
-unit tests. `cd mobile && npm run test:native:regtest` separately passed all three real-node C ABI
-scenarios: payment/policy approval, recovery of hot funds through a contact, and signer
-replacement after the full phone recovery delay. Its disposable Docker chain was removed
-by the runner. These host tests do not establish iOS/Android application builds or device UI
+unit tests. `cd mobile && npm run test:native:regtest` separately passed the real-node C ABI
+payment/policy approval scenario. Its disposable Docker chain was removed by the runner. These host tests do not establish iOS/Android application builds or device UI
 behavior; local Xcode/Android tooling still needs configuration for that separate work.
 
 The six opt-in root regtest cases also passed, in the repository runner's order:
@@ -77,8 +75,7 @@ test override.
 Earlier browser passes exposed outdated test navigation: sheets must be closed before
 changing tabs or opening a message underneath them. Those steps now use visible close controls;
 no forced clicks or bypasses into the wallet API were added. The final full 31-case run
-passed in 15.0 minutes, including all original 25 scenarios, setup/activity visuals and all
-real recovery delays. Results: `/tmp/anzen-dark-final-suite`. Its isolated Docker chain was
+passed in 15.0 minutes, including all original 25 scenarios and setup/activity visuals. Results: `/tmp/anzen-dark-final-suite`. Its isolated Docker chain was
 removed by the runner. The two interruption tests and one reference-comparison test below
 passed separately: 34 browser cases verified in total, not a claimed single 34-case run.
 
@@ -91,7 +88,7 @@ monthly withdrawal succeeds. Results: `/tmp/anzen-browser-interruption`.
 
 The public-only service checks passed again: device/signing endpoints return 404; invalid
 capabilities, origins, unknown chain commands and extra private-key fields are rejected;
-encrypted cloud objects round-trip; mining progress and cancellation work. This complements
+and encrypted cloud objects round-trip. This complements
 the architecture tests and the browser test that inspects all backend requests and host files.
 
 Rendered review compared the current UI with `#themeDark` in `mockups/compare.html`: the

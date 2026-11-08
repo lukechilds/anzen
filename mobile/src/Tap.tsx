@@ -2,12 +2,13 @@ import React, { useEffect, useRef } from 'react';
 import { ActivityIndicator, Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { DarkSheet } from './DarkSurfaces';
+import { BODY, GLASS, GRID_H, GRID_W } from './SignerDevice';
 import { colors, glass, styles as s } from './theme';
 
 const native = Platform.OS !== 'web';
 
 // What the phone is doing with its signer, for the sheet's words. Rust does the work.
-export type TapPurpose = 'setup' | 'approve' | 'finish' | 'recover' | 'replace';
+export type TapPurpose = 'setup' | 'approve' | 'finish' | 'recover';
 export type TapPhase = 'waiting' | 'working' | 'review' | 'done' | 'failed';
 export interface TapState { purpose: TapPurpose; phase: TapPhase; step?: string; error?: string }
 
@@ -16,11 +17,10 @@ const waiting: Record<TapPurpose, string> = {
   approve: 'Then approve on your signer.',
   finish: 'Your signer switches to the new vault.',
   recover: 'Your signer shares your vault’s public details.',
-  replace: 'Your new signer replaces the lost one.',
 };
 
-// A phone with a signer coming towards it: the signer drifts in while waiting, rests against
-// the phone once connected, and the waves between them turn mint.
+// A phone and its signer: the signer drifts while they connect, settles once connected, and
+// the waves between them turn mint.
 export function TapArt({ phase, size = 1 }: { phase: TapPhase | 'idle'; size?: number }) {
   const approach = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
@@ -55,11 +55,13 @@ export function TapArt({ phase, size = 1 }: { phase: TapPhase | 'idle'; size?: n
         <Path d={`M${6 + i * 9} ${16 - i * 6}a${14 + i * 7} ${14 + i * 7} 0 0 1 0 ${24 + i * 12}`} stroke={tint} strokeWidth={1.8} strokeLinecap="round" fill="none"/>
       </Svg>
     </Animated.View>)}
-    <Animated.View style={{ position: 'absolute', left: 104 * size, top: 34 * size, transform: [{ translateX: signerX }, { rotate: '-8deg' }] }}>
-      <Svg width={56 * size} height={86 * size} viewBox="0 0 56 86">
-        <Rect x={2} y={2} width={52} height={82} rx={13} fill="#121215" stroke={linked ? colors.mint : 'rgba(255,255,255,.7)'} strokeWidth={1.8}/>
-        <Rect x={17} y={30} width={22} height={22} rx={11} fill="none" stroke={tint} strokeWidth={1.4}/>
-        {phase === 'done' && <Path d="M22 41.5l4 4 8-9" stroke={colors.mint} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" fill="none"/>}
+    {/* The signer: wide at the top, tapering to a narrower base, its mark on the chin. */}
+    <Animated.View style={{ position: 'absolute', left: 106 * size, top: 36 * size, transform: [{ translateX: signerX }, { rotate: '-6deg' }] }}>
+      <Svg width={50 * size} height={50 * GRID_H / GRID_W * size} viewBox={`-14 -14 ${GRID_W + 28} ${GRID_H + 28}`}>
+        <Path d={BODY} fill="#121215" stroke={linked ? colors.mint : 'rgba(255,255,255,.7)'} strokeWidth={24}/>
+        <Path d={GLASS} fill="#050506" stroke={tint} strokeWidth={15}/>
+        <Path d="M330 988l45 85h-29l-16-31-16 31h-29z" fill={linked ? colors.mint : 'rgba(255,255,255,.4)'}/>
+        {phase === 'done' && <Path d="M250 430l55 55 105-115" stroke={colors.mint} strokeWidth={26} strokeLinecap="round" strokeLinejoin="round" fill="none"/>}
       </Svg>
     </Animated.View>
   </View>;
@@ -82,9 +84,9 @@ export function TapSheet({ state, onCancel, onRetry, onDone }: { state: TapState
     : phase === 'done' ? (purpose === 'setup' ? 'Your vault is ready' : 'Done')
     : phase === 'review' ? 'Approve on your signer'
     : phase === 'working' ? 'Connected'
-    : purpose === 'replace' ? 'Hold your new signer to your phone' : 'Hold your signer to your phone';
+    : 'Connecting to your signer';
   const detail = declined ? 'Nothing was signed.' : phase === 'failed' ? state.error
-    : phase === 'done' ? (purpose === 'setup' ? 'Two keys now protect your savings: this phone and your signer. Your recovery backup is saved.' : '')
+    : phase === 'done' ? (purpose === 'setup' ? 'Protected by this phone and your signer.' : '')
     : phase === 'review' ? 'Check the details on your signer’s screen.'
     : phase === 'working' ? state.step
     : waiting[purpose];

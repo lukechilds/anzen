@@ -28,7 +28,7 @@ function useQr(address: string) {
 
 // Highlights the parts people compare: the six-character bech32m checksum, and on a vault the
 // vanity "vault" prefix after the separator. Two lines of equal length, as in the mockup.
-export function AddressLines({ address, vault, testID }: { address: string; vault: boolean; testID: string }) {
+export function AddressLines({ address, vault, testID, size = 11.5 }: { address: string; vault: boolean; testID: string; size?: number }) {
   const program = address.lastIndexOf('1') + 2;
   const prefix = vault && address.slice(program, program + 5) === 'vault';
   const bold = (i: number) => i >= address.length - 6 || (prefix && i >= program && i < program + 5);
@@ -42,7 +42,7 @@ export function AddressLines({ address, vault, testID }: { address: string; vaul
     return out;
   };
   return <View testID={testID} style={{ marginTop: 18, alignItems: 'center' }}>
-    {[[0, middle], [middle, address.length]].map(([from, to]) => <Text key={from} selectable style={{ fontFamily: fonts.mono, fontSize: 11.5, letterSpacing: .5, lineHeight: 20, color: colors.quiet, textAlign: 'center' }}>
+    {[[0, middle], [middle, address.length]].map(([from, to]) => <Text key={from} selectable style={{ fontFamily: fonts.mono, fontSize: size, letterSpacing: size * .043, lineHeight: size * 1.74, color: colors.quiet, textAlign: 'center' }}>
       {runs(from, to).map((run, i) => <Text key={i} style={run.bold ? { color: colors.text, fontWeight: '500' } : undefined}>{run.text}</Text>)}
     </Text>)}
   </View>;
@@ -80,6 +80,5 @@ export default function AddressCard({ address, vault = false }: { address: strin
       <Text style={{ color: colors.text, fontSize: 12.5, fontWeight: '500' }}>{copied ? 'Copied' : 'Copy address'}</Text>
     </Pressable>
     {!!error && <Text accessibilityRole="alert" style={s.errorText}>{error}</Text>}
-    <Text style={{ color: colors.quiet, fontSize: 10.5, lineHeight: 15, textAlign: 'center', marginTop: 14, marginBottom: 2 }}>{vault ? 'Deposits follow your vault’s Bitcoin-enforced policy.' : 'Spendable anytime from your phone.'}</Text>
   </View>;
 }

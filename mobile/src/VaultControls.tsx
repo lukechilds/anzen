@@ -6,19 +6,16 @@ import { JsonObject } from './transport';
 
 // Navigation only. Rust remains responsible for proposal validation, eligibility, fees,
 // signature checks and broadcast. No amounts or timelocks are constructed in this UI.
-export function VaultSettings({ vault, go, backup, exportBackup, reviewRecovered, disabled }: {
-  vault: JsonObject; go: (page: string) => void; backup: () => void; exportBackup: () => void;
+export function VaultSettings({ vault, go, backup, reviewRecovered, disabled }: {
+  vault: JsonObject; go: (page: string) => void; backup: () => void;
   reviewRecovered: () => void; disabled: boolean;
 }) {
   return <View style={{ marginTop: 14 }}>
-    <MenuRow title="Change policy" subtitle="Your monthly allowance and emergency access" onPress={() => go('policy')}/>
-    <MenuRow title="Create encrypted phone backup" subtitle={vault.recovery_backup_stored ? 'Update the recovery backup' : 'Approve with your signer'} value={vault.recovery_backup_stored ? 'Stored' : 'Not set'} onPress={backup} disabled={disabled}/>
-    {vault.recovery_backup_stored && <MenuRow title="Export encrypted cloud backup" subtitle="Save a copy away from both devices" onPress={exportBackup} disabled={disabled}/>}
-    <MenuRow title="Signer recovery and revocation" subtitle="Restore a phone or disable vault actions" onPress={() => go('signer-recovery')} disabled={disabled}/>
-    <MenuRow title="Replace lost signer" subtitle="Keep your phone key and spending policy" onPress={() => go('replace-signer')} disabled={disabled}/>
-    <MenuRow title="Recover without signer" subtitle="Bitcoin’s phone-recovery delay applies" onPress={() => go('recovery')} disabled={disabled}/>
+    <MenuRow title="Spending policy" subtitle="Monthly allowance and emergency access" onPress={() => go('policy')}/>
+    <MenuRow title="Recovery backup" subtitle={vault.recovery_backup_stored ? 'Encrypted and saved for you' : 'Approve with your signer'} value={vault.recovery_backup_stored ? 'Saved' : 'Not set'} onPress={backup} disabled={disabled}/>
+    <MenuRow title="Lost a device?" subtitle="What to do if your phone or signer goes missing" onPress={() => go('lost')}/>
     {vault.recovered_wallet_available && <MenuRow title="Review recovered wallet funds" subtitle="Move the old phone’s everyday balance" onPress={reviewRecovered} disabled={disabled}/>}
-    {!!vault.previous_vaults?.length && <MenuRow title="Retired vaults" subtitle="Check funds sent to old addresses" onPress={() => go('retired')}/>}
+    <MenuRow title="Saved messages" subtitle="Resend a request as a file" onPress={() => go('saved-messages')}/>
     <Text style={[s.footnote, { marginTop: 28, marginBottom: 6 }]}>{vault.config.network} · block {vault.chain_height.toLocaleString('en-US')}</Text>
   </View>;
 }
@@ -85,6 +82,5 @@ export function PolicyEditor({ vault, monthly, setMonthly, emergency, setEmergen
         <Text style={{ color: colors.secondary, fontSize: 12.5 }}>Renew for another year</Text>
       </Pressable>}
     </View>
-    <Text style={[s.tiny, { textAlign: 'center', marginTop: 14, color: colors.quiet }]}>Your signer shows these limits for approval. Approving renews your vault’s timelocks for another year.</Text>
   </View>;
 }
