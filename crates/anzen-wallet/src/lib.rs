@@ -177,6 +177,7 @@ where
 pub fn vanity_address_prefix(network: Network) -> Result<&'static str> {
     match network {
         Network::Bitcoin => Ok("bc1pvault"),
+        Network::Signet => Ok("tb1pvault"),
         Network::Regtest => Ok("bcrt1pvault"),
         other => bail!("vanity initialization is unsupported on {other}"),
     }
@@ -304,6 +305,7 @@ where
     )?;
     let expected_prefix = match network {
         Network::Bitcoin => format!("bc1p{suffix}"),
+        Network::Signet => format!("tb1p{suffix}"),
         Network::Regtest => format!("bcrt1p{suffix}"),
         other => bail!("vanity initialization is unsupported on {other}"),
     };
@@ -1053,8 +1055,13 @@ mod tests {
 
     #[test]
     fn multithreaded_vanity_search_persists_a_recoverable_indexed_phone_key() {
+        for (network, prefix) in [(Network::Regtest, "bcrt1pv"), (Network::Signet, "tb1pv")] {
+            vanity_search_persists_a_recoverable_indexed_phone_key(network, prefix);
+        }
+    }
+
+    fn vanity_search_persists_a_recoverable_indexed_phone_key(network: Network, prefix: &str) {
         let dir = anzen_common::storage::tempdir().unwrap();
-        let network = Network::Regtest;
         let secp = Secp256k1::new();
         let hww = DeviceKeys::generate_for_network(&secp, network).unwrap();
         write_json(
@@ -1080,7 +1087,11 @@ mod tests {
 
         let signer = load_public_device(dir.path(), HWW_PUBLIC_FILE).unwrap();
         let result = initialize_vanity_with_suffix(dir.path(), &signer, "v", 4, |_| {}).unwrap();
-        assert!(result.vault_address.starts_with("bcrt1pv"));
+        assert!(
+            result.vault_address.starts_with(prefix),
+            "{}",
+            result.vault_address
+        );
         assert_eq!(result.worker_count, 4);
         assert!(result.attempts > 0);
 
@@ -1103,7 +1114,10 @@ mod tests {
         .unwrap();
         assert_eq!(restored.vault_pubkey, persisted.vault_pubkey);
         assert_eq!(config.phone_vault_pubkey, restored.vault_pubkey.to_string());
-        assert_eq!(load_config(dir.path()).unwrap().network, "regtest");
+        assert_eq!(
+            load_config(dir.path()).unwrap().network,
+            network_name(network)
+        );
     }
 
     #[test]

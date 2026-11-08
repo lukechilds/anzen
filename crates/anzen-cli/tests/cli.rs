@@ -342,3 +342,54 @@ fn the_cloud_backup_hides_the_descriptor_and_only_the_hww_can_open_it() {
     assert!(!backup_text.contains(config["vault_descriptor"].as_str().unwrap()));
     assert!(!backup_text.contains(config["phone_vault_pubkey"].as_str().unwrap()));
 }
+
+#[test]
+fn mutinynet_is_chosen_once_and_every_later_command_follows_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let anzen = || {
+        let mut command = Command::cargo_bin("anzen").unwrap();
+        command
+            .env_remove("ANZEN_NETWORK")
+            .args(["--data-dir", data_dir]);
+        command
+    };
+    anzen()
+        .args(["--network", "mutinynet", "hww", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MUTINYNET — TEST COINS"));
+    // The phone joins the signer's network without repeating the option.
+    anzen()
+        .args(["phone", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MUTINYNET — TEST COINS"));
+    anzen()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Vault address: tb1p"));
+    anzen()
+        .args(["--network", "regtest", "policy"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "vault is configured for mutinynet; --network cannot change an existing vault",
+        ));
+    anzen()
+        .args(["--dangerously-enable-mainnet", "policy"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot change an existing vault"));
+    anzen()
+        .args([
+            "--network",
+            "mutinynet",
+            "--dangerously-enable-mainnet",
+            "policy",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be combined with mainnet"));
+}

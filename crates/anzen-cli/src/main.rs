@@ -35,6 +35,11 @@ struct Cli {
     #[arg(long, global = true)]
     dangerously_enable_mainnet: bool,
 
+    /// Test network for new devices. Existing devices and vaults keep the network they were
+    /// created on.
+    #[arg(long, env = "ANZEN_NETWORK", value_enum, global = true)]
+    network: Option<TestNetwork>,
+
     #[command(flatten)]
     chain: ChainArgs,
 
@@ -71,7 +76,8 @@ enum Command {
 enum PhoneCommand {
     /// Create the simulated phone key and hot-wallet account.
     Init {
-        /// Grind a combined HWW/phone vault address beginning with bc1pvault or bcrt1pvault.
+        /// Grind a combined HWW/phone vault address beginning with bc1pvault, tb1pvault or
+        /// bcrt1pvault.
         #[arg(long)]
         vanity: bool,
     },
@@ -129,7 +135,7 @@ enum PhoneCommand {
     BroadcastSweep { approved_sweep: PathBuf },
     /// Propose a new phone key while preserving the active vault policy.
     RotateKey {
-        /// Grind until the new vault address begins with bc1pvault or bcrt1pvault.
+        /// Grind until the new vault address begins with bc1pvault, tb1pvault or bcrt1pvault.
         #[arg(long)]
         vanity: bool,
         #[arg(long)]
@@ -240,6 +246,24 @@ struct ChainArgs {
     electrum_url: Option<String>,
 }
 
+/// Networks that hold no real bitcoin. Mainnet is opted into separately, on every command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum TestNetwork {
+    /// A local Bitcoin Core regtest node (the default).
+    Regtest,
+    /// The public Mutinynet signet, over its Electrum WebSocket servers.
+    Mutinynet,
+}
+
+impl TestNetwork {
+    fn bitcoin(self) -> Network {
+        match self {
+            Self::Regtest => Network::Regtest,
+            Self::Mutinynet => Network::Signet,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum ChainBackendKind {
     Rpc,
@@ -251,7 +275,7 @@ impl ChainArgs {
         self.chain_backend.map_or_else(
             || match network {
                 Network::Regtest => Ok(ChainBackendKind::Rpc),
-                Network::Bitcoin => Ok(ChainBackendKind::Electrum),
+                Network::Bitcoin | Network::Signet => Ok(ChainBackendKind::Electrum),
                 other => bail!("unsupported vault network: {other}"),
             },
             Ok,
@@ -262,6 +286,11 @@ impl ChainArgs {
         let default_url = match network {
             Network::Regtest => "http://127.0.0.1:18443",
             Network::Bitcoin => "http://127.0.0.1:8332",
+            // Mutinynet nodes run a custom signet with no standard local port.
+            Network::Signet if self.rpc_url.is_none() => {
+                bail!("pass --rpc-url to use a Mutinynet Bitcoin Core node")
+            }
+            Network::Signet => "",
             other => bail!("unsupported Bitcoin Core network: {other}"),
         };
         anzen_chain::BitcoinCoreBackend::connect(
@@ -318,7 +347,7 @@ enum NodeCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let network = command_network(&cli.data_dir, cli.dangerously_enable_mainnet)?;
+    let network = command_network(&cli.data_dir, cli.dangerously_enable_mainnet, cli.network)?;
     let allow_mainnet = network == Network::Bitcoin;
     match cli.command {
         Command::Init => initialize_vault(&cli.data_dir, network, allow_mainnet),
@@ -903,7 +932,7 @@ fn print_status(
         .map(|utxo| utxo.txout.value.to_sat())
         .sum::<u64>();
     println!("Network: {}", config.network);
-    if tip.network == Network::Bitcoin {
+    if tip.network != Network::Regtest {
         println!("Chain backend: {}", backend.backend_description());
     }
     println!("Height: {}", tip.height);
@@ -1225,7 +1254,11 @@ fn report_artifact(path: &Path, description: &str) -> Result<()> {
     Ok(())
 }
 
-fn command_network(data_dir: &Path, dangerously_enable_mainnet: bool) -> Result<Network> {
+fn command_network(
+    data_dir: &Path,
+    dangerously_enable_mainnet: bool,
+    requested: Option<TestNetwork>,
+) -> Result<Network> {
     let configured = if anzen_common::storage::config_exists(data_dir) {
         Some(anzen_common::storage::load_config(data_dir)?.bitcoin_network()?)
     } else if data_dir
@@ -1248,24 +1281,36 @@ fn command_network(data_dir: &Path, dangerously_enable_mainnet: bool) -> Result<
         None
     };
 
+    let requested = requested.map(TestNetwork::bitcoin);
+    if dangerously_enable_mainnet && requested.is_some() {
+        bail!("--network selects a test network; it cannot be combined with mainnet");
+    }
     match (configured, dangerously_enable_mainnet) {
         (Some(Network::Bitcoin), false) => {
             bail!("mainnet vault is locked; pass --dangerously-enable-mainnet on every command")
         }
         (Some(Network::Bitcoin), true) => Ok(Network::Bitcoin),
-        (Some(Network::Regtest), true) => bail!(
-            "vault is configured for regtest; --dangerously-enable-mainnet cannot change an existing vault"
+        (Some(network), true) => bail!(
+            "vault is configured for {}; --dangerously-enable-mainnet cannot change an existing vault",
+            anzen_common::storage::network_name(network)
         ),
-        (Some(Network::Regtest), false) => Ok(Network::Regtest),
+        (Some(network), false) if requested.is_some_and(|requested| requested != network) => {
+            bail!(
+                "vault is configured for {}; --network cannot change an existing vault",
+                anzen_common::storage::network_name(network)
+            )
+        }
+        (Some(network @ (Network::Regtest | Network::Signet)), false) => Ok(network),
         (Some(other), _) => bail!("unsupported vault network: {other}"),
         (None, true) => Ok(Network::Bitcoin),
-        (None, false) => Ok(Network::Regtest),
+        (None, false) => Ok(requested.unwrap_or(Network::Regtest)),
     }
 }
 
 fn network_label(network: Network) -> &'static str {
     match network {
         Network::Bitcoin => "MAINNET — REAL FUNDS",
+        Network::Signet => "MUTINYNET — TEST COINS",
         Network::Regtest => "REGTEST ONLY",
         _ => "UNSUPPORTED NETWORK",
     }
@@ -1332,6 +1377,11 @@ mod tests {
             args.selected_backend(Network::Bitcoin).unwrap(),
             ChainBackendKind::Electrum
         );
+        assert_eq!(
+            args.selected_backend(Network::Signet).unwrap(),
+            ChainBackendKind::Electrum
+        );
+        assert!(args.connect_core(Network::Signet).is_err());
 
         args.chain_backend = Some(ChainBackendKind::Electrum);
         assert_eq!(
