@@ -34,6 +34,28 @@ Measured in paired runs on a cool GPU (sustained load throttles both by up to ~2
 Ablating the nonce kernel at the start (8-bit windows): the 32 table additions for `t·G` were
 ~67% of its time, the final inversion ~32%, and its three SHA-256 compressions under 1%.
 
+## Research
+
+What other secp256k1 GPU engines do, and whether it applies here:
+
+- **Batched inversion** (VanitySearch, MasterKey: ~17.6× for them). Applied: one inversion per
+  4 (key) or 8 (nonce) candidates.
+- **Sequential keys** (k, k+1, …: one affine point addition per candidate, with the ±iG trick
+  sharing denominators). This is where those engines get ~10× over random keys (about 1B/s versus
+  100M/s on an RTX 5090). It does not apply here: every candidate goes through hashes (MuSig2
+  KeyAgg coefficients, BIP32 HMAC, TapTweak), so neighbouring candidates share no linear structure.
+- **Wide precomputed tables** for fixed-base multiplication. Applied: 16-bit windows.
+- **Midstates** (Bitcoin mining). Applied: every tagged hash starts from a precomputed midstate;
+  the nonce kernel's hashing is under 1% of its time anyway.
+- **Oversized fully inlined kernels stall Apple's pipeline compiler** (llvm-metal #17: 100 MB in
+  one function never finished in 600 s; the same split into 62 functions took 5.5 s). This
+  explains the key kernel hang. In Metal, `noinline` on the field functions should keep
+  compilation sane, and is reported as +22% elsewhere (smaller code, better instruction cache).
+- **16-bit types reduce register pressure on Apple GPUs.** Candidate for the Metal loop: 13-bit
+  limbs stored as `ushort`.
+- **Apple GPU ALUs are 32-bit**: 64-bit integer ops are several instructions, and `mulhi` is how
+  Metal gets a 32×32→64 product. The Metal kernel keeps 8×32-bit limbs with `ulong` products.
+
 ## Kept
 
 | Change | Kernel | Speedup |
