@@ -113,6 +113,17 @@ fn pair(args: Vec<String>) -> anyhow::Result<()> {
         gpu.run_batch_blocking(prepared, start, batch)?;
         Ok(f64::from(batch) / started.elapsed().as_secs_f64())
     };
+    // A pathological shader (spilling everything) can take minutes per full batch, and killing
+    // the process does not cancel GPU work already queued. Try a tiny dispatch first.
+    for (index, (gpu, prepared)) in builds.iter().enumerate() {
+        let started = Instant::now();
+        gpu.run_batch_blocking(prepared, first, 256)?;
+        anyhow::ensure!(
+            started.elapsed() < Duration::from_secs(1),
+            "build {index} took {:?} for 256 candidates; not queuing more",
+            started.elapsed()
+        );
+    }
     for round in 0..3 {
         time(0, first + round * batch)?;
         time(1, first + round * batch)?;

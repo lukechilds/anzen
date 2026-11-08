@@ -60,7 +60,7 @@ def base_shaders(rev: str) -> Path:
 def run(binary: Path, kernel: str, seconds: float, warmup: float) -> float:
     output = subprocess.run(
         [str(binary), kernel, "--seconds", str(seconds), "--warmup", str(warmup)],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=600,
     ).stdout
     return json.loads(output.strip().splitlines()[-1])["rate"]
 
@@ -80,9 +80,10 @@ def main() -> None:
     if not args.binaries:
         candidate, shaders = build_candidate(), base_shaders(args.base)
         for kernel in kernels:
+            # A shader that hangs Apple's compiler never returns; give up rather than wait.
             output = subprocess.run(
                 [str(candidate), "pair", kernel, "--base-shaders", str(shaders), "--pairs", str(args.pairs)],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True, check=True, timeout=600,
             ).stdout
             print(output.strip().splitlines()[-1])
             sys.stdout.flush()
