@@ -30,18 +30,45 @@ use anzen_protocol::{
     script::{Scripts, VaultKeys, XOnlyKey},
     spend::Spend,
     wire::{
-        self, OfflineAction, OfflineActionApproval, OfflineActionRequest, PolicyApproval,
-        PolicyRequest, RotationApproval, RotationRequest, Signature, SweepApproval, SweepRequest,
+        self, CooperativeSignature, OfflineAction, OfflineActionApproval, OfflineActionRequest,
+        PolicyApproval, PolicyRequest, PubNonce, RotationApproval, RotationRequest, Signature,
+        SweepApproval, SweepRequest,
     },
 };
 use serde::{Deserialize, Serialize};
+
+/// One joint vault signature, which the signer completes as the last MuSig2 signer.
+pub struct CooperativeSession<'a> {
+    /// The vault's keys. BIP327 aggregates their even-y points in sorted order
+    /// ([`anzen_protocol::musig`]).
+    pub keys: &'a VaultKeys,
+    /// The root of the vault's script tree, committed to by the Taproot tweak.
+    pub merkle_root: &'a [u8; 32],
+    /// The BIP341 key-path message.
+    pub message: &'a [u8; 32],
+    /// The phone's public nonce for this signature.
+    pub phone_nonce: &'a PubNonce,
+}
 
 /// The signer's private key, held by the device.
 pub trait Keys {
     /// The x-only public key this signer contributes to the vault.
     fn vault_key(&mut self) -> Result<XOnlyKey>;
-    /// A BIP340 signature over a 32-byte message.
+    /// A BIP340 signature over a 32-byte message, for the script paths the signer uses alone.
     fn sign(&mut self, message: &[u8; 32]) -> Result<[u8; 64]>;
+    /// The signer's half of a joint MuSig2 signature: its public nonce and partial signature.
+    ///
+    /// Nonce handling: reusing a MuSig2 secret nonce for two different signing sessions reveals
+    /// the private key. The signer avoids keeping nonces at all by signing last, with BIP327
+    /// `DeterministicSign`: it derives its nonce from its secret key, the phone's nonce, the
+    /// tweaked aggregate key and the message, signs, and forgets it. The same request yields the
+    /// same nonce and the same answer; any change to those inputs, including the phone's fresh
+    /// nonce on a retry, yields a different nonce. Implementations must not cache, store or
+    /// derive the nonce any other way, and must never sign as the first signer.
+    fn sign_cooperative(
+        &mut self,
+        session: &CooperativeSession<'_>,
+    ) -> Result<CooperativeSignature>;
 }
 
 /// Everything the signer remembers between requests.
@@ -184,8 +211,8 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         now: Option<u64>,
     ) -> Result<(PolicyApproval, State)> {
         self.check_state(state)?;
-        let (_, graph, _) = self.policy(state, request, now)?;
-        let signatures = self.sign_policy(&graph)?;
+        let (scripts, graph, _) = self.policy(state, request, now)?;
+        let signatures = self.sign_policy(&scripts, &graph, &request.phone_nonces)?;
         let mut next = state.clone();
         next.limits = request.limits;
         next.anchor = Some(graph.anchor());
@@ -223,7 +250,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         Ok(SweepApproval {
             version: wire::VERSION,
             request: request.clone(),
-            signatures: self.sign_spend(&spend, &scripts.vault.cooperative_leaf)?,
+            signatures: self.sign_joint_spend(&scripts, &spend, &request.phone_nonces)?,
         })
     }
 
@@ -300,14 +327,17 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         self.check_state(state)?;
         let (plan, _) = self.rotation(state, request, now)?;
         let sweep_signatures =
-            self.sign_spend(&plan.sweep, &plan.old_scripts.vault.cooperative_leaf)?;
+            self.sign_joint_spend(&plan.old_scripts, &plan.sweep, &request.sweep_nonces)?;
         let revocation_signatures = match &plan.revocation {
             Some(spend) => self.sign_spend(spend, &plan.old_scripts.controller.hww_leaf)?,
             None => Vec::new(),
         };
-        let (policy_signatures, anchor) = match &plan.renewed {
-            Some((_, graph)) => (self.sign_policy(graph)?, Some(graph.anchor())),
-            None => (Vec::new(), None),
+        let (policy_signatures, anchor) = match (&plan.renewed, &request.renewed_policy) {
+            (Some((scripts, graph)), Some(renewed)) => (
+                self.sign_policy(scripts, graph, &renewed.phone_nonces)?,
+                Some(graph.anchor()),
+            ),
+            _ => (Vec::new(), None),
         };
         let next = State {
             version: STATE_VERSION,
@@ -360,11 +390,14 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
             now,
         )?;
         let (scripts, graph) = request.build(self.crypto)?;
+        let jobs = graph.cooperative_signing_jobs(self.crypto)?.len();
+        wire::check_nonces(&request.phone_nonces, jobs)?;
         Ok((scripts, graph, linkage))
     }
 
     fn sweep(&mut self, state: &State, request: &SweepRequest) -> Result<(Scripts, Spend)> {
         Self::check_vault(state, request.network, &request.keys)?;
+        wire::check_nonces(&request.phone_nonces, request.inputs.len())?;
         request.build(self.crypto)
     }
 
@@ -393,15 +426,56 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
             request.previous_allowances_complete,
             now,
         )?;
-        Ok((request.build(self.crypto)?, linkage))
+        let plan = request.build(self.crypto)?;
+        wire::check_nonces(&request.sweep_nonces, request.sweep_inputs.len())?;
+        if let (Some((_, graph)), Some(renewed)) = (&plan.renewed, &request.renewed_policy) {
+            let jobs = graph.cooperative_signing_jobs(self.crypto)?.len();
+            wire::check_nonces(&renewed.phone_nonces, jobs)?;
+        }
+        Ok((plan, linkage))
     }
 
-    fn sign_policy(&mut self, graph: &PolicyGraph) -> Result<Vec<Signature>> {
-        graph
-            .cooperative_signing_jobs(self.crypto)?
-            .into_iter()
-            .map(|job| self.keys.sign(&job.sighash).map(Signature))
+    fn sign_policy(
+        &mut self,
+        scripts: &Scripts,
+        graph: &PolicyGraph,
+        nonces: &[PubNonce],
+    ) -> Result<Vec<CooperativeSignature>> {
+        let jobs = graph.cooperative_signing_jobs(self.crypto)?;
+        wire::check_nonces(nonces, jobs.len())?;
+        jobs.iter()
+            .zip(nonces)
+            .map(|(job, nonce)| self.sign_jointly(scripts, &job.sighash, nonce))
             .collect()
+    }
+
+    fn sign_joint_spend(
+        &mut self,
+        scripts: &Scripts,
+        spend: &Spend,
+        nonces: &[PubNonce],
+    ) -> Result<Vec<CooperativeSignature>> {
+        let messages = spend.key_path_sighashes(self.crypto)?;
+        wire::check_nonces(nonces, messages.len())?;
+        messages
+            .iter()
+            .zip(nonces)
+            .map(|(message, nonce)| self.sign_jointly(scripts, message, nonce))
+            .collect()
+    }
+
+    fn sign_jointly(
+        &mut self,
+        scripts: &Scripts,
+        message: &[u8; 32],
+        phone_nonce: &PubNonce,
+    ) -> Result<CooperativeSignature> {
+        self.keys.sign_cooperative(&CooperativeSession {
+            keys: &scripts.vault.keys,
+            merkle_root: &scripts.vault.merkle_root,
+            message,
+            phone_nonce,
+        })
     }
 
     fn sign_spend(&mut self, spend: &Spend, leaf: &[u8; 32]) -> Result<Vec<Signature>> {

@@ -14,6 +14,7 @@ pub mod browser_backend;
 mod browser_store;
 pub mod ceremony;
 pub mod chain_transport;
+pub mod cosigning;
 pub mod device_rotation;
 #[cfg(feature = "electrum")]
 pub mod electrum;
@@ -253,6 +254,7 @@ where
             scope.spawn(move || {
                 let result = (|| -> Result<()> {
                     let secp = Secp256k1::new();
+                    let mut crypto = anzen_common::protocol::SoftwareCrypto::new();
                     let mut index = worker as u64;
                     let stride = worker_count as u64;
                     let mut pending_attempts = 0_u64;
@@ -260,8 +262,8 @@ where
                         let (_, _, phone_pubkey) =
                             DeviceKeys::derive_vault_key_from_parent(&secp, &parent, index as u32)?;
                         pending_attempts += 1;
-                        let output_key = template.output_key(&secp, phone_pubkey);
-                        if target.matches(&output_key.to_x_only_public_key().serialize()) {
+                        let output_key = template.output_key(&mut crypto, phone_pubkey)?;
+                        if target.matches(&output_key) {
                             attempts.fetch_add(pending_attempts, Ordering::Relaxed);
                             if !stopped.swap(true, Ordering::Relaxed) {
                                 let _ = sender.send(Ok(index as u32));
@@ -295,8 +297,11 @@ where
     })?;
 
     let phone = base_phone.with_vault_key_index(&Secp256k1::new(), winning_index)?;
-    let vault_address =
-        template.address(&Secp256k1::verification_only(), phone.vault_pubkey, network);
+    let vault_address = template.address(
+        &mut anzen_common::protocol::SoftwareCrypto::new(),
+        phone.vault_pubkey,
+        network,
+    )?;
     let expected_prefix = match network {
         Network::Bitcoin => format!("bc1p{suffix}"),
         Network::Regtest => format!("bcrt1p{suffix}"),
@@ -406,7 +411,19 @@ pub fn propose_policy(
     let spent = utxos.iter().chain(&connectors).cloned().collect::<Vec<_>>();
     let complete = recovery::allowances_reported_complete(schedule.as_ref(), &spent)?;
     let mut wallet = HotWallet::open_or_create(data_dir)?;
-    ceremony::propose(&config, &utxos, &connectors, limits, &mut wallet, complete)
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    ceremony::propose(
+        &config,
+        &utxos,
+        &connectors,
+        limits,
+        &mut wallet,
+        complete,
+        cosigning::Phone {
+            data_dir,
+            keys: &phone,
+        },
+    )
 }
 
 fn active_schedule(data_dir: &Path) -> Result<Option<Schedule>> {
@@ -425,7 +442,7 @@ pub fn activate_policy(
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-    let approved = ApprovedPolicy::verify(&config, approval, &phone)?;
+    let approved = ApprovedPolicy::verify(data_dir, &config, approval, &phone)?;
     let network = config.bitcoin_network()?;
     let wallet = HotWallet::open_or_create(data_dir)?;
     let graph = &approved.graph;
@@ -856,7 +873,16 @@ pub fn create_cooperative_sweep(
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let utxos = backend.scan_vault(&config)?;
-    recovery::sweep_request(&config, &utxos, destination)
+    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
+    recovery::sweep_request(
+        &config,
+        &utxos,
+        destination,
+        cosigning::Phone {
+            data_dir,
+            keys: &phone,
+        },
+    )
 }
 
 pub fn broadcast_cooperative_sweep(
@@ -867,7 +893,14 @@ pub fn broadcast_cooperative_sweep(
     let config = load_config(data_dir)?;
     ensure_backend_network(backend, &config)?;
     let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-    let (transaction, result) = recovery::finalize_cooperative_sweep(&config, approval, &phone)?;
+    let (transaction, result) = recovery::finalize_cooperative_sweep(
+        &config,
+        approval,
+        cosigning::Phone {
+            data_dir,
+            keys: &phone,
+        },
+    )?;
     let txid = backend
         .broadcast(&transaction)
         .context("failed to broadcast cooperative vault sweep")?;

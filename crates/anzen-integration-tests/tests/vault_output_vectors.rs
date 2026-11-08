@@ -196,6 +196,10 @@ fn vault_output_graph_matches_checked_in_json_vector() {
         },
         &mut hot,
         false,
+        anzen_wallet::cosigning::Phone {
+            data_dir: tempfile::tempdir().unwrap().path(),
+            keys: &phone,
+        },
     )
     .unwrap();
     let (scripts, graph) = ceremony::graph(&request).unwrap();

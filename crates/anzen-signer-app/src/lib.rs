@@ -85,4 +85,20 @@ impl anzen_signer::Keys for SoftwareKeys<'_> {
             .sign_schnorr_no_aux_rand(&Message::from_digest(*message), &self.0.vault_keypair)
             .serialize())
     }
+
+    /// BIP327 `DeterministicSign` as the last signer: the nonce is derived from the request and
+    /// dropped, so this device keeps no nonce state (see [`anzen_signer::Keys::sign_cooperative`]).
+    fn sign_cooperative(
+        &mut self,
+        session: &anzen_signer::CooperativeSession<'_>,
+    ) -> anzen_protocol::Result<anzen_protocol::wire::CooperativeSignature> {
+        anzen_common::musig::sign_last(
+            &self.0.vault_keypair.secret_bytes(),
+            session.keys,
+            session.merkle_root,
+            session.message,
+            session.phone_nonce,
+        )
+        .map_err(|_| anzen_protocol::Error::SigningFailed)
+    }
 }

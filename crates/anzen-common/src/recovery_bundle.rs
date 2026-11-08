@@ -10,9 +10,7 @@ use anzen_protocol::{
     policy::Limits,
     wire::{self, PolicyApproval},
 };
-use bitcoin::secp256k1::{Message, Secp256k1, XOnlyPublicKey, schnorr};
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 pub const BUNDLE_VERSION: u8 = 2;
 
@@ -60,7 +58,7 @@ impl RecoveryVaultBundle {
     }
 }
 
-/// Rebuild an approved policy for `config` and verify every HWW signature in it.
+/// Rebuild an approved policy for `config` and verify every HWW partial signature in it.
 pub fn verify_signer_approval(config: &VaultConfig, approval: &PolicyApproval) -> Result<()> {
     let request = &approval.request;
     if approval.version != wire::VERSION
@@ -70,18 +68,22 @@ pub fn verify_signer_approval(config: &VaultConfig, approval: &PolicyApproval) -
         bail!("signed policy belongs to another vault");
     }
     let mut crypto = SoftwareCrypto::new();
-    let (_, graph) = protocol::protocol(request.build(&mut crypto))?;
+    let (scripts, graph) = protocol::protocol(request.build(&mut crypto))?;
     let jobs = protocol::protocol(graph.cooperative_signing_jobs(&mut crypto))?;
-    if jobs.len() != approval.signatures.len() {
+    if jobs.len() != approval.signatures.len() || jobs.len() != request.phone_nonces.len() {
         bail!("signed policy does not cover every presigned transaction");
     }
-    let hww = XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?;
-    let secp = Secp256k1::verification_only();
-    for (job, signature) in jobs.iter().zip(&approval.signatures) {
-        secp.verify_schnorr(
-            &schnorr::Signature::from_slice(&signature.0)?,
-            &Message::from_digest(job.sighash),
-            &hww,
+    for ((job, signature), nonce) in jobs
+        .iter()
+        .zip(&approval.signatures)
+        .zip(&request.phone_nonces)
+    {
+        super::musig::verify_signer_half(
+            &request.keys,
+            &scripts.vault.merkle_root,
+            &job.sighash,
+            nonce,
+            signature,
         )
         .context("signed policy contains an invalid HWW signature")?;
     }

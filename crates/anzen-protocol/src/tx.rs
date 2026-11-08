@@ -209,13 +209,13 @@ impl Transaction {
     }
 }
 
-/// The Taproot script path an input will be satisfied with.
+/// How a Taproot input will be satisfied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SpendPath {
-    /// Vault `multi_a(2,phone,hww)` at depth one.
+    /// Vault key path: one MuSig2 signature from both devices together.
     Cooperative,
-    /// Vault `and_v(v:older(4259839),pk(hww))` at depth one.
+    /// Vault `and_v(v:older(4259839),pk(hww))`, the tree's only leaf.
     HwwRecovery,
     /// Connector `pk(phone)` at depth one.
     ControllerPhone,
@@ -229,8 +229,8 @@ impl SpendPath {
         let item = |len: usize| compact_size_len(len as u64) + len;
         let control_block = |depth: usize| 33 + 32 * depth;
         match self {
-            Self::Cooperative => 1 + item(64) * 2 + item(70) + item(control_block(1)),
-            Self::HwwRecovery => 1 + item(64) + item(40) + item(control_block(1)),
+            Self::Cooperative => 1 + item(64),
+            Self::HwwRecovery => 1 + item(64) + item(40) + item(control_block(0)),
             Self::ControllerPhone | Self::ControllerHww => {
                 1 + item(64) + item(34) + item(control_block(1))
             }

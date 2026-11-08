@@ -18,13 +18,13 @@ fn vector() -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
+/// The controller descriptor `tr(NUMS,{pk(phone),pk(hww)})` names both keys; the vault's
+/// internal key is their aggregate, so it does not.
 fn keys_from_descriptor(descriptor: &str) -> VaultKeys {
-    let inner = descriptor.split("multi_a(2,").nth(1).unwrap();
-    let (phone, rest) = inner.split_once(',').unwrap();
-    let hww = &rest[..64];
+    let mut keys = descriptor.split("pk(").skip(1).map(|part| &part[..64]);
     VaultKeys {
-        phone: XOnlyKey::from_hex(phone).unwrap(),
-        hww: XOnlyKey::from_hex(hww).unwrap(),
+        phone: XOnlyKey::from_hex(keys.next().unwrap()).unwrap(),
+        hww: XOnlyKey::from_hex(keys.next().unwrap()).unwrap(),
     }
 }
 
@@ -62,7 +62,7 @@ fn assert_matches(expected: &Value, actual: &Transaction, txid: &str, fee: u64) 
 fn reconstructs_every_transaction_in_the_vault_output_vector() {
     let vector = vector();
     let mut crypto = SoftwareCrypto::new();
-    let keys = keys_from_descriptor(vector["vault"]["descriptor"].as_str().unwrap());
+    let keys = keys_from_descriptor(vector["controller"]["descriptor"].as_str().unwrap());
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     assert_eq!(
         address::from_script_pubkey(&mut crypto, &scripts.vault.script_pubkey, Network::Regtest)

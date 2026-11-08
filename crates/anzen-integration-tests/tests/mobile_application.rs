@@ -755,7 +755,7 @@ fn check_restored_rotation(monthly_limit_sats: u64, emergency_access_limit_sats:
     changed.new_config.monthly_limit_sats = monthly_limit_sats + 1;
     assert!(phone.activate_rotation(&source, &changed).is_err());
     let mut changed = approval.clone();
-    changed.approval.sweep_signatures[0].0[0] ^= 1;
+    changed.approval.sweep_signatures[0].partial.0[0] ^= 1;
     assert!(phone.activate_rotation(&source, &changed).is_err());
     assert_eq!(source.0.broadcasts.get(), 0);
     source.0.lose_ack.set(true);

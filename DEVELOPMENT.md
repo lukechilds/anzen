@@ -43,11 +43,11 @@ Trezor firmware ──> independent Anzen protocol implementation
                 └──> canonical protocol test vectors
 ```
 
-- `anzen-protocol` is the single definition of what Anzen transactions are. It deterministically builds the vault and controller scripts, the annual policy graph, sweeps and revocations, and their BIP341 signature messages from typed parameters. It is `no_std`, has no `bitcoin` or `miniscript` dependency, and takes hashing and curve operations through a `Crypto` trait so hardware can use device primitives.
-- `anzen-signer` decides everything the hardware wallet signs. Requests carry parameters, never transactions: the signer rebuilds each transaction with `anzen-protocol`, returns a review, and signs only the reviewed request. It persists an epoch anchor so every renewed policy must conflict with or consume the previously approved one. It is `no_std`, with no filesystem, network, clock or randomness of its own.
+- `anzen-protocol` is the single definition of what Anzen transactions are. It deterministically builds the vault and controller scripts, the annual policy graph, sweeps and revocations, and their BIP341 signature messages from typed parameters. It also owns BIP327 key aggregation (`musig`), because the vault's internal key is the MuSig2 aggregate of both device keys and every implementation must derive the same one. It is `no_std`, has no `bitcoin` or `miniscript` dependency, and takes hashing and curve operations (including the `mul_add` that key aggregation needs) through a `Crypto` trait so hardware can use device primitives.
+- `anzen-signer` decides everything the hardware wallet signs. Requests carry parameters, never transactions: the signer rebuilds each transaction with `anzen-protocol`, returns a review, and signs only the reviewed request. For joint vault spends it returns its half of a MuSig2 signature through `Keys::sign_cooperative`, always as the last signer with BIP327 `DeterministicSign`, so it never stores a nonce. It persists an epoch anchor so every renewed policy must conflict with or consume the previously approved one. It is `no_std`, with no filesystem, network, clock or randomness of its own.
 - `anzen-signer-app` wraps the signer for host platforms: seed storage, persisted signer state, pairing, cloud backup approval and restoration. It has no wallet or chain-backend dependency.
-- `anzen-wallet` owns phone keys, the BDK wallet, encrypted policy artifacts, policy execution, phone restoration and rotation, and the coordination of the HWW's delayed recovery (its time-lock clock reads each coin's start time through the chain backend's `median_time_past`). It produces signer requests and checks signer approvals against the transactions it built from the same protocol code.
-- `anzen-chain` defines the chain interface, including the block median time past that time-based relative locks are judged by, and contains the Bitcoin Core RPC backend (regtest). Electrum over WebSocket, the transport for Mutinynet and mainnet on every platform, lives in `anzen-wallet` (`electrum`), together with the live-update listener (`watch`); each platform supplies only the socket. `anzen-common` holds shared host formats (device keys, configuration, the HWW-wrapped cloud backup, device messages). `anzen-storage` provides atomic private file writes and protected storage.
+- `anzen-wallet` owns phone keys, the BDK wallet, encrypted policy artifacts, policy execution, phone restoration and rotation, and the coordination of the HWW's delayed recovery (its time-lock clock reads each coin's start time through the chain backend's `median_time_past`). It produces signer requests and checks signer approvals against the transactions it built from the same protocol code. Its `cosigning` module holds the phone's MuSig2 nonce sessions (`phone/cosigning/`): fresh nonces for every request, bound to the exact messages they may sign, and replaced by the finished signatures in one atomic write when the signer's partial signatures arrive. Never put this directory in a backup or sync it between devices.
+- `anzen-chain` defines the chain interface, including the block median time past that time-based relative locks are judged by, and contains the Bitcoin Core RPC backend (regtest). Electrum over WebSocket, the transport for Mutinynet and mainnet on every platform, lives in `anzen-wallet` (`electrum`), together with the live-update listener (`watch`); each platform supplies only the socket. `anzen-common` holds shared host formats (device keys, configuration, the HWW-wrapped cloud backup, device messages) and the host MuSig2 code (`musig`, built on the pure-Rust `musig2` crate with `k256`) that the phone, the browser and the software signer share. `anzen-storage` provides atomic private file writes and protected storage.
 - `ledger-app` is an independently built Ledger firmware crate and directly consumes `anzen-signer`.
 - `trezor-firmware` cannot consume the Rust crate through Trezor's normal firmware architecture. It implements the same protocol independently and proves compatibility against the same deterministic vectors. Production code should live under `core/src/apps/anzen/`, with protocol messages in `common/protob/messages-anzen.proto`, Python host support in `python/src/trezorlib/anzen.py`, and device tests in `tests/device_tests/anzen/`.
 
@@ -58,7 +58,8 @@ implementations must never gain network access or depend on phone-wallet impleme
 
 `test-vectors/policy-graphs.json` pins the protocol builder byte-for-byte across valid and rejected
 policies, and `anzen-protocol`'s tests compare its scripts, addresses, transactions and sighashes
-against `rust-bitcoin` and `miniscript`. `test-vectors/vault-output-graph.json` is generated by the
+against `rust-bitcoin` and `miniscript`, check its key aggregation against the independent `musig2`
+crate, and verify a complete two-party MuSig2 signature under the vault output key. `test-vectors/vault-output-graph.json` is generated by the
 `vault_output_vectors` integration test and read back by `anzen-protocol`. After an intentional
 policy change, regenerate both with `ANZEN_UPDATE_VECTORS=1`:
 
@@ -122,8 +123,10 @@ epoch's `approved-policy.json`, encrypted with the phone key and accepted direct
 phone refuses to reactivate an epoch it has already superseded. State files use private temporary
 files and a flushed atomic rename rather than truncating the active file in place.
 
-Before staging or funding a policy, the phone verifies both vault signatures on every transaction
-and finalizes each vault input on a temporary copy to check its satisfaction metadata. Future
+Before staging or funding a policy, the phone verifies the signer's partial signature on every vault
+input, completes and verifies each joint signature, and finalizes each vault input on a temporary copy
+to check its satisfaction metadata. Completing records the finished signatures in the phone's signing
+session, so a retry of the same approval reuses them without touching a nonce. Future
 controller inputs remain unsigned. Phone rotation runs the same complete renewal check before
 broadcasting its hot-wallet sweep, controller revocation, or vault sweep.
 
@@ -138,7 +141,7 @@ Phone restoration calls `HotWallet::request_full_scan` even if an old database s
 
 ## Hardware signing benchmark
 
-The Ledger and Trezor benchmarks reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.
+The Ledger and Trezor benchmarks still model the earlier script-path signing workload, not the MuSig2 key path; updating them to key-path messages and partial signing is pending. They reconstruct the same deterministic annual policy graph as the reference implementation: a 2.1 BTC fixture, a twelve-input rollover, twelve sequential 0.1 BTC allowance authorizations, and one 0.5 BTC emergency trigger and withdrawal. The rollover creates separate monthly and emergency connectors. Every later action has one vault input and one unsigned connector input; the benchmark hashes the complete two-input transaction but signs only the vault input, matching annual HWW approval.
 
 The resulting workload is 15 transactions and 26 HWW signatures: twelve rollover-input signatures plus one for each of fourteen future actions. Dynamic revocation and cancellation are deliberately excluded because either device constructs and signs those controller-only transactions only when requested. `anzen-signer`'s benchmark checks every BIP341 sighash against `rust-bitcoin` and pins the controller script, first and last sighashes, and aggregate digest. Trezor independently pins those same values, preventing the two firmware implementations from silently benchmarking different graphs.
 
@@ -251,10 +254,10 @@ Keep Anzen-specific commits small and separate generated-file updates from handw
 The protocol specification and deterministic fixtures in the Anzen repository are canonical. Hardware-wallet implementations should independently reconstruct and validate the complete policy transaction graph before signing it. Compatibility tests should cover at least:
 
 - policy serialization and versioning;
-- Taproot scripts, control blocks, and output keys;
+- MuSig2 key aggregation, Taproot scripts, control blocks, and output keys;
 - every input, output, amount, fee, sequence, and timelock;
 - vault/controller input roles, connector continuity, and dynamic revocation/cancellation spends;
-- all BIP341 signature messages; and
+- all BIP341 signature messages, and the signer's MuSig2 partial signatures; and
 - rejection of altered or incomplete policy packages.
 
 The firmware repositories may copy a versioned fixture when they need to test independently, but the copied fixture should record its originating Anzen commit and be checked against the canonical version during integration.

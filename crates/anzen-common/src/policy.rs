@@ -1,12 +1,13 @@
-use super::HWW_RECOVERY_SEQUENCE;
+use super::{HWW_RECOVERY_SEQUENCE, protocol::SoftwareCrypto};
 use anyhow::{Context, Result, bail};
+use anzen_protocol::script::{VaultKeys, VaultScript, XOnlyKey};
 use bitcoin::{
     Address, Network, ScriptBuf,
-    key::{TapTweak, TweakedPublicKey},
-    opcodes::all::{OP_CHECKSIG, OP_CHECKSIGADD, OP_CSV, OP_NUMEQUAL, OP_VERIFY},
+    key::TweakedPublicKey,
+    opcodes::all::OP_CHECKSIG,
     script::Builder,
-    secp256k1::{Secp256k1, Verification, XOnlyPublicKey},
-    taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash},
+    secp256k1::{Secp256k1, XOnlyPublicKey},
+    taproot::{ControlBlock, LeafVersion, TapLeafHash},
 };
 use miniscript::{
     Descriptor,
@@ -24,11 +25,24 @@ pub struct VaultPolicy {
     pub address: Address,
 }
 
+/// How a vault output is spent: jointly through the key path, or by the hardware wallet alone
+/// through the only leaf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SpendPath {
     Cooperative,
     HwwRecovery,
+}
+
+/// The vault's internal key: the MuSig2 (BIP327) aggregate of both device keys.
+pub fn internal_key(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> Result<XOnlyPublicKey> {
+    let keys = VaultKeys {
+        phone: XOnlyKey(phone.serialize()),
+        hww: XOnlyKey(hww.serialize()),
+    };
+    let aggregate = anzen_protocol::musig::aggregate_key(&mut SoftwareCrypto::new(), &keys)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    Ok(XOnlyPublicKey::from_slice(&aggregate)?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,67 +83,53 @@ pub struct ControllerPolicy {
     hww: XOnlyPublicKey,
 }
 
-/// Fast encoder for the fixed Anzen script tree used while grinding phone vault keys.
-///
-/// The scripts and tree shape must remain byte-for-byte equivalent to [`VaultPolicy`]. Tests
-/// compare this optimized path with the canonical Miniscript descriptor construction.
+/// Vault output keys for many candidate phone keys with one signer, while grinding a vanity
+/// address. It uses the protocol's own script construction, so it cannot drift from
+/// [`VaultPolicy`]; tests check both anyway.
 #[derive(Debug, Clone)]
 pub struct VaultAddressTemplate {
-    internal_key: XOnlyPublicKey,
-    hww_pubkey: XOnlyPublicKey,
-    hww_recovery_node: TapNodeHash,
+    hww_pubkey: XOnlyKey,
 }
 
 impl VaultAddressTemplate {
     pub fn new(hww_pubkey: XOnlyPublicKey) -> Result<Self> {
-        let internal_key = XOnlyPublicKey::from_str(BIP341_NUMS_KEY)
-            .context("invalid BIP341 NUMS internal key")?;
-        let hww_recovery_node = TapNodeHash::from_script(
-            &recovery_script(hww_pubkey, HWW_RECOVERY_SEQUENCE),
-            LeafVersion::TapScript,
-        );
         Ok(Self {
-            internal_key,
-            hww_pubkey,
-            hww_recovery_node,
+            hww_pubkey: XOnlyKey(hww_pubkey.serialize()),
         })
     }
 
-    pub fn output_key<C: Verification>(
+    pub fn output_key(
         &self,
-        secp: &Secp256k1<C>,
+        crypto: &mut SoftwareCrypto,
         phone_pubkey: XOnlyPublicKey,
-    ) -> TweakedPublicKey {
-        let cooperative_node = TapNodeHash::from_script(
-            &cooperative_script(phone_pubkey, self.hww_pubkey),
-            LeafVersion::TapScript,
-        );
-        let merkle_root = TapNodeHash::from_node_hashes(cooperative_node, self.hww_recovery_node);
-        self.internal_key.tap_tweak(secp, Some(merkle_root)).0
+    ) -> Result<[u8; 32]> {
+        let keys = VaultKeys {
+            phone: XOnlyKey(phone_pubkey.serialize()),
+            hww: self.hww_pubkey,
+        };
+        Ok(VaultScript::new(crypto, &keys)
+            .map_err(|error| anyhow::anyhow!("{error}"))?
+            .output
+            .output_key)
     }
 
-    pub fn address<C: Verification>(
+    pub fn address(
         &self,
-        secp: &Secp256k1<C>,
+        crypto: &mut SoftwareCrypto,
         phone_pubkey: XOnlyPublicKey,
         network: Network,
-    ) -> Address {
-        Address::p2tr_tweaked(self.output_key(secp, phone_pubkey), network)
+    ) -> Result<Address> {
+        let output = XOnlyPublicKey::from_slice(&self.output_key(crypto, phone_pubkey)?)?;
+        Ok(Address::p2tr_tweaked(
+            TweakedPublicKey::dangerous_assume_tweaked(output),
+            network,
+        ))
     }
 }
 
-fn cooperative_script(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> ScriptBuf {
-    Builder::new()
-        .push_x_only_key(&phone)
-        .push_opcode(OP_CHECKSIG)
-        .push_x_only_key(&hww)
-        .push_opcode(OP_CHECKSIGADD)
-        .push_int(2)
-        .push_opcode(OP_NUMEQUAL)
-        .into_script()
-}
-
+#[cfg(test)]
 fn recovery_script(key: XOnlyPublicKey, sequence: u32) -> ScriptBuf {
+    use bitcoin::opcodes::all::{OP_CSV, OP_VERIFY};
     Builder::new()
         .push_int(i64::from(sequence))
         .push_opcode(OP_CSV)
@@ -149,9 +149,9 @@ impl VaultPolicy {
         hww: XOnlyPublicKey,
         network: Network,
     ) -> Result<Self> {
-        let descriptor_text = format!(
-            "tr({BIP341_NUMS_KEY},{{multi_a(2,{phone},{hww}),and_v(v:older({HWW_RECOVERY_SEQUENCE}),pk({hww}))}})"
-        );
+        let internal = internal_key(phone, hww)?;
+        let descriptor_text =
+            format!("tr({internal},and_v(v:older({HWW_RECOVERY_SEQUENCE}),pk({hww})))");
         let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_text)
             .with_context(|| format!("invalid vault descriptor: {descriptor_text}"))?;
         let address = descriptor
@@ -185,7 +185,11 @@ impl VaultPolicy {
             .context("vault descriptor could not be made definite")
     }
 
+    /// The hardware wallet's leaf. Joint spends use the key path and have no leaf.
     pub fn leaf(&self, path: SpendPath) -> Result<VaultLeaf> {
+        if path == SpendPath::Cooperative {
+            bail!("the joint spend uses the vault's key path, not a leaf");
+        }
         let derived = self
             .descriptor
             .derived_descriptor(&Secp256k1::verification_only(), 0)?;
@@ -194,30 +198,17 @@ impl VaultPolicy {
             _ => bail!("vault descriptor is not Taproot"),
         };
         let spend_info = tr.spend_info();
-        let target_delay = match path {
-            SpendPath::Cooperative => None,
-            SpendPath::HwwRecovery => Some(HWW_RECOVERY_SEQUENCE),
-        };
-
         for (depth, miniscript) in tr.iter_scripts() {
-            if depth != 1 {
-                continue;
-            }
             let script = miniscript.encode();
-            if miniscript.to_string().contains("older(") != target_delay.is_some() {
+            let delay = bitcoin::script::Builder::new()
+                .push_int(i64::from(HWW_RECOVERY_SEQUENCE))
+                .into_script();
+            if !script
+                .as_bytes()
+                .windows(delay.len())
+                .any(|window| window == delay.as_bytes())
+            {
                 continue;
-            }
-            if let Some(delay) = target_delay {
-                let delay_script_num = bitcoin::script::Builder::new()
-                    .push_int(i64::from(delay))
-                    .into_script();
-                if !script
-                    .as_bytes()
-                    .windows(delay_script_num.len())
-                    .any(|window| window == delay_script_num.as_bytes())
-                {
-                    continue;
-                }
             }
             let leaf_version = LeafVersion::TapScript;
             let leaf_hash = TapLeafHash::from_script(&script, leaf_version);
@@ -328,15 +319,15 @@ mod tests {
         let second = VaultPolicy::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
         assert_eq!(first.address, second.address);
         let text = first.descriptor_string();
-        assert!(text.contains("multi_a(2"));
-        assert!(text.contains("and_v(v:older(4259839),pk("));
-        assert!(!text.contains(&format!("pk({})", phone.vault_pubkey)));
-        assert!(text.starts_with("tr(50929b74"));
-        assert_eq!(first.leaf(SpendPath::Cooperative).unwrap().depth, 1);
-        assert_eq!(first.leaf(SpendPath::HwwRecovery).unwrap().depth, 1);
-        assert_ne!(
-            first.leaf(SpendPath::Cooperative).unwrap().leaf_hash,
-            first.leaf(SpendPath::HwwRecovery).unwrap().leaf_hash
+        let internal = internal_key(phone.vault_pubkey, hww.vault_pubkey).unwrap();
+        assert!(text.starts_with(&format!("tr({internal},and_v(v:older(4259839),pk(")));
+        assert!(!text.contains(&phone.vault_pubkey.to_string()));
+        assert!(first.leaf(SpendPath::Cooperative).is_err());
+        assert_eq!(first.leaf(SpendPath::HwwRecovery).unwrap().depth, 0);
+        // Aggregation is symmetric: it sorts the keys first.
+        assert_eq!(
+            internal,
+            internal_key(hww.vault_pubkey, phone.vault_pubkey).unwrap()
         );
     }
 
@@ -363,12 +354,10 @@ mod tests {
             let template = VaultAddressTemplate::new(hww.vault_pubkey).unwrap();
 
             assert_eq!(
-                template.address(&secp, phone.vault_pubkey, network),
+                template
+                    .address(&mut SoftwareCrypto::new(), phone.vault_pubkey, network)
+                    .unwrap(),
                 policy.address
-            );
-            assert_eq!(
-                cooperative_script(phone.vault_pubkey, hww.vault_pubkey),
-                policy.leaf(SpendPath::Cooperative).unwrap().script
             );
             assert_eq!(
                 recovery_script(hww.vault_pubkey, HWW_RECOVERY_SEQUENCE),

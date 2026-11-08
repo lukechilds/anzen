@@ -32,7 +32,8 @@ Open **http://localhost:8083**. It is one emulator page: on your first visit cho
 the network and devices you used last. Switch networks in the header; each network keeps its
 own phone and signer. The wallet is created for you; open **Vault**, choose **Set up vault**,
 and the signer joins over Bluetooth. **Start over** makes a fresh pair (not offered on mainnet, so
-real-bitcoin keys are never replaced by accident). Both networks run entirely in the browser:
+real-bitcoin keys are never replaced by accident). Devices created before the vault moved to a
+MuSig2 key path cannot open their old vault; start over on test networks. Both networks run entirely in the browser:
 there is no capability token, local Rust service, Bitcoin node or Docker requirement.
 `npm run web` on port 8081 also supports this mode when opened without a regtest link.
 
@@ -181,6 +182,13 @@ the signer, and the phone waits for **Approve** or **Reject** there. Rejecting r
 finish (for example before a timelock matures), **Cancel** keeps the approval as a **Finish**
 card, so retrying never asks the signer to sign again.
 
+Spends that need both devices carry one joint MuSig2 signature. The phone's request includes
+a fresh nonce for each signature; the signer answers last with its partial signature and keeps
+nothing. When the answer arrives the phone checks it, completes the signature and, in the same
+atomic write, replaces its secret nonces with the finished signatures, so a retry or **Finish**
+only reuses finished signatures and a nonce can never sign twice. These signing sessions stay
+in the phone's own storage and are never part of the cloud backup.
+
 ### Resume a message exchange
 
 Messages can also travel as files, the fallback for devices without a Bluetooth link. The Rust
@@ -188,7 +196,9 @@ applications retain outgoing proposals and approvals. After reopening either dev
 **Saved messages** in Vault settings, or at the bottom of the signer's screen. Choose the message to resend;
 the receiving device must still **Open received message** and perform its normal checks. A
 proposal still needs explicit signer approval. Resending an already signed approval does not
-ask the signer to sign again, and merely opening the saved-message list never broadcasts.
+ask the signer to sign again, and merely opening the saved-message list never broadcasts. A saved
+proposal can only be completed by the signing session that created it; if the phone has already
+finished or lost that session, propose again rather than resending the old request.
 
 The list survives restarting the app while using the same device storage. It contains old as
 well as recent messages, so check the actual policy/destination on the recipient: a retained

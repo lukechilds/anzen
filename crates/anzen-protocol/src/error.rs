@@ -31,6 +31,8 @@ pub enum Error {
     PrevoutCountMismatch,
     InvalidSignature,
     SignatureCountMismatch,
+    NonceCountMismatch,
+    InvalidNonce,
     SigningFailed,
     NotPaired,
     AlreadyPaired,
@@ -82,6 +84,8 @@ impl fmt::Display for Error {
             Self::PrevoutCountMismatch => "previous outputs do not match the transaction inputs",
             Self::InvalidSignature => "invalid signature",
             Self::SignatureCountMismatch => "signature count does not match the transaction graph",
+            Self::NonceCountMismatch => "nonce count does not match the cooperative signatures",
+            Self::InvalidNonce => "invalid MuSig2 nonce",
             Self::SigningFailed => "signing failed",
             Self::NotPaired => "signer is not paired with a vault",
             Self::AlreadyPaired => {

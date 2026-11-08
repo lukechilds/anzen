@@ -5,14 +5,15 @@
 //! signer returns signatures, and the phone rebuilds the same graph, adds its own signatures and
 //! verifies both before storing anything.
 
-use crate::transactions::{
-    attach_signatures, protocol_psbt, sign_controller_psbt_inputs, sign_vault_psbt_inputs,
+use crate::{
+    cosigning,
+    transactions::{attach_key_path_signatures, protocol_psbt, sign_controller_psbt_inputs},
 };
 use anyhow::{Context, Result, bail};
 use anzen_common::{
     crypto::EncryptedBlob,
     keys::DeviceKeys,
-    policy::{ControllerPath, ControllerPolicy, SpendPath, VaultPolicy},
+    policy::{ControllerPath, ControllerPolicy, VaultPolicy},
     protocol::{self, SoftwareCrypto},
     storage::VaultConfig,
     types::VaultUtxo,
@@ -21,11 +22,9 @@ pub use anzen_protocol::policy::Limits as PolicyLimits;
 use anzen_protocol::{
     policy::{self, PolicyGraph, PolicyInputs},
     script::Scripts,
-    wire::{self, PolicyApproval, PolicyRequest, Signature},
+    wire::{self, PolicyApproval, PolicyRequest},
 };
-use bitcoin::{
-    Address, OutPoint, Psbt, hashes::Hash, secp256k1::XOnlyPublicKey, taproot::TapLeafHash,
-};
+use bitcoin::{Address, OutPoint, Psbt, secp256k1::XOnlyPublicKey};
 use miniscript::psbt::PsbtExt;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -114,8 +113,9 @@ pub struct Schedule {
     pub emergency_access: Option<EmergencyAccessSchedule>,
 }
 
-/// Build the parameters the signer reviews. Hot-wallet addresses are revealed only after the
-/// protocol has decided how many allowance steps the vault can fund.
+/// Build the parameters the signer reviews, with this phone's nonce for each joint signature.
+/// Hot-wallet addresses are revealed only after the protocol has decided how many allowance
+/// steps the vault can fund.
 pub fn propose(
     config: &VaultConfig,
     vault_utxos: &[VaultUtxo],
@@ -123,6 +123,7 @@ pub fn propose(
     limits: PolicyLimits,
     hot: &mut impl HotAddressProvider,
     previous_allowances_complete: bool,
+    phone: cosigning::Phone<'_>,
 ) -> Result<PolicyRequest> {
     let keys = protocol::vault_keys(config)?;
     let mut crypto = SoftwareCrypto::new();
@@ -159,7 +160,7 @@ pub fn propose(
                 .map(|address| address.to_string())
         })
         .collect::<Result<Vec<_>>>()?;
-    let request = PolicyRequest {
+    let mut request = PolicyRequest {
         version: wire::VERSION,
         network: protocol::config_network(config)?,
         keys,
@@ -169,8 +170,10 @@ pub fn propose(
         emergency_destination,
         allowance_destinations,
         previous_allowances_complete,
+        phone_nonces: Vec::new(),
     };
-    protocol::protocol(request.build(&mut crypto))?;
+    let (scripts, graph) = protocol::protocol(request.build(&mut crypto))?;
+    request.phone_nonces = phone.start(&cosigning::policy_jobs(&scripts, &graph)?)?;
     Ok(request)
 }
 
@@ -179,7 +182,7 @@ pub fn graph(request: &PolicyRequest) -> Result<(Scripts, PolicyGraph)> {
     protocol::protocol(request.build(&mut SoftwareCrypto::new()))
 }
 
-/// A policy approval rebuilt by the phone, carrying both devices' verified signatures.
+/// A policy approval rebuilt by the phone, carrying the finished joint signatures.
 pub struct ApprovedPolicy {
     pub approval: PolicyApproval,
     pub graph: PolicyGraph,
@@ -189,9 +192,11 @@ pub struct ApprovedPolicy {
 }
 
 impl ApprovedPolicy {
-    /// Rebuild the approved graph, verify every signer signature, add the phone's signatures
-    /// and check that every vault input finalizes. Nothing is written or broadcast.
+    /// Rebuild the approved graph, finish every joint signature with the signer's halves and
+    /// check that every input finalizes. Finishing records the signatures in this phone's signing
+    /// session ([`cosigning`]); nothing is broadcast.
     pub fn verify(
+        data_dir: &std::path::Path,
         config: &VaultConfig,
         approval: &PolicyApproval,
         phone: &DeviceKeys,
@@ -217,12 +222,22 @@ impl ApprovedPolicy {
         }
         let network = config.bitcoin_network()?;
         let vault = VaultPolicy::from_descriptor_for_network(&config.vault_descriptor, network)?;
+        if vault.address.script_pubkey().as_bytes() != scripts.vault.script_pubkey {
+            bail!("protocol and descriptor disagree on the vault script");
+        }
         let hww = XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?;
         let controller = ControllerPolicy::new_for_network(phone.vault_pubkey, hww, network)?;
-        let leaf = TapLeafHash::from_byte_array(scripts.vault.cooperative_leaf);
-        if vault.leaf(SpendPath::Cooperative)?.leaf_hash != leaf {
-            bail!("protocol and descriptor disagree on the cooperative leaf");
+        let output_key = XOnlyPublicKey::from_slice(&scripts.vault.output.output_key)?;
+        let signatures = cosigning::Phone {
+            data_dir,
+            keys: phone,
         }
+        .finish(
+            &cosigning::policy_jobs(&scripts, &graph)?,
+            &request.phone_nonces,
+            &approval.signatures,
+        )
+        .context("signer approval contains an invalid signature")?;
         let secp = bitcoin::key::Secp256k1::verification_only();
         let mut psbts = Vec::new();
         for (index, transaction) in graph.transactions().into_iter().enumerate() {
@@ -234,21 +249,13 @@ impl ApprovedPolicy {
                 &controller,
             )?;
             let vault_inputs = transaction.vault_input_indexes().collect::<Vec<_>>();
-            let (signed_inputs, signatures): (Vec<usize>, Vec<Signature>) = jobs
+            let (signed_inputs, signed): (Vec<usize>, Vec<[u8; 64]>) = jobs
                 .iter()
-                .zip(&approval.signatures)
+                .zip(&signatures)
                 .filter(|(job, _)| job.transaction == index)
                 .map(|(job, signature)| (job.input, *signature))
                 .unzip();
-            attach_signatures(&mut psbt, &signed_inputs, hww, leaf, &signatures)
-                .context("signer approval contains an invalid signature")?;
-            sign_vault_psbt_inputs(
-                &mut psbt,
-                &vault,
-                SpendPath::Cooperative,
-                &phone.vault_keypair,
-                &vault_inputs,
-            )?;
+            attach_key_path_signatures(&mut psbt, &signed_inputs, output_key, &signed)?;
             let mut finalize = vault_inputs.clone();
             if index == 0 {
                 // The rollover consumes the previous epoch's connectors immediately.

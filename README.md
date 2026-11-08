@@ -24,9 +24,11 @@ The [protocol design](anzen-design.md) specifies the exact wallet properties, tr
 Anzen's cold storage is a Taproot address controlled by two keys: the mobile key (`phone`) and the hardware-wallet key (`hww`). Every cold output uses the same vault script. Bitcoin accepts a spend through either of these paths:
 
 ```text
-phone + hww immediately
-hww only after ~388 days
+phone + hww immediately, as one MuSig2 signature through the key path
+hww only after ~388 days, through the only script leaf
 ```
+
+The joint path is the Taproot key path. Its internal key is the [BIP327](https://github.com/bitcoin/bips/blob/master/bip-0327.mediawiki) MuSig2 aggregate of both device keys, so a cooperative spend carries a single 64-byte signature that looks like any other single-key Taproot spend and reveals neither the scripts nor that two devices signed.
 
 The delay is the longest relative timelock Bitcoin supports: 65,535 units of 512 seconds, 33,553,920 seconds. It belongs to each individual UTXO and counts from the median time past of the block before the one that confirmed it, so it lasts the same on every network. It is not controlled by Anzen, a server, or a calendar. The annual renewal moves every vault output, which restarts the delay; the hardware wallet's solo path only opens if a year's renewal is missed.
 
@@ -38,15 +40,12 @@ The policy in minimal Taproot Miniscript descriptor notation is:
 
 ```text
 tr(
-  NUMS,
-  {
-    multi_a(2,phone,hww),
-    and_v(v:older(4259839),pk(hww))
-  }
+  musig(phone,hww),
+  and_v(v:older(4259839),pk(hww))
 )
 ```
 
-`older(4259839)` is BIP68's time-based flag (`0x400000`) plus 65,535. This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
+`musig(phone,hww)` is the BIP327 aggregate of the two keys' even-y points, taken in sorted order. The stored descriptor writes out the resulting x-only key, `tr(<aggregate>,and_v(v:older(4259839),pk(<hww>)))`, so standard tools can derive and watch the address without MuSig2 support. `older(4259839)` is BIP68's time-based flag (`0x400000`) plus 65,535. This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
 
 Revocable authorization state lives in separate 1,000-sat connector outputs. They reuse the same device keys under a fixed 1-of-2 Taproot policy:
 
@@ -58,7 +57,7 @@ Either device can spend a connector alone. The connector does not control vault 
 
 ### Annual vault layout and presigned transaction graph
 
-Once per year, the phone proposes a policy and the HWW approves it once. They fully sign the rollover and sign only the vault input of each future action. Only the rollover is broadcast immediately. After it confirms, the vault has one allowance-chain UTXO, one remainder UTXO, and one small connector for each enabled independent action chain. Future action PSBTs remain incomplete and encrypted on the phone until it signs the current connector at execution.
+Once per year, the phone proposes a policy and the HWW approves it once. Together they produce the joint signature on the rollover's vault inputs and on the vault input of each future action. Only the rollover is broadcast immediately. After it confirms, the vault has one allowance-chain UTXO, one remainder UTXO, and one small connector for each enabled independent action chain. Future action PSBTs remain incomplete and encrypted on the phone until it signs the current connector at execution.
 
 ![The sequential allowance chain and emergency transactions for an example 2.1 BTC annual vault policy](media/vault-utxo-layout.svg)
 
@@ -120,16 +119,16 @@ HWW ready to pair with the phone and wrap its cloud backup key at anzen init
 
 $ anzen init
 Vault initialized (REGTEST ONLY)
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9,1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c),and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))})#keecfqyl
-Vault address: bcrt1plmultppav8uaq9slr25gcmhs0ydaf7da3qcpprquwczz757n0sqqfacrvq
+Cold storage descriptor: tr(996786536ee50cc69bb71143d53d452457c16fcb89d92ddeea070e65b611d37f,and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c)))#faue3tv2
+Vault address: bcrt1pw4m2tsjkpe8h4ydq5emmjynvu6kk7uwv3kpj9xvhen3t6ly2q2fsxur74r
 HWW alone:      after 33,553,920 seconds (~388 days); renewing the vault restarts it
 Monthly spending: disabled
 Emergency access: disabled
 Cloud recovery backup: phone key + descriptor encrypted to the HWW
 
 $ anzen policy
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9,1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c),and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))})#keecfqyl
-Vault address: bcrt1plmultppav8uaq9slr25gcmhs0ydaf7da3qcpprquwczz757n0sqqfacrvq
+Cold storage descriptor: tr(996786536ee50cc69bb71143d53d452457c16fcb89d92ddeea070e65b611d37f,and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c)))#faue3tv2
+Vault address: bcrt1pw4m2tsjkpe8h4ydq5emmjynvu6kk7uwv3kpj9xvhen3t6ly2q2fsxur74r
 Policy controller address: bcrt1pxu6dxg6pmryuqtuu39ukf56d5ydqa72gv05z23cyyxc65q9cdn3sxe46p7
 Policy controller reserve: 1000 sats per active chain
 HWW alone:      after 33,553,920 seconds (~388 days); renewing the vault restarts it
@@ -137,11 +136,11 @@ Monthly spending: disabled
 Emergency access: disabled
 ```
 
-The new vault starts with monthly spending and emergency access disabled. `anzen init` prints the static cold-storage descriptor, vault address, and the hardware wallet's delay, and encrypts the phone key and descriptor into the cloud backup with its key wrapped for the HWW. It does not create or sign a spending policy.
+The new vault starts with monthly spending and emergency access disabled. `anzen init` prints the static cold-storage descriptor (with the two keys' MuSig2 aggregate as its internal key), vault address, and the hardware wallet's delay, and encrypts the phone key and descriptor into the cloud backup with its key wrapped for the HWW. It does not create or sign a spending policy.
 
 ### Set or replace the vault policy
 
-The phone proposes the policy. The HWW independently reconstructs the graph, asks for one approval, and signs every presigned transaction the policy implies. The phone then verifies the approved policy, adds its own signatures, and broadcasts the rollover. Future controller inputs stay unsigned until the phone executes an action, so neither device commits revocation authority into the annual package. This real regtest policy combines a 0.1 BTC monthly limit with one cancellable 0.5 BTC emergency withdrawal:
+The phone proposes the policy, including a fresh MuSig2 nonce for each joint signature. The HWW independently reconstructs the graph, asks for one approval, and returns its half of every joint signature the policy implies. The phone then checks those halves, completes the joint signatures, and broadcasts the rollover. Future controller inputs stay unsigned until the phone executes an action, so neither device commits revocation authority into the annual package. This real regtest policy combines a 0.1 BTC monthly limit with one cancellable 0.5 BTC emergency withdrawal:
 
 ```console
 $ anzen phone set-policy --monthly-limit 10000000 --emergency-access-limit 50000000 --output policy.json
@@ -157,9 +156,9 @@ Total input: 200000000 sats
 Allowance steps: 12
 Allowance hop delay: 2592256 seconds (~30 days)
 Rollover txid: 15c2b85b2cd22f5aa93d064b6118ca1d2c73ee4d649742ecab435f4722b985c3
-Rollover fee: 291 sats
-Initial allowance-chain UTXO: 120002886 sats
-Rollover remainder: 79994823 sats
+Rollover fee: 240 sats
+Initial allowance-chain UTXO: 120002274 sats
+Rollover remainder: 79995486 sats
 Emergency trigger txid: a65992ce96d2c306f5548d66eff46f798c2068589909836dffeb228732281eff
 Emergency withdrawal txid: 5d5de9c172b7fe9fa88f794ce783bc20e70ddc790ca4c549faecae6b9c97a1c4
 Emergency hot address: bcrt1pty2qhk9z39m26c6450rm89yzptcgwn8u7km4eruzjzncl8vxljmq6qcz78
@@ -176,8 +175,8 @@ Emergency access delay: 605184 seconds (~1 week)
 Allowance steps: 12
 Allowance hop delay: 2592256 seconds (~30 days)
 Rollover txid: 15c2b85b2cd22f5aa93d064b6118ca1d2c73ee4d649742ecab435f4722b985c3
-Initial allowance-chain UTXO: 120002886 sats
-Rollover remainder: 79994823 sats
+Initial allowance-chain UTXO: 120002274 sats
+Rollover remainder: 79995486 sats
 Emergency trigger txid: a65992ce96d2c306f5548d66eff46f798c2068589909836dffeb228732281eff
 Emergency withdrawal txid: 5d5de9c172b7fe9fa88f794ce783bc20e70ddc790ca4c549faecae6b9c97a1c4
 Emergency hot address: bcrt1pty2qhk9z39m26c6450rm89yzptcgwn8u7km4eruzjzncl8vxljmq6qcz78
@@ -196,7 +195,7 @@ $ anzen status
 Network: regtest
 Height: 103
 Vault UTXOs: 2
-Vault balance: 199997709 sats
+Vault balance: 199997760 sats
 Live policy controller outputs: 2
 ```
 
@@ -321,11 +320,11 @@ Rotate the vault to the replacement key before using it
 $ anzen phone rotate-key --output phone-rotation.json
 PHONE-KEY ROTATION
 New phone vault key: 04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794,39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df),and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))})#k7x0dk2z
-New vault address: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
+New cold storage descriptor: tr(b96981905428d81ee3b0e1c1bee9030862d51d57d391da05f22b560b1906ca7a,and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df)))#xrw58jf8
+New vault address: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
 Inputs: 2
-Sent: 199997439 sats
-Fee: 270 sats (1 sat/vB)
+Sent: 199997591 sats
+Fee: 169 sats (1 sat/vB)
 Old policy controllers revoked: 2
 Monthly policy preserved: 10000000 sats
 Renewed allowance steps: 12
@@ -336,11 +335,11 @@ Phone-key rotation proposal: phone-rotation.json
 $ anzen hww confirm-rotation phone-rotation.json --output approved-phone-rotation.json --yes
 PHONE-KEY ROTATION
 New phone vault key: 04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794,39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df),and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))})#k7x0dk2z
-New vault address: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
+New cold storage descriptor: tr(b96981905428d81ee3b0e1c1bee9030862d51d57d391da05f22b560b1906ca7a,and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df)))#xrw58jf8
+New vault address: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
 Inputs: 2
-Sent: 199997439 sats
-Fee: 270 sats (1 sat/vB)
+Sent: 199997591 sats
+Fee: 169 sats (1 sat/vB)
 Old policy controllers revoked: 2
 Monthly policy preserved: 10000000 sats
 Renewed allowance steps: 12
@@ -353,7 +352,7 @@ $ anzen phone activate-rotation approved-phone-rotation.json
 Phone-key rotation sweep broadcast: af1dfdf75928664ae14064089f8a6f30ce14efc8dbee3b88e98162e2229a5ec1
 Old policy controllers revoked: 87645cff157e4c8d0cce75d82829a5ac13e6b5167741d96ea194e6b2ec277a00
 Old vault address: bcrt1pptj7234wglqrzd6s27q9vquney29cpjavlsqau7eu7a7ukpqt0sqv297vl
-New vault address: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
+New vault address: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
 Phone mnemonic: room absurd inject pole depth exit tenant wisdom cook predict net practice dry clarify panther album gossip million else maximum aim use they buyer
 Monthly policy preserved: 10000000 sats
 Policy rollover broadcast: 996bef84a3d995d2f791764f7f6d88987d4f86e8fe371c33996639e3b33cb7ad
@@ -361,7 +360,7 @@ Encrypted allowance authorizations: 12
 Emergency access preserved: 50000000 sats
 
 $ anzen hww adopt-rotation approved-phone-rotation.json
-HWW paired with the rotated vault: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
+HWW paired with the rotated vault: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
 ```
 
 The rotation preserves the HWW key and the active monthly and emergency-access limits. Before installing the new phone key it spends every old controller to replacement-phone change, so no old-key policy authority survives. It then sweeps the old vault cooperatively to a descriptor built from the replacement phone key and writes a new descriptor-bound cloud backup. The same proposal chains a fresh annual policy to that sweep; one HWW prompt approves both, and all replacement artifacts and connectors use the new phone key. A disabled feature remains disabled after rotation.
@@ -379,8 +378,8 @@ Hot receive address: bcrt1p942dzxwt78787mqjl40t4wym6qnz42rculqrerh59flwdtflm2es5
 $ anzen hww recover bcrt1p942dzxwt78787mqjl40t4wym6qnz42rculqrerh59flwdtflm2es57ksr4
 HWW recovery sweep broadcast: c6cbf842d5e6e0489a377fdd1c56efc7ceff4f7d389720daba9d7235017c0548
 Inputs: 1
-Sent: 199999854 sats
-Fee: 146 sats (1 sat/vB)
+Sent: 199999870 sats
+Fee: 130 sats (1 sat/vB)
 ```
 
 This delayed recovery moves the funds to the replacement wallet, whose phone and HWW keys are both new. `anzen status` shows when the HWW's path opens for the oldest vault output.
@@ -391,19 +390,19 @@ Restore the HWW from the backup its maker provides. It comes back as the same ke
 
 ### Other cooperative sweeps
 
-Arbitrary immediate vault sweeps retain the same explicit device boundary. The phone proposes the sweep without signing it:
+Arbitrary immediate vault sweeps retain the same explicit device boundary. The phone proposes the sweep with a fresh MuSig2 nonce per input, without signing it:
 
 ```console
 $ anzen phone create-sweep bcrt1pmzwluktvjp6mvktghy7yp8pyervxzxjnzxauqdnuwvzfjjcy449svdaupv --output sweep.json
 COOPERATIVE VAULT SWEEP
 Destination: bcrt1pmzwluktvjp6mvktghy7yp8pyervxzxjnzxauqdnuwvzfjjcy449svdaupv
 Inputs: 1
-Sent: 199999838 sats
-Fee: 162 sats (1 sat/vB)
+Sent: 199999889 sats
+Fee: 111 sats (1 sat/vB)
 Cooperative sweep proposal: sweep.json
 ```
 
-The HWW then reviews and signs it with `anzen hww confirm-sweep sweep.json --output approved-sweep.json`, and `anzen phone broadcast-sweep approved-sweep.json` verifies the approval, adds the phone signature, and broadcasts. This proposal comes from the stolen-phone test, where the HWW is absent, so `confirm-sweep` fails and the vault stays put; the end-to-end tests do not show a completed cooperative sweep.
+The HWW then reviews and signs it with `anzen hww confirm-sweep sweep.json --output approved-sweep.json`, and `anzen phone broadcast-sweep approved-sweep.json` checks the HWW's partial signatures, completes the joint signatures, and broadcasts. This proposal comes from the stolen-phone test, where the HWW is absent, so `confirm-sweep` fails and the vault stays put; the end-to-end tests do not show a completed cooperative sweep.
 
 ## Run the end-to-end tests
 

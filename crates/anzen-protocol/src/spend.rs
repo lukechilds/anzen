@@ -23,6 +23,14 @@ pub struct Spend {
 }
 
 impl Spend {
+    /// Key-path signature messages for every input: the vault's joint MuSig2 signatures.
+    pub fn key_path_sighashes<C: Crypto + ?Sized>(&self, crypto: &mut C) -> Result<Vec<[u8; 32]>> {
+        let cache = SighashCache::new(crypto, &self.transaction, &self.prevouts)?;
+        Ok((0..self.transaction.input.len())
+            .map(|index| cache.key_path(crypto, index))
+            .collect())
+    }
+
     /// Signature messages for every input, all satisfied through `leaf_hash`.
     pub fn sighashes<C: Crypto + ?Sized>(
         &self,

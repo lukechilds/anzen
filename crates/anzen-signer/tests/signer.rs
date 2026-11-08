@@ -1,3 +1,4 @@
+use anzen_common::musig;
 use anzen_protocol::{
     Error,
     address::{self, Network},
@@ -7,11 +8,11 @@ use anzen_protocol::{
     script::{Scripts, VaultKeys, XOnlyKey},
     tx::{OutPoint, Txid},
     wire::{
-        self, OfflineAction, OfflineActionRequest, PolicyRequest, RotationRequest, Signature,
-        SweepRequest,
+        self, CooperativeSignature, OfflineAction, OfflineActionRequest, PolicyRequest, PubNonce,
+        RotationRequest, Signature, SweepRequest,
     },
 };
-use anzen_signer::{Keys, Signer, State};
+use anzen_signer::{CooperativeSession, Keys, Signer, State};
 use bitcoin::{
     key::{Keypair, Secp256k1},
     secp256k1::{Message, XOnlyPublicKey, rand::thread_rng, schnorr},
@@ -38,6 +39,40 @@ impl Keys for SoftwareKeys {
         Ok(Secp256k1::new()
             .sign_schnorr_no_aux_rand(&Message::from_digest(*message), &self.0)
             .serialize())
+    }
+
+    fn sign_cooperative(
+        &mut self,
+        session: &CooperativeSession<'_>,
+    ) -> anzen_protocol::Result<CooperativeSignature> {
+        musig::sign_last(
+            &self.0.secret_bytes(),
+            session.keys,
+            session.merkle_root,
+            session.message,
+            session.phone_nonce,
+        )
+        .map_err(|_| anzen_protocol::Error::SigningFailed)
+    }
+}
+
+/// Check the signer's half of each joint signature against the phone nonces it answered.
+fn verify_halves(
+    scripts: &Scripts,
+    messages: &[[u8; 32]],
+    nonces: &[PubNonce],
+    halves: &[CooperativeSignature],
+) {
+    assert_eq!(messages.len(), halves.len());
+    for ((message, nonce), half) in messages.iter().zip(nonces).zip(halves) {
+        musig::verify_signer_half(
+            &scripts.vault.keys,
+            &scripts.vault.merkle_root,
+            message,
+            nonce,
+            half,
+        )
+        .unwrap();
     }
 }
 
@@ -116,7 +151,25 @@ impl Fixture {
                 .map(|index| hot(&mut self.crypto, index as u8 + 1))
                 .collect(),
             previous_allowances_complete: false,
+            phone_nonces: Vec::new(),
         }
+        .with_nonces(self)
+    }
+
+    /// Fresh phone nonces for `messages` under `keys`, as the phone would start them.
+    fn nonces(&mut self, keys: &VaultKeys, messages: &[[u8; 32]]) -> Vec<PubNonce> {
+        let root = Scripts::new(&mut self.crypto, keys)
+            .unwrap()
+            .vault
+            .merkle_root;
+        messages
+            .iter()
+            .map(|message| {
+                musig::phone_nonce(&self.phone.0.secret_bytes(), keys, &root, message)
+                    .unwrap()
+                    .1
+            })
+            .collect()
     }
 
     fn signer(&mut self) -> Signer<'_, SoftwareCrypto, SoftwareKeys> {
@@ -133,6 +186,24 @@ fn vault_input(byte: u8, sats: u64) -> Input {
     Input {
         outpoint: OutPoint::new(txid(byte), 0),
         value_sats: sats,
+    }
+}
+
+trait WithNonces {
+    fn with_nonces(self, fixture: &mut Fixture) -> Self;
+}
+
+impl WithNonces for PolicyRequest {
+    fn with_nonces(mut self, fixture: &mut Fixture) -> Self {
+        let graph = graph(fixture, &self);
+        let messages = graph
+            .cooperative_signing_jobs(&mut fixture.crypto)
+            .unwrap()
+            .iter()
+            .map(|job| job.sighash)
+            .collect::<Vec<_>>();
+        self.phone_nonces = fixture.nonces(&self.keys, &messages);
+        self
     }
 }
 
@@ -160,10 +231,25 @@ fn policy_approval_signs_every_cooperative_input_and_updates_the_anchor() {
         .unwrap();
     let graph = graph(&mut fixture, &request);
     let jobs = graph.cooperative_signing_jobs(&mut fixture.crypto).unwrap();
-    assert_eq!(approval.signatures.len(), jobs.len());
-    for (job, signature) in jobs.iter().zip(&approval.signatures) {
-        verify(fixture.hww.xonly(), job.sighash, signature);
-    }
+    let keys = fixture.keys();
+    let scripts = Scripts::new(&mut fixture.crypto, &keys).unwrap();
+    let messages = jobs.iter().map(|job| job.sighash).collect::<Vec<_>>();
+    verify_halves(
+        &scripts,
+        &messages,
+        &request.phone_nonces,
+        &approval.signatures,
+    );
+    // A request missing a nonce is refused.
+    let mut short = request.clone();
+    short.phone_nonces.pop();
+    assert_eq!(
+        fixture
+            .signer()
+            .review_policy(&state, &short, None)
+            .unwrap_err(),
+        Error::NonceCountMismatch
+    );
     assert_eq!(next.limits, LIMITS);
     assert_eq!(next.anchor, Some(graph.anchor()));
     assert_eq!(next.anchor_approved_at, Some(1_000));
@@ -322,25 +408,26 @@ fn sweeps_and_offline_actions_sign_each_input_through_the_expected_leaf() {
     let destination = hot(&mut fixture.crypto, 50);
     let inputs = vec![vault_input(1, 5_000_000), vault_input(2, 7_000_000)];
 
-    let sweep = SweepRequest {
+    let mut sweep = SweepRequest {
         version: wire::VERSION,
         network: Network::Regtest,
         keys: fixture.keys(),
         inputs: inputs.clone(),
         destination: destination.clone(),
+        phone_nonces: Vec::new(),
     };
+    let (_, spend) = sweep.build(&mut fixture.crypto).unwrap();
+    let messages = spend.key_path_sighashes(&mut fixture.crypto).unwrap();
+    sweep.phone_nonces = fixture.nonces(&keys, &messages);
     let review = fixture.signer().review_sweep(&state, &sweep).unwrap();
     assert_eq!(review.amount_sats + review.fee_sats, 12_000_000);
     let approval = fixture.signer().approve_sweep(&state, &sweep).unwrap();
-    let (_, spend) = sweep.build(&mut fixture.crypto).unwrap();
-    for (sighash, signature) in spend
-        .sighashes(&mut fixture.crypto, &scripts.vault.cooperative_leaf)
-        .unwrap()
-        .into_iter()
-        .zip(&approval.signatures)
-    {
-        verify(fixture.hww.xonly(), sighash, signature);
-    }
+    verify_halves(
+        &scripts,
+        &messages,
+        &sweep.phone_nonces,
+        &approval.signatures,
+    );
 
     for (action, leaf, inputs) in [
         (
@@ -449,6 +536,12 @@ fn rotation_preserves_limits_links_the_old_epoch_and_hands_over_new_state() {
         ],
         renewed_policy: Some(renewed.clone()),
         previous_allowances_complete: false,
+        sweep_nonces: fixture.nonces(
+            &old_keys,
+            &sweep
+                .key_path_sighashes(&mut SoftwareCrypto::new())
+                .unwrap(),
+        ),
     };
     let review = fixture
         .signer()

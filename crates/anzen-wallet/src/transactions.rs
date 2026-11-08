@@ -101,6 +101,52 @@ pub fn attach_signatures(
     Ok(())
 }
 
+/// Add finished joint signatures through the vault's key path, checking each against its input's
+/// key-path message and the vault output key.
+pub fn attach_key_path_signatures(
+    psbt: &mut Psbt,
+    input_indexes: &[usize],
+    output_key: XOnlyPublicKey,
+    signatures: &[[u8; 64]],
+) -> Result<()> {
+    validate_default_sighashes(psbt)?;
+    if input_indexes.len() != signatures.len() {
+        bail!("signature count does not match the transaction inputs");
+    }
+    let prevouts = psbt
+        .inputs
+        .iter()
+        .map(|input| {
+            input
+                .witness_utxo
+                .clone()
+                .context("PSBT input lacks its witness UTXO")
+        })
+        .collect::<Result<Vec<TxOut>>>()?;
+    let secp = Secp256k1::verification_only();
+    let unsigned = psbt.unsigned_tx.clone();
+    let mut cache = SighashCache::new(&unsigned);
+    for (&index, signature) in input_indexes.iter().zip(signatures) {
+        let sighash = cache.taproot_key_spend_signature_hash(
+            index,
+            &Prevouts::All(&prevouts),
+            TapSighashType::Default,
+        )?;
+        let signature = schnorr::Signature::from_slice(signature)?;
+        secp.verify_schnorr(
+            &signature,
+            &Message::from_digest(sighash.to_byte_array()),
+            &output_key,
+        )
+        .with_context(|| format!("invalid joint signature on input {index}"))?;
+        psbt.inputs[index].tap_key_sig = Some(taproot::Signature {
+            signature,
+            sighash_type: TapSighashType::Default,
+        });
+    }
+    Ok(())
+}
+
 /// Create a PSBT whose inputs are partitioned between the 2-of-2 vault policy and the fixed
 /// 1-of-2 connector policy. Every input must belong to exactly one partition.
 pub fn create_policy_psbt(
@@ -356,28 +402,96 @@ pub fn finalize_vault_psbt(mut psbt: Psbt) -> Result<Transaction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anzen_common::{CONNECTOR_VALUE_SATS, HWW_RECOVERY_SEQUENCE, keys::DeviceKeys};
-    use anzen_protocol::{policy::Input, script::Scripts, spend};
+    use anzen_common::{CONNECTOR_VALUE_SATS, HWW_RECOVERY_SEQUENCE, keys::DeviceKeys, musig};
+    use anzen_protocol::{
+        policy::Input,
+        script::{Scripts, VaultKeys},
+        spend,
+    };
     use bitcoin::{
         Amount, OutPoint, ScriptBuf, Sequence, TxIn, Witness, absolute, transaction::Version,
     };
+
+    fn vault_keys(phone: &DeviceKeys, hww: &DeviceKeys) -> VaultKeys {
+        VaultKeys {
+            phone: protocol::key(phone.vault_pubkey),
+            hww: protocol::key(hww.vault_pubkey),
+        }
+    }
+
+    fn output_key(phone: &DeviceKeys, hww: &DeviceKeys) -> XOnlyPublicKey {
+        let scripts = Scripts::new(
+            &mut protocol::SoftwareCrypto::new(),
+            &vault_keys(phone, hww),
+        );
+        XOnlyPublicKey::from_slice(&scripts.unwrap().vault.output.output_key).unwrap()
+    }
+
+    /// Both devices' MuSig2 signature over each input's key-path message, as the phone and
+    /// signer produce it in practice.
+    fn joint_signatures(
+        psbt: &Psbt,
+        phone: &DeviceKeys,
+        hww: &DeviceKeys,
+        inputs: &[usize],
+    ) -> Vec<[u8; 64]> {
+        let keys = vault_keys(phone, hww);
+        let root = Scripts::new(&mut protocol::SoftwareCrypto::new(), &keys)
+            .unwrap()
+            .vault
+            .merkle_root;
+        let prevouts = psbt
+            .inputs
+            .iter()
+            .map(|input| input.witness_utxo.clone().unwrap())
+            .collect::<Vec<_>>();
+        let mut cache = SighashCache::new(&psbt.unsigned_tx);
+        inputs
+            .iter()
+            .map(|&index| {
+                let message = cache
+                    .taproot_key_spend_signature_hash(
+                        index,
+                        &Prevouts::All(&prevouts),
+                        TapSighashType::Default,
+                    )
+                    .unwrap()
+                    .to_byte_array();
+                let phone_secret = phone.vault_keypair.secret_bytes();
+                let (secret, public) =
+                    musig::phone_nonce(&phone_secret, &keys, &root, &message).unwrap();
+                let half = musig::sign_last(
+                    &hww.vault_keypair.secret_bytes(),
+                    &keys,
+                    &root,
+                    &message,
+                    &public,
+                )
+                .unwrap();
+                musig::complete(
+                    &phone_secret,
+                    &secret,
+                    &keys,
+                    &root,
+                    &message,
+                    &public,
+                    &half,
+                )
+                .unwrap()
+            })
+            .collect()
+    }
 
     fn create_vault_psbt(
         transaction: Transaction,
         prevouts: &[TxOut],
         policy: &VaultPolicy,
+        phone: &DeviceKeys,
+        hww: &DeviceKeys,
     ) -> Result<Psbt> {
-        let phone = policy_key(policy, 0);
-        let hww = policy_key(policy, 1);
-        let controller = ControllerPolicy::new(phone, hww)?;
+        let controller = ControllerPolicy::new(phone.vault_pubkey, hww.vault_pubkey)?;
         let indexes = (0..transaction.input.len()).collect::<Vec<_>>();
         create_policy_psbt(transaction, prevouts, &indexes, &[], policy, &controller)
-    }
-
-    fn policy_key(policy: &VaultPolicy, index: usize) -> XOnlyPublicKey {
-        let text = policy.descriptor_string();
-        let keys = text.split("multi_a(2,").nth(1).unwrap();
-        keys.split([',', ')']).nth(index).unwrap().parse().unwrap()
     }
 
     fn fixture(sequence: Sequence) -> (VaultPolicy, DeviceKeys, DeviceKeys, Psbt) {
@@ -403,7 +517,7 @@ mod tests {
                 script_pubkey: ScriptBuf::new_p2tr(&secp, phone.vault_pubkey, None),
             }],
         };
-        let psbt = create_vault_psbt(tx, &[prevout], &policy).unwrap();
+        let psbt = create_vault_psbt(tx, &[prevout], &policy, &phone, &hww).unwrap();
         (policy, phone, hww, psbt)
     }
 
@@ -427,10 +541,11 @@ mod tests {
         sign_vault_psbt(
             &mut vault_signed,
             &vault,
-            SpendPath::Cooperative,
-            &phone.vault_keypair,
+            SpendPath::HwwRecovery,
+            &hww.vault_keypair,
         )
         .unwrap();
+        let joint = joint_signatures(&unsigned, &phone, &hww, &[0]);
         let mut controller_signed = controller_unsigned.clone();
         sign_controller_psbt_inputs(
             &mut controller_signed,
@@ -449,12 +564,17 @@ mod tests {
             let error = sign_vault_psbt(
                 &mut psbt,
                 &vault,
-                SpendPath::Cooperative,
-                &phone.vault_keypair,
+                SpendPath::HwwRecovery,
+                &hww.vault_keypair,
             )
             .unwrap_err();
             assert!(error.to_string().contains("SIGHASH_DEFAULT"));
             assert!(psbt.inputs[0].tap_script_sigs.is_empty());
+            let error =
+                attach_key_path_signatures(&mut psbt, &[0], output_key(&phone, &hww), &joint)
+                    .unwrap_err();
+            assert!(error.to_string().contains("SIGHASH_DEFAULT"));
+            assert!(psbt.inputs[0].tap_key_sig.is_none());
 
             let mut psbt = controller_unsigned.clone();
             psbt.inputs[0].sighash_type = rejected_type;
@@ -476,8 +596,8 @@ mod tests {
                 verify_vault_psbt_signature(
                     &psbt,
                     &vault,
-                    SpendPath::Cooperative,
-                    phone.vault_pubkey,
+                    SpendPath::HwwRecovery,
+                    hww.vault_pubkey,
                 )
                 .unwrap_err()
                 .to_string()
@@ -509,26 +629,12 @@ mod tests {
 
     #[test]
     fn default_sighash_can_be_explicit_or_omitted() {
-        let (policy, phone, hww, unsigned) = fixture(Sequence::MAX);
+        let (_, phone, hww, unsigned) = fixture(Sequence::MAX);
+        let joint = joint_signatures(&unsigned, &phone, &hww, &[0]);
         for field in [None, Some(TapSighashType::Default.into())] {
             let mut psbt = unsigned.clone();
             psbt.inputs[0].sighash_type = field;
-            for keys in [&phone, &hww] {
-                sign_vault_psbt(
-                    &mut psbt,
-                    &policy,
-                    SpendPath::Cooperative,
-                    &keys.vault_keypair,
-                )
-                .unwrap();
-                verify_vault_psbt_signature(
-                    &psbt,
-                    &policy,
-                    SpendPath::Cooperative,
-                    keys.vault_pubkey,
-                )
-                .unwrap();
-            }
+            attach_key_path_signatures(&mut psbt, &[0], output_key(&phone, &hww), &joint).unwrap();
             assert!(finalize_vault_psbt(psbt).is_ok());
         }
     }
@@ -545,7 +651,7 @@ mod tests {
             sign_vault_psbt(
                 &mut psbt,
                 &policy,
-                SpendPath::Cooperative,
+                SpendPath::HwwRecovery,
                 &phone.vault_keypair
             )
             .is_err()
@@ -558,27 +664,37 @@ mod tests {
     }
 
     #[test]
-    fn cooperative_psbt_requires_and_accepts_both_signatures() {
-        let (policy, phone, hww, mut psbt) = fixture(Sequence::MAX);
-        sign_vault_psbt(
-            &mut psbt,
-            &policy,
-            SpendPath::Cooperative,
-            &phone.vault_keypair,
-        )
-        .unwrap();
-        verify_vault_psbt_signature(&psbt, &policy, SpendPath::Cooperative, phone.vault_pubkey)
-            .unwrap();
+    fn a_cooperative_spend_is_one_joint_key_path_signature() {
+        let (_, phone, hww, mut psbt) = fixture(Sequence::MAX);
         assert!(finalize_vault_psbt(psbt.clone()).is_err());
-        sign_vault_psbt(
-            &mut psbt,
-            &policy,
-            SpendPath::Cooperative,
-            &hww.vault_keypair,
-        )
-        .unwrap();
+        // Neither device's own signature satisfies the aggregate key.
+        let mut cache = SighashCache::new(&psbt.unsigned_tx);
+        let prevouts = [psbt.inputs[0].witness_utxo.clone().unwrap()];
+        let message = cache
+            .taproot_key_spend_signature_hash(0, &Prevouts::All(&prevouts), TapSighashType::Default)
+            .unwrap();
+        let secp = Secp256k1::new();
+        for keys in [&phone, &hww] {
+            let alone = secp
+                .sign_schnorr_no_aux_rand(
+                    &Message::from_digest(message.to_byte_array()),
+                    &keys.vault_keypair,
+                )
+                .serialize();
+            assert!(
+                attach_key_path_signatures(
+                    &mut psbt.clone(),
+                    &[0],
+                    output_key(&phone, &hww),
+                    &[alone]
+                )
+                .is_err()
+            );
+        }
+        let joint = joint_signatures(&psbt, &phone, &hww, &[0]);
+        attach_key_path_signatures(&mut psbt, &[0], output_key(&phone, &hww), &joint).unwrap();
         let tx = finalize_vault_psbt(psbt).unwrap();
-        assert_eq!(tx.input[0].witness.len(), 4);
+        assert_eq!(tx.input[0].witness.len(), 1);
         let mut unsigned = tx.clone();
         for input in &mut unsigned.input {
             input.witness = Witness::new();
@@ -665,22 +781,8 @@ mod tests {
             }],
         };
         let mut psbt = create_policy_psbt(tx, &prevouts, &[0], &[1], &vault, &controller).unwrap();
-        sign_vault_psbt_inputs(
-            &mut psbt,
-            &vault,
-            SpendPath::Cooperative,
-            &phone.vault_keypair,
-            &[0],
-        )
-        .unwrap();
-        sign_vault_psbt_inputs(
-            &mut psbt,
-            &vault,
-            SpendPath::Cooperative,
-            &hww.vault_keypair,
-            &[0],
-        )
-        .unwrap();
+        let joint = joint_signatures(&psbt, &phone, &hww, &[0]);
+        attach_key_path_signatures(&mut psbt, &[0], output_key(&phone, &hww), &joint).unwrap();
         assert!(finalize_vault_psbt(psbt.clone()).is_err());
         assert!(
             sign_controller_psbt_inputs(
@@ -701,7 +803,7 @@ mod tests {
         )
         .unwrap();
         let finalized = finalize_vault_psbt(psbt).unwrap();
-        assert_eq!(finalized.input[0].witness.len(), 4);
+        assert_eq!(finalized.input[0].witness.len(), 1);
         assert_eq!(finalized.input[1].witness.len(), 3);
     }
 

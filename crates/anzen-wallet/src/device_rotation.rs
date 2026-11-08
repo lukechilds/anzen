@@ -1,12 +1,18 @@
 //! Phone-side completion of a device rotation: rebuild what the signer approved, verify its
-//! signatures, add the old phone key's sweep signatures and finalize the old-epoch transactions.
+//! signatures, finish the old vault's joint sweep signatures and finalize the old-epoch
+//! transactions.
 
-use crate::transactions::{attach_signatures, finalize_vault_psbt, protocol_psbt, sign_vault_psbt};
+use crate::{
+    cosigning,
+    transactions::{
+        attach_key_path_signatures, attach_signatures, finalize_vault_psbt, protocol_psbt,
+    },
+};
 use anyhow::{Context, Result, bail, ensure};
 use anzen_common::{
     device_rotation::{ApprovedDevicePhoneRotation, DevicePhoneRotation},
     keys::DeviceKeys,
-    policy::{ControllerPolicy, SpendPath, VaultPolicy},
+    policy::{ControllerPolicy, VaultPolicy},
     protocol::{self, SoftwareCrypto},
     storage::VaultConfig,
 };
@@ -21,9 +27,10 @@ pub struct FinalizedRotation {
     pub renewed_policy: Option<PolicyApproval>,
 }
 
-/// Rebuild what the signer approved, verify its signatures, add the old phone key's sweep
-/// signatures and finalize the old-epoch transactions.
+/// Rebuild what the signer approved, verify its signatures, finish the old vault's joint sweep
+/// signatures with the old phone key and finalize the old-epoch transactions.
 pub fn finalize(
+    data_dir: &std::path::Path,
     request: &DevicePhoneRotation,
     old: &VaultConfig,
     approved: &ApprovedDevicePhoneRotation,
@@ -79,19 +86,21 @@ pub fn finalize(
         &vault,
         &controller,
     )?;
-    attach_signatures(
-        &mut sweep,
-        &(0..plan.sweep.transaction.input.len()).collect::<Vec<_>>(),
-        hww,
-        TapLeafHash::from_byte_array(plan.old_scripts.vault.cooperative_leaf),
+    let signatures = cosigning::Phone {
+        data_dir,
+        keys: old_phone,
+    }
+    .finish(
+        &cosigning::spend_jobs(&plan.old_scripts, &plan.sweep)?,
+        &request.rotation.sweep_nonces,
         &approval.sweep_signatures,
     )
     .context("signer changed the proposed rotation")?;
-    sign_vault_psbt(
+    attach_key_path_signatures(
         &mut sweep,
-        &vault,
-        SpendPath::Cooperative,
-        &old_phone.vault_keypair,
+        &(0..plan.sweep.transaction.input.len()).collect::<Vec<_>>(),
+        XOnlyPublicKey::from_slice(&plan.old_scripts.vault.output.output_key)?,
+        &signatures,
     )?;
     let sweep = finalize_vault_psbt(sweep)?;
 

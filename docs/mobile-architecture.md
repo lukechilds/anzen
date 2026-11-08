@@ -236,6 +236,32 @@ release-age policy. That policy was not bypassed: the installable versions and m
 are retained. Before claiming an iOS device build, resolve the license and that SDK compatibility
 gate, then enable the official scene-support plugin and verify the generated/build output.
 
+## Joint vault signatures
+
+Every spend that needs both devices is one MuSig2 (BIP327) signature through the vault's
+Taproot key path. `anzen-protocol` aggregates the two keys into the internal key; nonces and
+partial signatures live in host code (`anzen_common::musig`), shared by the phone, the browser
+and the software signer.
+
+The phone signs first. Each request (protocol message version 2) carries one fresh public
+nonce per joint signature: `phone_nonces` on policies and sweeps, `sweep_nonces` on a
+rotation's old-vault sweep, with the renewed policy carrying its own. The signer signs last
+with BIP327 `DeterministicSign`: its nonce is derived from its key, the phone's nonce, the
+tweaked aggregate key and the message, so it stores nothing and a repeated request repeats
+the same answer. Each approval returns a `CooperativeSignature` (nonce and partial signature)
+per joint signature.
+
+The phone keeps its secret nonces in `anzen_wallet::cosigning` sessions under `phone/cosigning/`,
+named by their public nonces and bound to the exact messages they may sign. When an approval
+arrives the phone verifies every partial signature first, so only the real signer can make it
+sign, then completes the signatures in memory and atomically replaces the session's secret
+nonces with the finished signatures before anything is stored elsewhere or broadcast. A crash
+before that write has released nothing; after it, retries and **Finish** reuse the finished
+signatures. A saved request whose session is gone cannot be completed; the phone proposes
+again with new nonces. Sessions never enter the cloud backup or a protocol message, and rely on
+the device storage being excluded from OS backups (below), because a restored copy of a pending
+session could sign twice.
+
 ## Confidential backup exchange
 
 The device-separated backup ceremony never sends the phone seed **or its ciphertext** to
@@ -285,12 +311,14 @@ the limits again alongside the new key/address and funded withdrawal count.
 
 `anzen-wallet` builds the rotation using the recovered old key and its own new key. `anzen-signer-app`
 validates public previous transactions, input values/scripts, duplicates, the new fixed vault
-script, the policy-preserving transaction chain, and the phone signatures. The signer receives
+script, the policy-preserving transaction chain, and the phone nonces. The signer receives
 no replacement mnemonic, hot-wallet database, or seed ciphertext. Its stored review contains a
 request hash and public configuration; approval requires the exact request again.
 
-Approval signs the vault transfer and renewed policy, revokes live old connectors to the new
-vault, and wraps the new backup's encryption key. The phone validates the returned package,
+Approval returns the signer's halves of the joint signatures on the vault transfer (old keys)
+and the renewed policy (new keys), revokes live old connectors to the new vault, and wraps the
+new backup's encryption key. The phone completes both sets of joint signatures, validates the
+returned package,
 saves the approved request and backup before broadcasting, then activates the new vault and
 schedule. Receipts make retries idempotent; a lost broadcast response retries the exact signed
 transaction. The signer switches its paired vault only after a separate user confirmation;
@@ -386,8 +414,8 @@ stores that as a separate watch-only recovery source, without replacing its own 
 It scans the source and packages input outpoints with their complete previous transactions.
 No original phone key or seed backup is needed for this coordination.
 
-The vault is `tr(NUMS,{multi_a(2,phone,hww),and_v(v:older(4259839),pk(hww))})`: both
-devices, or the signer alone once the longest BIP68 time lock, 65,535 × 512 seconds (about
+The vault is `tr(musig(phone,hww),and_v(v:older(4259839),pk(hww)))`: both devices through the
+key path with one MuSig2 signature, or the signer alone once the longest BIP68 time lock, 65,535 × 512 seconds (about
 388 days), has passed since a coin confirmed. Each annual renewal moves every coin and so
 restarts it. The phone has no path of its own.
 

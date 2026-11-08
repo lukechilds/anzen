@@ -338,7 +338,9 @@ fn future_vault_inputs_are_fully_signed_and_connectors_stay_unsigned() {
         let blob = &artifact.encrypted_psbt;
         let plaintext = anzen_common::crypto::decrypt(&phone.seed, &blob.purpose, blob).unwrap();
         let psbt = bitcoin::Psbt::from_str(std::str::from_utf8(&plaintext).unwrap()).unwrap();
-        assert_eq!(psbt.inputs[0].tap_script_sigs.len(), 2);
+        // The vault input carries the finished joint signature through the key path.
+        assert!(psbt.inputs[0].tap_key_sig.is_some());
+        assert!(psbt.inputs[0].tap_script_sigs.is_empty());
         assert!(psbt.inputs[0].final_script_witness.is_none());
         assert!(psbt.inputs[1].tap_script_sigs.is_empty());
         assert!(psbt.inputs[1].final_script_witness.is_none());

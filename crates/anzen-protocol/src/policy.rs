@@ -166,11 +166,9 @@ pub struct PolicyGraph {
     pub emergency_connector_vout: Option<u32>,
     pub allowances: Vec<AllowanceStep>,
     pub emergency: Option<EmergencyAccess>,
-    /// Leaf every annual signature commits to.
-    pub cooperative_leaf: [u8; 32],
 }
 
-/// One vault-input signature the cooperative path needs from each device.
+/// One vault-input signature the cooperative key path needs from both devices together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SigningJob {
     pub transaction: usize,
@@ -197,7 +195,6 @@ impl PolicyGraph {
         &self,
         crypto: &mut C,
     ) -> Result<Vec<SigningJob>> {
-        let leaf = self.cooperative_leaf;
         let mut jobs = Vec::new();
         for (index, transaction) in self.transactions().into_iter().enumerate() {
             let cache = SighashCache::new(crypto, &transaction.transaction, &transaction.prevouts)?;
@@ -205,7 +202,7 @@ impl PolicyGraph {
                 jobs.push(SigningJob {
                     transaction: index,
                     input,
-                    sighash: cache.script_path(crypto, input, &leaf),
+                    sighash: cache.key_path(crypto, input),
                 });
             }
         }
@@ -552,7 +549,6 @@ pub fn build<C: Crypto + ?Sized>(
         emergency_connector_vout,
         allowances,
         emergency,
-        cooperative_leaf: scripts.vault.cooperative_leaf,
         rollover,
     })
 }

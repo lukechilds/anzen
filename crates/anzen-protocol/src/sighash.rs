@@ -1,4 +1,4 @@
-//! BIP341 script-path signature messages with `SIGHASH_DEFAULT`.
+//! BIP341 signature messages with `SIGHASH_DEFAULT`, for key and script paths.
 //!
 //! Anzen signs every input with `SIGHASH_DEFAULT`, which commits to all inputs, their amounts and
 //! scripts, and all outputs. No other hash type is representable here.
@@ -69,6 +69,13 @@ impl SighashCache {
         })
     }
 
+    /// The message the key path signs at `input_index`: the vault's joint MuSig2 signature.
+    pub fn key_path<C: Crypto + ?Sized>(&self, crypto: &mut C, input_index: usize) -> [u8; 32] {
+        let mut message = self.common(0);
+        message.extend_from_slice(&(input_index as u32).to_le_bytes());
+        tagged_hash(crypto, &TAPSIGHASH_TAG, &[&message])
+    }
+
     /// The message a key signs to satisfy `leaf_hash` at `input_index`.
     pub fn script_path<C: Crypto + ?Sized>(
         &self,
@@ -76,6 +83,16 @@ impl SighashCache {
         input_index: usize,
         leaf_hash: &[u8; 32],
     ) -> [u8; 32] {
+        let mut message = self.common(2); // ext_flag = 1 (script path), no annex.
+        message.extend_from_slice(&(input_index as u32).to_le_bytes());
+        message.extend_from_slice(leaf_hash);
+        message.push(0); // Key version 0.
+        message.extend_from_slice(&u32::MAX.to_le_bytes()); // No OP_CODESEPARATOR.
+        tagged_hash(crypto, &TAPSIGHASH_TAG, &[&message])
+    }
+
+    /// Everything up to the input index, ending with the spend type byte.
+    fn common(&self, spend_type: u8) -> Vec<u8> {
         let mut message = Vec::with_capacity(210);
         message.push(0); // Sighash epoch.
         message.push(0); // SIGHASH_DEFAULT.
@@ -86,11 +103,7 @@ impl SighashCache {
         message.extend_from_slice(&self.script_pubkeys);
         message.extend_from_slice(&self.sequences);
         message.extend_from_slice(&self.outputs);
-        message.push(2); // ext_flag = 1 (script path), no annex.
-        message.extend_from_slice(&(input_index as u32).to_le_bytes());
-        message.extend_from_slice(leaf_hash);
-        message.push(0); // Key version 0.
-        message.extend_from_slice(&u32::MAX.to_le_bytes()); // No OP_CODESEPARATOR.
-        tagged_hash(crypto, &TAPSIGHASH_TAG, &[&message])
+        message.push(spend_type);
+        message
     }
 }

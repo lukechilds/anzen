@@ -69,7 +69,7 @@ equivalent. Existing scripts supply the expected behavior, not a license to mock
 - [x] Existing Rust, vector, CLI and regtest tests pass.
 - [x] New role isolation / application API tests pass.
 - [ ] Browser interaction, responsive visual and accessibility checks pass.
-- [ ] Browser end-to-end scenarios pass against real Rust and regtest (rerun pending after the one-way timelock).
+- [x] Browser end-to-end scenarios pass against real Rust and regtest.
 - [ ] Native iOS and Android builds and real Rust smoke tests pass.
 - [ ] Build/run/test instructions match commands actually verified.
 
@@ -235,8 +235,8 @@ attacker-scenario matrix is complete.
 
 ## One-way timelock (2026-11-08)
 
-The vault became `tr(NUMS,{multi_a(2,phone,hww),and_v(v:older(4259839),pk(hww))})`: both
-devices, or the signer alone after the time-based BIP68 maximum (about 388 days) since the
+The vault became `tr(NUMS,{multi_a(2,phone,hww),and_v(v:older(4259839),pk(hww))})` (since moved to
+a MuSig2 key path, below): both devices, or the signer alone after the time-based BIP68 maximum (about 388 days) since the
 last renewal. The phone-only path, recovery contacts, signer replacement and retired-vault
 monitoring were removed with it; earlier evidence for those flows was deleted above. Cloud
 backups are format 2, wrapped for the signer only. Recovery timing is time-based throughout:
@@ -248,6 +248,29 @@ seconds remaining, and the regtest emulator's **+13 months** control replaces re
   Miniscript.
 - The Docker regtest suite and the browser end-to-end suite have not yet been rerun for this
   change; the browser cases above predate it.
+
+## MuSig2 key path (2026-11-09)
+
+The vault is now `tr(musig(phone,hww),and_v(v:older(4259839),pk(hww)))`. The internal key is the
+BIP327 aggregate of both keys, and joint spends carry one key-path signature, about 51 vbytes
+cheaper per input (the vault-output vector's rollover fee fell from 291 to 240 sats). Protocol
+messages are version 2: requests carry the phone's public nonces, approvals the signer's
+`CooperativeSignature`s. The signer signs last with BIP327 `DeterministicSign`; the phone keeps
+single-use nonce sessions in `anzen_wallet::cosigning` and replaces their secret nonces with the
+finished signatures in one atomic write. Vaults, requests and emulator sessions from before this
+change are not compatible.
+
+- Protocol tests check key aggregation against the independent `musig2` crate and verify a full
+  two-party signature with rust-bitcoin; sighashes and virtual sizes still match rust-bitcoin.
+  Both vectors were regenerated, with the same accepted and rejected policy cases.
+- Wallet tests cover finishing, retry reuse and refusal of forged or mismatched halves without
+  consuming the session. Root workspace tests, root/native Clippy with warnings denied, the
+  boundary check (including the bare-metal signer build), the native library tests and the
+  WASM target build pass.
+- Bitcoin Core accepts the joint key-path spends: the Docker regtest suite (rollovers,
+  allowances, cooperative sweeps and rotations), all 17 CLI end-to-end scenarios, the 29 browser
+  end-to-end scenarios, both native regtest scenarios and the static browser suite pass.
+- The Ledger and Trezor benchmarks still model the previous script-path signing workload.
 
 The unchecked workflow/native boxes remain intentionally open. In particular, the current
 CLI rotation and recovery implementations still assume a combined filesystem in some paths;

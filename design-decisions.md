@@ -14,7 +14,7 @@ The phone is both a normal hot wallet and one vault cosigner. The HWW is the ind
 
 A vault needs a way out if a device is permanently lost, but the two devices are not alike. A hardware wallet's seed is already backed up through its maker's own recovery process, and restoring it yields the same key, so a lost signer is not a lost key: the user restores it and carries on, and the vault does not change. The phone key lives on an everyday device and in its cloud backup, both exposed to theft, malware and account compromise.
 
-The fallback therefore runs one way. The vault script has two leaves: both devices together, or the hardware wallet alone after the longest relative time lock Bitcoin allows. The phone alone never reaches the savings, so a stolen or compromised phone is never a single point of theft. At most it gets the monthly allowance and the emergency withdrawal, both fixed by the approved policy, delayed, and revocable by the signer.
+The fallback therefore runs one way. The vault has two spending paths: both devices together through the Taproot key path, or the hardware wallet alone, the tree's only leaf, after the longest relative time lock Bitcoin allows. The phone alone never reaches the savings, so a stolen or compromised phone is never a single point of theft. At most it gets the monthly allowance and the emergency withdrawal, both fixed by the approved policy, delayed, and revocable by the signer.
 
 Giving each device its own eventual path would mean staggering the delays so the honest device wins the race after one key leaks, and it would let the weaker phone key, or anyone holding its cloud backup, eventually drain the vault. With one path there is no race to win and nothing to stagger.
 
@@ -25,6 +25,26 @@ The cost is the hardware wallet's own: losing the signer together with its backu
 BIP68 gives a relative lock 16 bits, so its longest time-based value is 65,535 units of 512 seconds: 33,553,920 seconds, about 388 days, written `older(4259839)` (the time-type flag plus 65,535). A time-based lock means the same on mainnet, Mutinynet's 30-second blocks and regtest, and does not drift with hashrate. It counts from the median time past of the block before the one that confirmed the coin, and a spend fits in the next block once the tip's median time past has passed it.
 
 The delay is longer than the expected annual renewal interval. A normal renewal refreshes every live output about three weeks before the fallback opens, so it stays dormant during ordinary operation and matters only when renewal stops. The exact semantics are specified in `anzen-design.md`.
+
+## Why the joint path is a MuSig2 key spend
+
+The vault's internal key is the MuSig2 (BIP327) aggregate of the phone and hardware wallet keys, so a cooperative spend is one ordinary 64-byte Taproot key-path signature produced by both devices together. The alternative, a `multi_a(2,phone,hww)` leaf, needs two signatures, the 70-byte script and a control block on chain. The key path saves about 51 vbytes per cooperative vault input, which every rollover, allowance authorization, emergency transaction, sweep and rotation pays, and cooperative spends look like any single-key Taproot spend rather than revealing the vault's scripts. The time-locked hardware-wallet leaf stays in the tree, so the fallback is unchanged.
+
+Security is the same 2-of-2: no secret for the aggregate key exists anywhere, and a joint signature needs both device keys. Key aggregation is part of the protocol, not a device detail, because every implementation must derive the same address; it is checked against an independent MuSig2 implementation in tests.
+
+## Why the signer signs last and how the phone handles nonces
+
+MuSig2 has two rounds: exchange nonces, then partial signatures. With two signers the hardware wallet can do both of its steps at once if it signs last: the phone's request carries its public nonces, and the signer answers with its own nonce and partial signature. Setup and approvals therefore stay a single exchange, including for QR-only devices. The signer uses BIP327 `DeterministicSign`, deriving its nonce from its key, the phone's nonce, the aggregate key and the message. It keeps no nonce state, which suits devices that are bad at keeping state safely: the same request yields the same answer, and any change yields a different nonce.
+
+The cost is that the phone, signing first, must hold a secret nonce from its request until the signer answers, and a MuSig2 secret nonce must sign exactly once. Three signatures on one phone nonce with different signer nonces reveal the phone's vault key. The realistic attacker is someone holding the signer's key, the one party able to produce answers the phone accepts, so a nonce bug would let a signer thief drain the vault immediately instead of waiting out the time lock. The phone therefore treats pending nonces as one-time secrets:
+
+- every request gets fresh random nonces, and a retry is a new request, never a resend;
+- a signing session signs only the exact messages it was started for;
+- the signer's partial signatures are verified before the phone signs anything;
+- finishing replaces the secret nonces with the finished signatures in one atomic write before any signature leaves the phone, so a crash either releases nothing or leaves only finished signatures for retries to reuse;
+- sessions live in device-only storage, never in the cloud backup or an exported message, so a restore cannot put a pending nonce on a second device.
+
+The phone finishes the whole presigned annual graph during activation, so no nonce is held for months. "Finish later" retries reuse finished signatures, not nonces. The phone key alone still cannot reach the savings, so these rules protect against the signer-thief case specifically.
 
 ## Why the HWW approves a policy
 
@@ -74,7 +94,7 @@ The connector reserve and fixed 1 sat/vB fee are MVP parameters, not production 
 
 ## Why the vault address is static
 
-Every ordinary vault output reuses the same keys, descriptor, and address until a key rotation. This deliberately trades address-level privacy for a durable receive address, simpler backup and recovery, and easier verification. Annual rollovers already link the vault's UTXOs, so rotating addresses without rotating keys would add operational complexity with limited privacy benefit. A key rotation creates a new descriptor and address.
+Every ordinary vault output reuses the same keys, descriptor, and address until a key rotation. This deliberately trades address-level privacy for a durable receive address, simpler backup and recovery, and easier verification. Annual rollovers already link the vault's UTXOs, so rotating addresses without rotating keys would add operational complexity with limited privacy benefit. Because cooperative spends use the MuSig2 key path, they do not reveal the vault's scripts or mark the address as an Anzen vault. A key rotation creates a new descriptor and address.
 
 ## Why rotation uses separate revocation, sweep, and rollover transactions
 
@@ -107,9 +127,9 @@ Signer UI  ──> anzen-signer-app ─┤
 Ledger app ──> anzen-signer
 ```
 
-- `anzen-protocol` is the one deterministic definition of the vault scripts, the annual policy graph, sweeps, revocations and their signature messages. It is `no_std` and builds every transaction from typed parameters, so the phone and every signer derive byte-identical transactions from the same request.
-- `anzen-signer` is the auditable hardware-wallet surface: it rebuilds each request with `anzen-protocol`, reports what it does, signs only what was reviewed, and keeps an epoch anchor that forces every renewal to conflict with or consume the previously approved policy. It is `no_std` and has no BDK wallet, Electrum, Bitcoin Core, filesystem or clock dependency.
-- `anzen-wallet` owns phone keys, the BDK hot wallet, encrypted monthly/emergency policy transactions, restoring a lost phone from its cloud backup, and phone-key rotation. Future iOS and Android apps build on this API.
+- `anzen-protocol` is the one deterministic definition of the vault scripts and MuSig2 key aggregation, the annual policy graph, sweeps, revocations and their signature messages. It is `no_std` and builds every transaction from typed parameters, so the phone and every signer derive byte-identical transactions from the same request.
+- `anzen-signer` is the auditable hardware-wallet surface: it rebuilds each request with `anzen-protocol`, reports what it does, signs only what was reviewed (as the last, stateless MuSig2 signer for joint signatures), and keeps an epoch anchor that forces every renewal to conflict with or consume the previously approved policy. It is `no_std` and has no BDK wallet, Electrum, Bitcoin Core, filesystem or clock dependency.
+- `anzen-wallet` owns phone keys, the BDK hot wallet, the phone's single-use MuSig2 signing sessions, encrypted monthly/emergency policy transactions, restoring a lost phone from its cloud backup, and phone-key rotation. Future iOS and Android apps build on this API.
 - `anzen-signer-app` hosts `anzen-signer` for the CLI, the mobile hardware-wallet mode and the browser signer: seed storage, persisted signer state, backups and restoration. It has no wallet or chain dependency.
 - `anzen-common` and `anzen-storage` hold shared host formats (keys, configuration, encrypted backups, device messages) and atomic private storage. They exist to avoid duplication, not as APIs that wallet UIs must understand; each device crate re-exports the shared types its consumers need.
 

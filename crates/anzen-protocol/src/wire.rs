@@ -1,7 +1,12 @@
 //! Messages between the phone and the signer.
 //!
 //! Requests carry parameters, never transactions: the signer rebuilds every transaction with the
-//! same builders the phone used and returns only signatures. Input values are taken on trust
+//! same builders the phone used and returns only signatures.
+//!
+//! Vault spends that need both devices use one MuSig2 (BIP327) signature through the key path.
+//! The phone signs first: its requests carry one public nonce per joint signature. The signer
+//! signs last and returns its own public nonce with its partial signature, which lets it derive
+//! that nonce deterministically and keep no state. Input values are taken on trust
 //! because `SIGHASH_DEFAULT` commits to every input amount and script: a signature over a false
 //! value is invalid on chain, so a valid transaction always moves exactly what was reviewed.
 
@@ -19,7 +24,7 @@ use crate::{
 use alloc::{collections::BTreeSet, string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 
 /// A BIP340 signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +50,56 @@ impl<'de> Deserialize<'de> for Signature {
     }
 }
 
+/// A MuSig2 public nonce: two compressed points (BIP327 `PubNonce`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PubNonce(pub [u8; 66]);
+
+/// A MuSig2 partial signature (BIP327 `PartialSig`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartialSignature(pub [u8; 32]);
+
+macro_rules! hex_serde {
+    ($type:ty) => {
+        impl Serialize for $type {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> core::result::Result<S::Ok, S::Error> {
+                serializer.serialize_str(&hex::encode(&self.0))
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $type {
+            fn deserialize<D: serde::Deserializer<'de>>(
+                deserializer: D,
+            ) -> core::result::Result<Self, D::Error> {
+                let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+                hex::decode_array(&text)
+                    .map(Self)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+    };
+}
+hex_serde!(PubNonce);
+hex_serde!(PartialSignature);
+
+/// The signer's half of one joint signature: its public nonce and partial signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CooperativeSignature {
+    pub nonce: PubNonce,
+    pub partial: PartialSignature,
+}
+
+/// Every joint signature needs exactly one phone nonce.
+pub fn check_nonces(nonces: &[PubNonce], signatures: usize) -> Result<()> {
+    if nonces.len() != signatures {
+        return Err(Error::NonceCountMismatch);
+    }
+    Ok(())
+}
+
 /// Approve the annual policy these parameters define.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +116,9 @@ pub struct PolicyRequest {
     /// The phone reports that every allowance of the previously approved policy was used.
     #[serde(default)]
     pub previous_allowances_complete: bool,
+    /// The phone's nonce for each joint signature, in
+    /// [`PolicyGraph::cooperative_signing_jobs`] order.
+    pub phone_nonces: Vec<PubNonce>,
 }
 
 impl PolicyRequest {
@@ -103,14 +161,14 @@ impl PolicyRequest {
     }
 }
 
-/// The signer's cooperative signatures for a [`PolicyRequest`], in
+/// The signer's halves of the joint signatures for a [`PolicyRequest`], in
 /// [`PolicyGraph::cooperative_signing_jobs`] order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyApproval {
     pub version: u8,
     pub request: PolicyRequest,
-    pub signatures: Vec<Signature>,
+    pub signatures: Vec<CooperativeSignature>,
 }
 
 /// Move vault outputs to one destination through the cooperative path.
@@ -122,6 +180,8 @@ pub struct SweepRequest {
     pub keys: VaultKeys,
     pub inputs: Vec<Input>,
     pub destination: String,
+    /// The phone's nonce for each input's joint signature.
+    pub phone_nonces: Vec<PubNonce>,
 }
 
 impl SweepRequest {
@@ -150,7 +210,7 @@ impl SweepRequest {
 pub struct SweepApproval {
     pub version: u8,
     pub request: SweepRequest,
-    pub signatures: Vec<Signature>,
+    pub signatures: Vec<CooperativeSignature>,
 }
 
 /// Actions the signer can take alone.
@@ -234,6 +294,9 @@ pub struct RotationRequest {
     pub renewed_policy: Option<PolicyRequest>,
     #[serde(default)]
     pub previous_allowances_complete: bool,
+    /// The phone's nonce, under the old keys, for each sweep input's joint signature. The
+    /// renewed policy carries its own nonces under the new keys.
+    pub sweep_nonces: Vec<PubNonce>,
 }
 
 /// Every transaction a rotation request asks the signer to sign.
@@ -315,9 +378,9 @@ impl RotationRequest {
 pub struct RotationApproval {
     pub version: u8,
     pub request: RotationRequest,
-    pub sweep_signatures: Vec<Signature>,
+    pub sweep_signatures: Vec<CooperativeSignature>,
     pub revocation_signatures: Vec<Signature>,
-    pub policy_signatures: Vec<Signature>,
+    pub policy_signatures: Vec<CooperativeSignature>,
 }
 
 /// A renewed policy must spend exactly the funding transaction's single output under the new

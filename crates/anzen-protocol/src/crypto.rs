@@ -20,6 +20,10 @@ pub trait Crypto {
 
     /// BIP341 key tweak `Q = P + t·G` for an x-only internal key.
     fn taproot_tweak(&mut self, internal_key: &[u8; 32], tweak: &[u8; 32]) -> Result<TweakedKey>;
+
+    /// `a·A + B` for compressed points `A`, `B` and a scalar `a` below the curve order, returned
+    /// compressed. BIP327 key aggregation of the vault's two keys is exactly this.
+    fn mul_add(&mut self, a: &[u8; 32], first: &[u8; 33], second: &[u8; 33]) -> Result<[u8; 33]>;
 }
 
 pub(crate) fn tagged_hash<C: Crypto + ?Sized>(
@@ -67,7 +71,7 @@ pub use software::SoftwareCrypto;
 mod software {
     use super::*;
     use crate::Error;
-    use secp256k1::{Parity, Scalar, Secp256k1, VerifyOnly, XOnlyPublicKey};
+    use secp256k1::{Parity, PublicKey, Scalar, Secp256k1, VerifyOnly, XOnlyPublicKey};
     use sha2::{Digest, Sha256};
 
     /// Pure-software primitives for phones, desktops and tests.
@@ -117,6 +121,24 @@ mod software {
                 output_key: output.serialize(),
                 odd_y: parity == Parity::Odd,
             })
+        }
+
+        fn mul_add(
+            &mut self,
+            a: &[u8; 32],
+            first: &[u8; 33],
+            second: &[u8; 33],
+        ) -> Result<[u8; 33]> {
+            let scalar = Scalar::from_be_bytes(*a).map_err(|_| Error::InvalidKey)?;
+            let first = PublicKey::from_slice(first).map_err(|_| Error::InvalidKey)?;
+            let second = PublicKey::from_slice(second).map_err(|_| Error::InvalidKey)?;
+            let product = first
+                .mul_tweak(&self.secp, &scalar)
+                .map_err(|_| Error::InvalidKey)?;
+            Ok(product
+                .combine(&second)
+                .map_err(|_| Error::InvalidKey)?
+                .serialize())
         }
     }
 }

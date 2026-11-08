@@ -27,31 +27,32 @@ This principle applies throughout the product: monthly spending begins disabled,
 
 ## Vault script
 
-Each vault output is Taproot with a provably unspendable **NUMS internal key**, so there is no usable key-path spend. All spending conditions are explicit Tapscript leaves.
+Each vault output is Taproot whose **internal key is the MuSig2 (BIP327) aggregate of `M` and `H`**. Both devices spend together through the key path with one joint signature; the hardware wallet's fallback is the tree's only leaf.
 
 Conceptually:
 
 ```text
 tr(
-  NUMS,
-  {
-    multi_a(2, M, H),
-    and_v(v:older(4259839), pk(H))
-  }
+  musig(M, H),
+  and_v(v:older(4259839), pk(H))
 )
 ```
 
 This means:
 
 ```text
-M + H       can spend immediately
+M + H       can spend immediately, with one joint key-path signature
 H alone     can spend after 65,535 × 512 seconds (33,553,920 s, about 388 days)
 M alone     can never spend
 ```
 
-`4259839` is the time-based BIP68 encoding: the type flag `1 << 22` plus 65,535 units of 512 seconds. Both leaves sit at depth one, so either spend reveals one 32-byte sibling hash.
+Each x-only key enters aggregation as its even-y point, and the two are sorted (BIP327 `KeySort`) so both devices derive the same key. The descriptor records the aggregate as a literal x-only key, `tr(<aggregate>,and_v(v:older(4259839),pk(H)))`. No secret for the aggregate exists anywhere; a joint signature still needs both device keys. A cooperative spend's witness is a single 64-byte signature, about 51 vbytes per input less than a two-signature `multi_a` leaf, and looks like any single-key Taproot spend. `4259839` is the time-based BIP68 encoding: the type flag `1 << 22` plus 65,535 units of 512 seconds. The fallback leaf is the whole tree, so its control block carries no sibling hash.
 
 The phone deliberately has no leaf of its own. The hardware wallet's seed is backed up by its maker and restores to the same key, so a lost signer does not need a path; the phone key, held on an everyday device and in a cloud backup, should never be able to drain savings. The phone's access is limited to the presigned monthly and emergency actions below.
+
+### Joint signatures
+
+MuSig2 takes two rounds, nonces then partial signatures. The phone signs first and the signer last: each request carries the phone's public nonce for every joint signature, and the signer returns its own nonce with its partial signature, so an approval stays one exchange. The signer derives its nonce with BIP327 `DeterministicSign` from its key, the phone's nonce, the aggregate key and the message, and keeps no state. The phone generates fresh random nonces per request and keeps each secret nonce in a single-use, device-only session until the signer answers. It verifies the signer's partial signatures before signing, and replaces the secret nonces with the finished signatures in one atomic write before any signature leaves the device. Reusing a phone nonce across two sessions would reveal the phone's key to whoever holds the signer's, so a retry is always a new request with new nonces. The whole presigned annual graph is finished during activation; no nonce outlives the exchange that created it.
 
 The normal receive policy deliberately reuses the same `M` and `H` keys and the same Taproot address for every vault output, including rollover outputs and cold change. This sacrifices address-level privacy in favor of a simple, durable single vault address. An emergency rotation after a key compromise necessarily creates a new policy and address.
 
@@ -97,10 +98,10 @@ The controller reuses the fixed vault public keys. Either device can spend it al
 
 Every presigned policy action contains two inputs:
 
-1. a vault input whose cooperative 2-of-2 leaf is signed by `M` and `H` during annual approval; and
+1. a vault input carrying the joint key-path signature of `M` and `H`, completed during annual approval; and
 2. one exact connector input that remains unsigned until execution.
 
-The signatures use Taproot `SIGHASH_DEFAULT`, so the signed vault input commits to every input, previous output, sequence, and output in the transaction—including the exact controller outpoint and the next controller output. The PSBT cannot finalize until a device signs its connector input. The phone adds that signature only when executing the action.
+The signature uses Taproot `SIGHASH_DEFAULT`, so the signed vault input commits to every input, previous output, sequence, and output in the transaction—including the exact controller outpoint and the next controller output. The PSBT cannot finalize until a device signs its connector input. The phone adds that signature only when executing the action.
 
 Revocation is constructed dynamically and spends only the current connector. It leaves principal untouched in the existing vault output and makes the presigned action invalid because the two transactions conflict on the connector outpoint. Phone revocation sends the connector value left after fees to a fresh hot-wallet change address. HWW revocation sends it to an explicitly displayed and approved destination. A revocation must never create another controller output.
 
@@ -179,7 +180,7 @@ The emergency reserve is funded before the allowance chain. If the balance can f
 
 ### Monthly and soft spending limits
 
-The monthly limit is fixed during policy activation. Both signatures on each monthly authorization commit to a transaction that releases exactly that amount to the mobile hot wallet. It is the effective hard limit and is enforced by Bitcoin signature validation of the fixed presigned transaction, not by a covenant opcode in the vault script.
+The monthly limit is fixed during policy activation. The joint signature on each monthly authorization commits to a transaction that releases exactly that amount to the mobile hot wallet. It is the effective hard limit and is enforced by Bitcoin signature validation of the fixed presigned transaction, not by a covenant opcode in the vault script.
 
 The soft limit is a phone-side preference that can be changed at any time between zero and the approved monthly limit. To use a smaller soft limit, the phone broadcasts the full authorization and immediately spends its output in a child transaction that:
 
@@ -194,7 +195,7 @@ The child can also provide CPFP fee bumping for the presigned parent. The soft l
 - **Phone-only revocation:** can spend the live monthly connector, leaving principal in place while invalidating the current and every later authorization.
 - **Phone-only emergency access:** can start one fixed emergency withdrawal per epoch, cancel it during the one-week window, or complete it after the delay without carrying the HWW.
 - **HWW-only policy revocation:** can spend every live connector to an explicitly verified destination, invalidating all phone-held policy actions without moving vault principal.
-- **Phone + HWW:** can spend the entire balance immediately.
+- **Phone + HWW:** can spend the entire balance immediately with one joint MuSig2 signature.
 - **Unused monthly allowances:** remain under full vault protection inside one live allowance-chain output.
 - **Phone alone, beyond that:** cannot move savings. Every other spend needs the HWW.
 - **HWW alone:** can sweep the vault after its time lock of about 388 days.
@@ -218,26 +219,29 @@ For the MVP:
 - the phone mnemonic and cold-storage descriptor are encrypted together with a random symmetric key and stored locally as a stand-in for cloud storage;
 - the symmetric key is authenticated-encrypted to an HWW-derived key, so only the signer can unwrap the backup;
 - every incomplete monthly and emergency action PSBT is separately encrypted to a phone-derived encryption key and stored as an independent local ciphertext;
+- the phone's pending MuSig2 nonces live in single-use local signing sessions that never enter the backup;
 - all ordinary transactions use a fixed fee rate of 1 sat/vB;
 - policy setup, rollover, signing, revocation, allowance use, emergency initiation/withdrawal/cancellation, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
 
 Device operations are separated in the CLI. Phone actions live under `anzen phone *`; HWW actions live under `anzen hww *`. Vault initialization is likewise explicit: initialize both devices in either order, then run `anzen init`. The final command prints only the cold-storage descriptor and public policy details; hot-wallet descriptors remain internal.
 
-An optional `anzen phone init --vanity` mode requires the HWW to be initialized first because the final address commits to both device keys. It searches the phone's final non-hardened vault-key derivation index across all available CPU threads until the combined address begins with `bc1pvault` on mainnet or `bcrt1pvault` on regtest. The mnemonic and winning index together reproduce the phone key, so the index is persisted in device state and included in authenticated encrypted recovery payloads. An existing funded vault can use `anzen phone rotate-key --vanity` to grind a replacement phone key against its current HWW key and feed the result through the ordinary HWW-approved cooperative rotation. That migration moves every old UTXO on-chain, preserves the active monthly and emergency policy, and reuses a matching pending vanity key if proposal construction is retried. The canonical Miniscript policy remains the source of truth; an optimized address encoder used during grinding is tested byte-for-byte against its scripts and resulting address.
+An optional `anzen phone init --vanity` mode requires the HWW to be initialized first because the final address commits to both device keys. It searches the phone's final non-hardened vault-key derivation index across all available CPU threads until the combined address begins with `bc1pvault` on mainnet or `bcrt1pvault` on regtest. The mnemonic and winning index together reproduce the phone key, so the index is persisted in device state and included in authenticated encrypted recovery payloads. An existing funded vault can use `anzen phone rotate-key --vanity` to grind a replacement phone key against its current HWW key and feed the result through the ordinary HWW-approved cooperative rotation. That migration moves every old UTXO on-chain, preserves the active monthly and emergency policy, and reuses a matching pending vanity key if proposal construction is retried. Grinding derives each candidate address with the protocol's own script construction, including MuSig2 key aggregation, and is tested against the canonical descriptor and its address.
 
 The implementation library is split into three public modules. `core` contains shared policy, PSBT, cryptographic, protocol, storage-format, and chain primitives and does not depend on a device implementation. `hot_wallet` contains phone/BDK behavior and depends only on `core`. `cold_wallet` contains the minimal HWW validation, backup, and signing surface and likewise depends only on `core`; it has no hot-wallet or network-client dependency. The CLI performs chain scanning/broadcast and composes these APIs into commands. This boundary is intended to let mobile apps reuse `hot_wallet`, hardware signing apps or firmware reuse the smaller `cold_wallet` surface, and reviewers audit the cold path without BDK/mobile implementation details.
 
 The vault-policy protocol has three stages:
 
-1. `anzen phone set-policy --monthly-limit SATS --emergency-access-limit SATS --output PROPOSAL.json` constructs the rollover, sequential allowance authorizations, and optional two-action emergency package. It signs the phone side of every vault input and emits a portable JSON policy object; action controller inputs remain unsigned.
-2. `anzen hww confirm-policy PROPOSAL.json --output APPROVED.json` presents the complete high-level policy once, independently validates every PSBT and connector transition, and signs the HWW side of every vault input without per-transaction prompts.
-3. `anzen phone activate-policy APPROVED.json` verifies both approvals, broadcasts the fully signed rollover, and stores every incomplete monthly and emergency action PSBT as an individually encrypted phone artifact. Later phone actions sign the one live controller input and broadcast only the selected action.
+1. `anzen phone set-policy --monthly-limit SATS --emergency-access-limit SATS --output PROPOSAL.json` constructs the rollover, sequential allowance authorizations, and optional two-action emergency package, starts a signing session with a fresh phone nonce for every vault input, and emits a portable JSON policy object; action controller inputs remain unsigned.
+2. `anzen hww confirm-policy PROPOSAL.json --output APPROVED.json` presents the complete high-level policy once, independently rebuilds every transaction and connector transition, and returns its nonce and partial signature for every vault input without per-transaction prompts.
+3. `anzen phone activate-policy APPROVED.json` verifies the signer's partial signatures, finishes every joint signature from its session, broadcasts the fully signed rollover, and stores every incomplete monthly and emergency action PSBT as an individually encrypted phone artifact. Later phone actions sign the one live controller input and broadcast only the selected action.
 
 The JSON interchange embeds PSBTs plus a versioned policy/batch manifest, so the simulated devices do not share an implicit signing workspace. Phone backup restoration, cooperative sweeping, and phone-key rotation use the same explicit JSON handoff model.
 
 In addition to focused automated tests, the repository should provide isolated end-to-end terminal tests funded with 2 BTC and configured with a 0.1 BTC monthly limit. They should print human-readable seeds and public keys (regtest only), policies, timelocks, Miniscript, addresses, transaction IDs, balances, connector state, presigned transaction details, simulated time and block advancement, sequential allowance execution, phone and HWW revocation, successful and cancelled emergency access, on-time and forgotten annual rollover, recovery actions, and the loss/theft scenarios described below.
 
-The demonstration should use the real BIP68 30-day delay for each allowance hop on a real Bitcoin Core regtest node. The test harness may use regtest mock time and on-demand block generation to advance the chain monotonically, but it must show that step 1 is relative to rollover confirmation, step 2 is relative to step 1 confirmation, and a live-hop revocation invalidates later descendants. The HWW's time-based fallback is exercised the same way: mock time moves forward and eleven blocks are mined so median time past reaches the boundary, and the test shows Bitcoin Core rejecting the sweep one second before it opens and accepting the same signed transaction at the boundary.
+The demonstration should use the real BIP68 30-day delay for each allowance hop on a real Bitcoin Core regtest node. The test harness may use regtest mock time and on-demand block generation to advance the chain monotonically, but it must show that step 1 is relative to rollover confirmation, step 2 is relative to step 1 confirmation, and a live-hop revocation invalidates later descendants. The HWW's time-based fallback is exercised the same way: mock time moves forward and eleven blocks are mined so median time past reaches the boundary, and the test shows Bitcoin Core rejecting the sweep one second before it opens and accepting the same signed transaction at the boundary. The protocol's key aggregation is checked against an independent MuSig2 implementation, and joint key-path signatures are spent through the same Bitcoin Core node in the rollover, rotation and sweep tests.
+
+The hardware-wallet performance benchmark shared by the Ledger app and the Trezor port still models the earlier script-path signing workload. Measuring on-device MuSig2 partial signing, which needs point arithmetic on each device, is follow-up work.
 
 ## Loss and theft scenarios
 
@@ -283,6 +287,6 @@ The demonstration should use the real BIP68 30-day delay for each allowance hop 
 
 ## Summary
 
-The design provides renewable 2-of-2 cold storage, bounded sequential mobile liquidity, recovery from a lost phone with the signer, and a delayed hardware-wallet-only fallback, using only existing Bitcoin consensus rules. It is a hardware wallet with a second factor: the phone can never be the single point of theft.
+The design provides renewable 2-of-2 cold storage spent with one joint MuSig2 signature, bounded sequential mobile liquidity, recovery from a lost phone with the signer, and a delayed hardware-wallet-only fallback, using only existing Bitcoin consensus rules. It is a hardware wallet with a second factor: the phone can never be the single point of theft.
 
 Its central trade-off is operational: users must complete an annual rollover before the hardware wallet's solo path opens. In exchange, they get strong cold-storage security without carrying the HWW for routine monthly spending and without relying on a third-party co-signer.

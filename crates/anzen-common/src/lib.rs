@@ -11,6 +11,7 @@ pub mod crypto;
 pub mod device_channel;
 pub mod device_rotation;
 pub mod keys;
+pub mod musig;
 pub mod outbox;
 pub mod policy;
 pub mod protocol;

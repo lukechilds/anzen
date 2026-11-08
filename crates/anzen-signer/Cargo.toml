@@ -11,6 +11,8 @@ anzen-protocol = { path = "../anzen-protocol" }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 
 [dev-dependencies]
+# The host MuSig2 code, so these tests use the same signing the software signer and phone do.
+anzen-common = { path = "../anzen-common" }
 anzen-protocol = { path = "../anzen-protocol", features = ["software"] }
 bitcoin = { version = "0.32.9", features = ["rand-std"] }
 hex-literal = "1.1"

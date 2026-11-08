@@ -39,6 +39,21 @@ fn random_keys() -> VaultKeys {
     }
 }
 
+/// The BIP327 aggregate of both keys (even-y points, sorted), computed with an independent
+/// MuSig2 implementation rather than the protocol's own.
+fn musig_context(keys: &VaultKeys) -> musig2::KeyAggContext {
+    let mut points = [keys.phone, keys.hww]
+        .map(|key| musig2::secp::Point::lift_x(key.0).unwrap())
+        .to_vec();
+    points.sort_by_key(|point| point.serialize());
+    musig2::KeyAggContext::new(points).unwrap()
+}
+
+fn aggregate_hex(keys: &VaultKeys) -> String {
+    let aggregate: musig2::secp::Point = musig_context(keys).aggregated_pubkey();
+    bitcoin::hex::DisplayHex::to_lower_hex_string(&aggregate.serialize_xonly()[..])
+}
+
 fn descriptors(
     keys: &VaultKeys,
 ) -> (
@@ -47,8 +62,8 @@ fn descriptors(
 ) {
     let phone = keys.phone.to_hex();
     let hww = keys.hww.to_hex();
-    let vault =
-        format!("tr({NUMS},{{multi_a(2,{phone},{hww}),and_v(v:older(4259839),pk({hww}))}})");
+    let aggregate = aggregate_hex(keys);
+    let vault = format!("tr({aggregate},and_v(v:older(4259839),pk({hww})))");
     let controller = format!("tr({NUMS},{{pk({phone}),pk({hww})}})");
     (
         Descriptor::from_str(&vault).unwrap(),
@@ -72,8 +87,14 @@ fn hot_destination() -> Vec<u8> {
     ScriptBuf::new_p2tr(&secp, key, None).to_bytes()
 }
 
-/// Leaf scripts and control blocks as Miniscript satisfies them, for exact witness sizes.
+/// Leaf scripts and control blocks as Miniscript satisfies them, for exact witness sizes. The
+/// cooperative key path is a single signature.
 fn witness_for(keys: &VaultKeys, path: SpendPath) -> Witness {
+    if path == SpendPath::Cooperative {
+        let mut witness = Witness::new();
+        witness.push([0_u8; 64]);
+        return witness;
+    }
     let (vault, controller) = descriptors(keys);
     let descriptor = if path.is_controller() {
         controller
@@ -88,8 +109,8 @@ fn witness_for(keys: &VaultKeys, path: SpendPath) -> Witness {
     };
     let info = tr.spend_info();
     let (target_key, depth, delay) = match path {
-        SpendPath::Cooperative => (None, 1, None),
-        SpendPath::HwwRecovery => (Some(keys.hww), 1, Some(4_259_839)),
+        SpendPath::Cooperative => unreachable!("handled above"),
+        SpendPath::HwwRecovery => (Some(keys.hww), 0, Some(4_259_839)),
         SpendPath::ControllerPhone => (Some(keys.phone), 1, None),
         SpendPath::ControllerHww => (Some(keys.hww), 1, None),
     };
@@ -115,10 +136,7 @@ fn witness_for(keys: &VaultKeys, path: SpendPath) -> Witness {
         .control_block(&(script.clone(), LeafVersion::TapScript))
         .unwrap();
     let mut witness = Witness::new();
-    let signatures = if path == SpendPath::Cooperative { 2 } else { 1 };
-    for _ in 0..signatures {
-        witness.push([0_u8; 64]);
-    }
+    witness.push([0_u8; 64]);
     witness.push(script.as_bytes());
     witness.push(control.serialize());
     witness
@@ -158,7 +176,6 @@ fn every_leaf_hash_matches_rust_bitcoin() {
     let keys = random_keys();
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     for (path, leaf) in [
-        (SpendPath::Cooperative, scripts.vault.cooperative_leaf),
         (SpendPath::HwwRecovery, scripts.vault.hww_recovery_leaf),
         (SpendPath::ControllerPhone, scripts.controller.phone_leaf),
         (SpendPath::ControllerHww, scripts.controller.hww_leaf),
@@ -241,6 +258,17 @@ fn serialization_vsize_and_sighashes_match_rust_bitcoin() {
         let cache = SighashCache::new(&mut crypto, &transaction, &prevouts).unwrap();
         let mut bitcoin_cache = BitcoinSighashCache::new(&bitcoin_tx);
         for (index, spend) in spends.iter().enumerate() {
+            if *spend == SpendPath::Cooperative {
+                let expected = bitcoin_cache
+                    .taproot_key_spend_signature_hash(
+                        index,
+                        &Prevouts::All(&bitcoin_prevouts),
+                        TapSighashType::Default,
+                    )
+                    .unwrap();
+                assert_eq!(cache.key_path(&mut crypto, index), expected.to_byte_array());
+                continue;
+            }
             let witness = witness_for(&keys, *spend);
             let script = ScriptBuf::from_bytes(witness.nth(witness.len() - 2).unwrap().to_vec());
             let leaf = TapLeafHash::from_script(&script, LeafVersion::TapScript);
@@ -360,10 +388,9 @@ fn policy_signing_jobs_cover_every_vault_input_and_match_rust_bitcoin() {
             })
             .collect::<Vec<_>>();
         let expected = BitcoinSighashCache::new(&bitcoin_tx)
-            .taproot_script_spend_signature_hash(
+            .taproot_key_spend_signature_hash(
                 job.input,
                 &Prevouts::All(&prevouts),
-                TapLeafHash::from_byte_array(scripts.vault.cooperative_leaf),
                 TapSighashType::Default,
             )
             .unwrap();
@@ -391,5 +418,68 @@ fn sweeps_pay_exactly_the_fixed_fee_rate() {
         }
         assert_eq!(sweep.fee_sats, bitcoin_tx.vsize() as u64);
         assert_eq!(sweep.amount_sats + sweep.fee_sats, 3_000_000);
+    }
+}
+
+#[test]
+fn the_internal_key_is_the_bip327_aggregate_and_joint_signatures_verify() {
+    use musig2::secp::{Point, Scalar};
+    let mut crypto = SoftwareCrypto::new();
+    let secp = Secp256k1::new();
+    for round in 0..16_u8 {
+        // BIP327 aggregates the even-y point of each x-only key, so sign with that point's secret.
+        let secret = || {
+            let keypair = Keypair::new(&secp, &mut thread_rng());
+            let scalar = Scalar::from_slice(&keypair.secret_bytes()).unwrap();
+            if scalar.base_point_mul().has_even_y() {
+                scalar
+            } else {
+                -scalar
+            }
+        };
+        let (phone, hww) = (secret(), secret());
+        let keys = VaultKeys {
+            phone: XOnlyKey(phone.base_point_mul().serialize_xonly()),
+            hww: XOnlyKey(hww.base_point_mul().serialize_xonly()),
+        };
+        let scripts = Scripts::new(&mut crypto, &keys).unwrap();
+        let untweaked: Point = musig_context(&keys).aggregated_pubkey();
+        assert_eq!(scripts.vault.internal_key, untweaked.serialize_xonly());
+        let context = musig_context(&keys)
+            .with_taproot_tweak(&scripts.vault.merkle_root)
+            .unwrap();
+        let output: Point = context.aggregated_pubkey();
+        assert_eq!(scripts.vault.output.output_key, output.serialize_xonly());
+
+        // A full two-round signature over a key-path message verifies under rust-bitcoin.
+        let message = [round; 32];
+        let nonces = [phone, hww].map(|key| {
+            let mut seed = [0_u8; 32];
+            thread_rng().fill_bytes(&mut seed);
+            musig2::SecNonceBuilder::new(seed)
+                .with_seckey(key)
+                .with_message(&message)
+                .build()
+        });
+        let aggregate_nonce =
+            musig2::AggNonce::sum(nonces.iter().map(|nonce| nonce.public_nonce()));
+        let partials: Vec<musig2::PartialSignature> = [phone, hww]
+            .into_iter()
+            .zip(nonces)
+            .map(|(key, nonce)| {
+                musig2::sign_partial(&context, key, nonce, &aggregate_nonce, message).unwrap()
+            })
+            .collect();
+        let signature: musig2::LiftedSignature =
+            musig2::aggregate_partial_signatures(&context, &aggregate_nonce, partials, message)
+                .unwrap();
+        let output_key =
+            bitcoin::XOnlyPublicKey::from_slice(&scripts.vault.output.output_key).unwrap();
+        secp.verify_schnorr(
+            &bitcoin::secp256k1::schnorr::Signature::from_slice(&signature.serialize()).unwrap(),
+            &bitcoin::secp256k1::Message::from_digest(message),
+            &output_key,
+        )
+        .unwrap();
     }
 }

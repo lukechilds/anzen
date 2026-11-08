@@ -7,7 +7,7 @@
 use super::*;
 use crate::{
     ceremony::{self as policy_ceremony, PolicyLimits},
-    recovery,
+    cosigning, recovery,
 };
 use anzen_common::storage::fs::StoragePath;
 use anzen_common::{
@@ -127,10 +127,12 @@ impl WalletApplication {
         };
         let schedule = super::super::active_schedule(&self.data_dir)?;
         let mut addresses = HotWallet::ephemeral(&new_phone)?;
+        let old_phone = load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?;
         self.build_rotation(
             backend,
             RotationSource::Current,
             old_config,
+            &old_phone,
             &new_phone,
             &mut addresses,
             |spent| recovery::allowances_reported_complete(schedule.as_ref(), spent),
@@ -156,21 +158,25 @@ impl WalletApplication {
         let new_phone = load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?;
         let mut addresses = HotWallet::open_or_create(&self.data_dir)?;
         let last_approved = bundle.last_approved_policy;
+        let old_phone = self.restored_keys(&old_config)?;
         self.build_rotation(
             backend,
             RotationSource::Restored,
             old_config,
+            &old_phone,
             &new_phone,
             &mut addresses,
             |spent| allowances_complete(last_approved.as_ref(), spent),
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_rotation(
         &self,
         backend: &dyn HotWalletBackend,
         source: RotationSource,
         old_config: VaultConfig,
+        old_phone: &DeviceKeys,
         new_phone: &DeviceKeys,
         addresses: &mut HotWallet,
         previous_complete: impl FnOnce(&[VaultUtxo]) -> Result<bool>,
@@ -209,7 +215,12 @@ impl WalletApplication {
             SpendPath::Cooperative,
             &new_scripts.vault.script_pubkey,
         ))?;
-        let renewed_policy = self.renewal_request(&new_config, &sweep, addresses)?;
+        let sweep_nonces = cosigning::Phone {
+            data_dir: &self.data_dir,
+            keys: old_phone,
+        }
+        .start(&cosigning::spend_jobs(&old_scripts, &sweep)?)?;
+        let renewed_policy = self.renewal_request(&new_config, &sweep, addresses, new_phone)?;
         let renewed_destinations = renewed_policy.as_ref().map_or(0, |request| {
             request.allowance_destinations.len()
                 + usize::from(request.emergency_destination.is_some())
@@ -226,6 +237,7 @@ impl WalletApplication {
                 revoke_connectors: protocol::inputs(&connectors),
                 renewed_policy,
                 previous_allowances_complete,
+                sweep_nonces,
             },
             new_config,
             backup_request,
@@ -250,6 +262,7 @@ impl WalletApplication {
         config: &VaultConfig,
         funding: &anzen_protocol::spend::Spend,
         addresses: &mut HotWallet,
+        new_phone: &DeviceKeys,
     ) -> Result<Option<PolicyRequest>> {
         if config.monthly_limit_sats == 0 && config.emergency_access_limit_sats == 0 {
             return Ok(None);
@@ -277,6 +290,10 @@ impl WalletApplication {
             },
             addresses,
             false,
+            cosigning::Phone {
+                data_dir: &self.data_dir,
+                keys: new_phone,
+            },
         )?))
     }
 
@@ -324,8 +341,13 @@ impl WalletApplication {
                 load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?,
             ),
         };
-        let finalized =
-            crate::device_rotation::finalize(&pending.request, old_config, approval, &old_phone)?;
+        let finalized = crate::device_rotation::finalize(
+            &self.data_dir,
+            &pending.request,
+            old_config,
+            approval,
+            &old_phone,
+        )?;
         let policy = VaultPolicy::new_for_network(
             new_phone.vault_pubkey,
             XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
@@ -338,7 +360,12 @@ impl WalletApplication {
         // Verify the renewed policy completely before the first broadcast: a sweep into the new
         // vault must never leave it without the policy the user approved.
         if let Some(renewed) = &finalized.renewed_policy {
-            policy_ceremony::ApprovedPolicy::verify(&new_config, renewed, &new_phone)?;
+            policy_ceremony::ApprovedPolicy::verify(
+                &self.data_dir,
+                &new_config,
+                renewed,
+                &new_phone,
+            )?;
         }
         if pending.source == RotationSource::Restored
             && storage::config_exists(&self.data_dir)

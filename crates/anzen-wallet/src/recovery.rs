@@ -3,7 +3,9 @@
 
 use crate::{
     ceremony::Schedule,
-    transactions::{attach_signatures, finalize_vault_psbt, protocol_psbt, sign_vault_psbt},
+    transactions::{
+        attach_key_path_signatures, finalize_vault_psbt, protocol_psbt, sign_vault_psbt,
+    },
 };
 use anyhow::{Context, Result, bail};
 use anzen_chain::{Blockchain, ChainTip};
@@ -21,10 +23,7 @@ use anzen_protocol::{
     tx,
     wire::{self, SweepApproval, SweepRequest},
 };
-use bitcoin::{
-    Address, Psbt, Transaction, Txid, hashes::Hash, key::Secp256k1, secp256k1::XOnlyPublicKey,
-    taproot::TapLeafHash,
-};
+use bitcoin::{Address, Psbt, Transaction, Txid, key::Secp256k1, secp256k1::XOnlyPublicKey};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, str::FromStr};
 
@@ -216,32 +215,35 @@ pub fn not_mature(all_utxos: &[VaultUtxo], clock: &RecoveryClock) -> Result<()> 
     }
 }
 
-/// Parameters for a cooperative sweep of `utxos` to `destination`.
+/// Parameters for a cooperative sweep of `utxos` to `destination`, with this phone's nonces.
 pub fn sweep_request(
     config: &VaultConfig,
     utxos: &[VaultUtxo],
     destination: &Address,
+    phone: crate::cosigning::Phone<'_>,
 ) -> Result<SweepRequest> {
     if utxos.is_empty() {
         bail!("vault has no confirmed UTXOs to sweep");
     }
     vault_spend(config, utxos, SweepPath::Cooperative, destination)?;
-    let request = SweepRequest {
+    let mut request = SweepRequest {
         version: wire::VERSION,
         network: protocol::config_network(config)?,
         keys: protocol::vault_keys(config)?,
         inputs: protocol::inputs(utxos),
         destination: destination.to_string(),
+        phone_nonces: Vec::new(),
     };
-    protocol::protocol(request.build(&mut SoftwareCrypto::new()))?;
+    let (scripts, spend) = protocol::protocol(request.build(&mut SoftwareCrypto::new()))?;
+    request.phone_nonces = phone.start(&crate::cosigning::spend_jobs(&scripts, &spend)?)?;
     Ok(request)
 }
 
-/// Rebuild an approved cooperative sweep, verify the signer, add the phone and finalize.
+/// Rebuild an approved cooperative sweep, finish its joint signatures and finalize.
 pub fn finalize_cooperative_sweep(
     config: &VaultConfig,
     approval: &SweepApproval,
-    phone: &DeviceKeys,
+    phone: crate::cosigning::Phone<'_>,
 ) -> Result<(Transaction, SweepResult)> {
     let request = &approval.request;
     if approval.version != wire::VERSION
@@ -253,19 +255,18 @@ pub fn finalize_cooperative_sweep(
     let (scripts, spend) = protocol::protocol(request.build(&mut SoftwareCrypto::new()))?;
     let (_, vault, controller) = policies(config)?;
     let mut psbt = cooperative_psbt(&spend, &vault, &controller)?;
-    attach_signatures(
+    let signatures = phone
+        .finish(
+            &crate::cosigning::spend_jobs(&scripts, &spend)?,
+            &request.phone_nonces,
+            &approval.signatures,
+        )
+        .context("cooperative sweep approval contains an invalid signature")?;
+    attach_key_path_signatures(
         &mut psbt,
         &(0..spend.transaction.input.len()).collect::<Vec<_>>(),
-        XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?,
-        TapLeafHash::from_byte_array(scripts.vault.cooperative_leaf),
-        &approval.signatures,
-    )
-    .context("cooperative sweep approval contains an invalid signature")?;
-    sign_vault_psbt(
-        &mut psbt,
-        &vault,
-        SpendPath::Cooperative,
-        &phone.vault_keypair,
+        XOnlyPublicKey::from_slice(&scripts.vault.output.output_key)?,
+        &signatures,
     )?;
     let transaction = finalize_vault_psbt(psbt)?;
     Ok((transaction, SweepResult::from_spend(&spend)))
@@ -394,7 +395,7 @@ pub fn recovery_review_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::{Amount, OutPoint, ScriptBuf, TxOut};
+    use bitcoin::{Amount, OutPoint, ScriptBuf, TxOut, hashes::Hash};
 
     const DELAY: u64 = HWW_RECOVERY_SECONDS as u64;
 
