@@ -635,27 +635,40 @@ struct Candidate {
     output_x: Fe,
 }
 
+// Each invocation evaluates PER_INVOCATION consecutive candidates, which lets a kernel share
+// work between them (one field inversion for the batch).
 @compute @workgroup_size(WORKGROUP_SIZE)
 fn search(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params[P_COUNT] {
+    let first = id.x * PER_INVOCATION;
+    let count = params[P_COUNT];
+    if first >= count {
         return;
     }
-    let index = params[P_START] + id.x;
-    let c = candidate(index);
+    let batch = candidates(params[P_START] + first);
     let bits = params[P_TARGET_BITS];
-    if c.valid && (c.output_x[7] >> (32u - bits)) == params[P_TARGET_VALUE] {
-        atomicMin(&found[0], index);
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        let c = batch[j];
+        if first + j < count && c.valid && (c.output_x[7] >> (32u - bits)) == params[P_TARGET_VALUE] {
+            atomicMin(&found[0], params[P_START] + first + j);
+        }
     }
 }
 
 @compute @workgroup_size(WORKGROUP_SIZE)
 fn debug(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params[P_COUNT] {
+    let first = id.x * PER_INVOCATION;
+    let count = params[P_COUNT];
+    if first >= count {
         return;
     }
-    let c = candidate(params[P_START] + id.x);
-    debug_out[id.x * 9u] = select(0u, 1u, c.valid);
-    for (var i = 0u; i < 8u; i++) {
-        debug_out[id.x * 9u + 1u + i] = c.output_x[i];
+    let batch = candidates(params[P_START] + first);
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        if first + j < count {
+            let at = (first + j) * 9u;
+            debug_out[at] = select(0u, 1u, batch[j].valid);
+            for (var i = 0u; i < 8u; i++) {
+                debug_out[at + 1u + i] = batch[j].output_x[i];
+            }
+        }
     }
 }

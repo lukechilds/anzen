@@ -174,3 +174,11 @@ fn candidate(index: u32) -> Candidate {
     return result;
 }
 
+
+const PER_INVOCATION: u32 = 1u;
+
+fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
+    var batch: array<Candidate, PER_INVOCATION>;
+    batch[0] = candidate(first);
+    return batch;
+}
