@@ -1,0 +1,586 @@
+// The field modulo p in 20 limbs of 13 bits, for point arithmetic. Products of 13-bit limbs fit
+// in 26 bits, so a column of 20 of them sums in a u32 without carry handling: about two ops per
+// limb product, against about twenty for 32-bit limbs built from 16-bit halves.
+//
+// Every function returns a normalized element: limbs below 2^13 and a value below 2^260, not
+// necessarily below p. `f_canonical` reduces fully, for comparisons and output.
+
+alias F = array<u32, 20>;
+
+const LIMB_MASK: u32 = 0x1fffu;
+const P13 = F(7215u, 8191u, 8127u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 8191u, 511u);
+// 32p with every limb at least 2^13, so a + 32p - b never borrows for normalized b.
+const P13_TIMES_32 = F(17888u, 24570u, 22525u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 24573u, 16381u);
+
+struct JacF {
+    x: F,
+    y: F,
+    z: F,
+    infinity: bool,
+}
+
+struct AffF {
+    x: F,
+    y: F,
+    infinity: bool,
+}
+
+// Carry every limb into the next, then fold what reaches 2^260 back in with
+// 2^260 ≡ 2^36 + 15632 (mod p): 15632 at limb 0 and 2^10 at limb 2 (2^36 = 2^26 · 2^10).
+fn f_normalize(a: F) -> F {
+    var r = a;
+    var v: u32;
+    v = r[0]; r[0] = v & LIMB_MASK;
+    v = r[1] + (v >> 13u); r[1] = v & LIMB_MASK;
+    v = r[2] + (v >> 13u); r[2] = v & LIMB_MASK;
+    v = r[3] + (v >> 13u); r[3] = v & LIMB_MASK;
+    v = r[4] + (v >> 13u); r[4] = v & LIMB_MASK;
+    v = r[5] + (v >> 13u); r[5] = v & LIMB_MASK;
+    v = r[6] + (v >> 13u); r[6] = v & LIMB_MASK;
+    v = r[7] + (v >> 13u); r[7] = v & LIMB_MASK;
+    v = r[8] + (v >> 13u); r[8] = v & LIMB_MASK;
+    v = r[9] + (v >> 13u); r[9] = v & LIMB_MASK;
+    v = r[10] + (v >> 13u); r[10] = v & LIMB_MASK;
+    v = r[11] + (v >> 13u); r[11] = v & LIMB_MASK;
+    v = r[12] + (v >> 13u); r[12] = v & LIMB_MASK;
+    v = r[13] + (v >> 13u); r[13] = v & LIMB_MASK;
+    v = r[14] + (v >> 13u); r[14] = v & LIMB_MASK;
+    v = r[15] + (v >> 13u); r[15] = v & LIMB_MASK;
+    v = r[16] + (v >> 13u); r[16] = v & LIMB_MASK;
+    v = r[17] + (v >> 13u); r[17] = v & LIMB_MASK;
+    v = r[18] + (v >> 13u); r[18] = v & LIMB_MASK;
+    v = r[19] + (v >> 13u); r[19] = v & LIMB_MASK;
+    var carry = v >> 13u;
+    r[0] += carry * 15632u;
+    r[2] += carry * 1024u;
+    v = r[0]; r[0] = v & LIMB_MASK;
+    v = r[1] + (v >> 13u); r[1] = v & LIMB_MASK;
+    v = r[2] + (v >> 13u); r[2] = v & LIMB_MASK;
+    v = r[3] + (v >> 13u); r[3] = v & LIMB_MASK;
+    v = r[4] + (v >> 13u); r[4] = v & LIMB_MASK;
+    v = r[5] + (v >> 13u); r[5] = v & LIMB_MASK;
+    v = r[6] + (v >> 13u); r[6] = v & LIMB_MASK;
+    v = r[7] + (v >> 13u); r[7] = v & LIMB_MASK;
+    v = r[8] + (v >> 13u); r[8] = v & LIMB_MASK;
+    v = r[9] + (v >> 13u); r[9] = v & LIMB_MASK;
+    v = r[10] + (v >> 13u); r[10] = v & LIMB_MASK;
+    v = r[11] + (v >> 13u); r[11] = v & LIMB_MASK;
+    v = r[12] + (v >> 13u); r[12] = v & LIMB_MASK;
+    v = r[13] + (v >> 13u); r[13] = v & LIMB_MASK;
+    v = r[14] + (v >> 13u); r[14] = v & LIMB_MASK;
+    v = r[15] + (v >> 13u); r[15] = v & LIMB_MASK;
+    v = r[16] + (v >> 13u); r[16] = v & LIMB_MASK;
+    v = r[17] + (v >> 13u); r[17] = v & LIMB_MASK;
+    v = r[18] + (v >> 13u); r[18] = v & LIMB_MASK;
+    v = r[19] + (v >> 13u); r[19] = v & LIMB_MASK;
+    carry = v >> 13u;
+    r[0] += carry * 15632u;
+    r[2] += carry * 1024u;
+    r[1] += r[0] >> 13u;
+    r[0] &= LIMB_MASK;
+    r[2] += r[1] >> 13u;
+    r[1] &= LIMB_MASK;
+    r[3] += r[2] >> 13u;
+    r[2] &= LIMB_MASK;
+    return r;
+}
+
+fn f_add(a: F, b: F) -> F {
+    var r: F;
+    r[0] = a[0] + b[0];
+    r[1] = a[1] + b[1];
+    r[2] = a[2] + b[2];
+    r[3] = a[3] + b[3];
+    r[4] = a[4] + b[4];
+    r[5] = a[5] + b[5];
+    r[6] = a[6] + b[6];
+    r[7] = a[7] + b[7];
+    r[8] = a[8] + b[8];
+    r[9] = a[9] + b[9];
+    r[10] = a[10] + b[10];
+    r[11] = a[11] + b[11];
+    r[12] = a[12] + b[12];
+    r[13] = a[13] + b[13];
+    r[14] = a[14] + b[14];
+    r[15] = a[15] + b[15];
+    r[16] = a[16] + b[16];
+    r[17] = a[17] + b[17];
+    r[18] = a[18] + b[18];
+    r[19] = a[19] + b[19];
+    return f_normalize(r);
+}
+
+fn f_sub(a: F, b: F) -> F {
+    var r: F;
+    r[0] = a[0] + P13_TIMES_32[0] - b[0];
+    r[1] = a[1] + P13_TIMES_32[1] - b[1];
+    r[2] = a[2] + P13_TIMES_32[2] - b[2];
+    r[3] = a[3] + P13_TIMES_32[3] - b[3];
+    r[4] = a[4] + P13_TIMES_32[4] - b[4];
+    r[5] = a[5] + P13_TIMES_32[5] - b[5];
+    r[6] = a[6] + P13_TIMES_32[6] - b[6];
+    r[7] = a[7] + P13_TIMES_32[7] - b[7];
+    r[8] = a[8] + P13_TIMES_32[8] - b[8];
+    r[9] = a[9] + P13_TIMES_32[9] - b[9];
+    r[10] = a[10] + P13_TIMES_32[10] - b[10];
+    r[11] = a[11] + P13_TIMES_32[11] - b[11];
+    r[12] = a[12] + P13_TIMES_32[12] - b[12];
+    r[13] = a[13] + P13_TIMES_32[13] - b[13];
+    r[14] = a[14] + P13_TIMES_32[14] - b[14];
+    r[15] = a[15] + P13_TIMES_32[15] - b[15];
+    r[16] = a[16] + P13_TIMES_32[16] - b[16];
+    r[17] = a[17] + P13_TIMES_32[17] - b[17];
+    r[18] = a[18] + P13_TIMES_32[18] - b[18];
+    r[19] = a[19] + P13_TIMES_32[19] - b[19];
+    return f_normalize(r);
+}
+
+fn f_neg(a: F) -> F {
+    var r: F;
+    r[0] = P13_TIMES_32[0] - a[0];
+    r[1] = P13_TIMES_32[1] - a[1];
+    r[2] = P13_TIMES_32[2] - a[2];
+    r[3] = P13_TIMES_32[3] - a[3];
+    r[4] = P13_TIMES_32[4] - a[4];
+    r[5] = P13_TIMES_32[5] - a[5];
+    r[6] = P13_TIMES_32[6] - a[6];
+    r[7] = P13_TIMES_32[7] - a[7];
+    r[8] = P13_TIMES_32[8] - a[8];
+    r[9] = P13_TIMES_32[9] - a[9];
+    r[10] = P13_TIMES_32[10] - a[10];
+    r[11] = P13_TIMES_32[11] - a[11];
+    r[12] = P13_TIMES_32[12] - a[12];
+    r[13] = P13_TIMES_32[13] - a[13];
+    r[14] = P13_TIMES_32[14] - a[14];
+    r[15] = P13_TIMES_32[15] - a[15];
+    r[16] = P13_TIMES_32[16] - a[16];
+    r[17] = P13_TIMES_32[17] - a[17];
+    r[18] = P13_TIMES_32[18] - a[18];
+    r[19] = P13_TIMES_32[19] - a[19];
+    return f_normalize(r);
+}
+
+// Reduce a product's 39 column sums (each below 2^31) to a normalized element, folding
+// with 2^260 ≡ 2^36 + 15632 (mod p).
+fn f_reduce(c: array<u32, 39>) -> F {
+    var l: array<u32, 40>;
+    var v: u32;
+    v = c[0]; l[0] = v & LIMB_MASK;
+    v = c[1] + (v >> 13u); l[1] = v & LIMB_MASK;
+    v = c[2] + (v >> 13u); l[2] = v & LIMB_MASK;
+    v = c[3] + (v >> 13u); l[3] = v & LIMB_MASK;
+    v = c[4] + (v >> 13u); l[4] = v & LIMB_MASK;
+    v = c[5] + (v >> 13u); l[5] = v & LIMB_MASK;
+    v = c[6] + (v >> 13u); l[6] = v & LIMB_MASK;
+    v = c[7] + (v >> 13u); l[7] = v & LIMB_MASK;
+    v = c[8] + (v >> 13u); l[8] = v & LIMB_MASK;
+    v = c[9] + (v >> 13u); l[9] = v & LIMB_MASK;
+    v = c[10] + (v >> 13u); l[10] = v & LIMB_MASK;
+    v = c[11] + (v >> 13u); l[11] = v & LIMB_MASK;
+    v = c[12] + (v >> 13u); l[12] = v & LIMB_MASK;
+    v = c[13] + (v >> 13u); l[13] = v & LIMB_MASK;
+    v = c[14] + (v >> 13u); l[14] = v & LIMB_MASK;
+    v = c[15] + (v >> 13u); l[15] = v & LIMB_MASK;
+    v = c[16] + (v >> 13u); l[16] = v & LIMB_MASK;
+    v = c[17] + (v >> 13u); l[17] = v & LIMB_MASK;
+    v = c[18] + (v >> 13u); l[18] = v & LIMB_MASK;
+    v = c[19] + (v >> 13u); l[19] = v & LIMB_MASK;
+    v = c[20] + (v >> 13u); l[20] = v & LIMB_MASK;
+    v = c[21] + (v >> 13u); l[21] = v & LIMB_MASK;
+    v = c[22] + (v >> 13u); l[22] = v & LIMB_MASK;
+    v = c[23] + (v >> 13u); l[23] = v & LIMB_MASK;
+    v = c[24] + (v >> 13u); l[24] = v & LIMB_MASK;
+    v = c[25] + (v >> 13u); l[25] = v & LIMB_MASK;
+    v = c[26] + (v >> 13u); l[26] = v & LIMB_MASK;
+    v = c[27] + (v >> 13u); l[27] = v & LIMB_MASK;
+    v = c[28] + (v >> 13u); l[28] = v & LIMB_MASK;
+    v = c[29] + (v >> 13u); l[29] = v & LIMB_MASK;
+    v = c[30] + (v >> 13u); l[30] = v & LIMB_MASK;
+    v = c[31] + (v >> 13u); l[31] = v & LIMB_MASK;
+    v = c[32] + (v >> 13u); l[32] = v & LIMB_MASK;
+    v = c[33] + (v >> 13u); l[33] = v & LIMB_MASK;
+    v = c[34] + (v >> 13u); l[34] = v & LIMB_MASK;
+    v = c[35] + (v >> 13u); l[35] = v & LIMB_MASK;
+    v = c[36] + (v >> 13u); l[36] = v & LIMB_MASK;
+    v = c[37] + (v >> 13u); l[37] = v & LIMB_MASK;
+    v = c[38] + (v >> 13u); l[38] = v & LIMB_MASK;
+    l[39] = v >> 13u;
+    var r: array<u32, 22>;
+    r[0] = l[0] + l[20] * 15632u;
+    r[1] = l[1] + l[21] * 15632u;
+    r[2] = l[2] + l[22] * 15632u + l[20] * 1024u;
+    r[3] = l[3] + l[23] * 15632u + l[21] * 1024u;
+    r[4] = l[4] + l[24] * 15632u + l[22] * 1024u;
+    r[5] = l[5] + l[25] * 15632u + l[23] * 1024u;
+    r[6] = l[6] + l[26] * 15632u + l[24] * 1024u;
+    r[7] = l[7] + l[27] * 15632u + l[25] * 1024u;
+    r[8] = l[8] + l[28] * 15632u + l[26] * 1024u;
+    r[9] = l[9] + l[29] * 15632u + l[27] * 1024u;
+    r[10] = l[10] + l[30] * 15632u + l[28] * 1024u;
+    r[11] = l[11] + l[31] * 15632u + l[29] * 1024u;
+    r[12] = l[12] + l[32] * 15632u + l[30] * 1024u;
+    r[13] = l[13] + l[33] * 15632u + l[31] * 1024u;
+    r[14] = l[14] + l[34] * 15632u + l[32] * 1024u;
+    r[15] = l[15] + l[35] * 15632u + l[33] * 1024u;
+    r[16] = l[16] + l[36] * 15632u + l[34] * 1024u;
+    r[17] = l[17] + l[37] * 15632u + l[35] * 1024u;
+    r[18] = l[18] + l[38] * 15632u + l[36] * 1024u;
+    r[19] = l[19] + l[39] * 15632u + l[37] * 1024u;
+    r[20] = l[38] * 1024u;
+    r[21] = l[39] * 1024u;
+    v = r[0]; r[0] = v & LIMB_MASK;
+    v = r[1] + (v >> 13u); r[1] = v & LIMB_MASK;
+    v = r[2] + (v >> 13u); r[2] = v & LIMB_MASK;
+    v = r[3] + (v >> 13u); r[3] = v & LIMB_MASK;
+    v = r[4] + (v >> 13u); r[4] = v & LIMB_MASK;
+    v = r[5] + (v >> 13u); r[5] = v & LIMB_MASK;
+    v = r[6] + (v >> 13u); r[6] = v & LIMB_MASK;
+    v = r[7] + (v >> 13u); r[7] = v & LIMB_MASK;
+    v = r[8] + (v >> 13u); r[8] = v & LIMB_MASK;
+    v = r[9] + (v >> 13u); r[9] = v & LIMB_MASK;
+    v = r[10] + (v >> 13u); r[10] = v & LIMB_MASK;
+    v = r[11] + (v >> 13u); r[11] = v & LIMB_MASK;
+    v = r[12] + (v >> 13u); r[12] = v & LIMB_MASK;
+    v = r[13] + (v >> 13u); r[13] = v & LIMB_MASK;
+    v = r[14] + (v >> 13u); r[14] = v & LIMB_MASK;
+    v = r[15] + (v >> 13u); r[15] = v & LIMB_MASK;
+    v = r[16] + (v >> 13u); r[16] = v & LIMB_MASK;
+    v = r[17] + (v >> 13u); r[17] = v & LIMB_MASK;
+    v = r[18] + (v >> 13u); r[18] = v & LIMB_MASK;
+    v = r[19] + (v >> 13u); r[19] = v & LIMB_MASK;
+    v = r[20] + (v >> 13u); r[20] = v & LIMB_MASK;
+    v = r[21] + (v >> 13u); r[21] = v & LIMB_MASK;
+    let carry = v >> 13u;
+    var out: F;
+    out[0] = r[0];
+    out[1] = r[1];
+    out[2] = r[2];
+    out[3] = r[3];
+    out[4] = r[4];
+    out[5] = r[5];
+    out[6] = r[6];
+    out[7] = r[7];
+    out[8] = r[8];
+    out[9] = r[9];
+    out[10] = r[10];
+    out[11] = r[11];
+    out[12] = r[12];
+    out[13] = r[13];
+    out[14] = r[14];
+    out[15] = r[15];
+    out[16] = r[16];
+    out[17] = r[17];
+    out[18] = r[18];
+    out[19] = r[19];
+    out[0] += r[20] * 15632u;
+    out[2] += r[20] * 1024u;
+    out[1] += r[21] * 15632u;
+    out[3] += r[21] * 1024u;
+    out[2] += carry * 15632u;
+    out[4] += carry * 1024u;
+    return f_normalize(out);
+}
+
+// Unrolled by bench/gen_field13.py-style generation: every index is a constant.
+fn f_mul(a: F, b: F) -> F {
+    var c: array<u32, 39>;
+    c[0] = a[0] * b[0];
+    c[1] = a[0] * b[1] + a[1] * b[0];
+    c[2] = a[0] * b[2] + a[1] * b[1] + a[2] * b[0];
+    c[3] = a[0] * b[3] + a[1] * b[2] + a[2] * b[1] + a[3] * b[0];
+    c[4] = a[0] * b[4] + a[1] * b[3] + a[2] * b[2] + a[3] * b[1] + a[4] * b[0];
+    c[5] = a[0] * b[5] + a[1] * b[4] + a[2] * b[3] + a[3] * b[2] + a[4] * b[1] + a[5] * b[0];
+    c[6] = a[0] * b[6] + a[1] * b[5] + a[2] * b[4] + a[3] * b[3] + a[4] * b[2] + a[5] * b[1] + a[6] * b[0];
+    c[7] = a[0] * b[7] + a[1] * b[6] + a[2] * b[5] + a[3] * b[4] + a[4] * b[3] + a[5] * b[2] + a[6] * b[1] + a[7] * b[0];
+    c[8] = a[0] * b[8] + a[1] * b[7] + a[2] * b[6] + a[3] * b[5] + a[4] * b[4] + a[5] * b[3] + a[6] * b[2] + a[7] * b[1] + a[8] * b[0];
+    c[9] = a[0] * b[9] + a[1] * b[8] + a[2] * b[7] + a[3] * b[6] + a[4] * b[5] + a[5] * b[4] + a[6] * b[3] + a[7] * b[2] + a[8] * b[1] + a[9] * b[0];
+    c[10] = a[0] * b[10] + a[1] * b[9] + a[2] * b[8] + a[3] * b[7] + a[4] * b[6] + a[5] * b[5] + a[6] * b[4] + a[7] * b[3] + a[8] * b[2] + a[9] * b[1] + a[10] * b[0];
+    c[11] = a[0] * b[11] + a[1] * b[10] + a[2] * b[9] + a[3] * b[8] + a[4] * b[7] + a[5] * b[6] + a[6] * b[5] + a[7] * b[4] + a[8] * b[3] + a[9] * b[2] + a[10] * b[1] + a[11] * b[0];
+    c[12] = a[0] * b[12] + a[1] * b[11] + a[2] * b[10] + a[3] * b[9] + a[4] * b[8] + a[5] * b[7] + a[6] * b[6] + a[7] * b[5] + a[8] * b[4] + a[9] * b[3] + a[10] * b[2] + a[11] * b[1] + a[12] * b[0];
+    c[13] = a[0] * b[13] + a[1] * b[12] + a[2] * b[11] + a[3] * b[10] + a[4] * b[9] + a[5] * b[8] + a[6] * b[7] + a[7] * b[6] + a[8] * b[5] + a[9] * b[4] + a[10] * b[3] + a[11] * b[2] + a[12] * b[1] + a[13] * b[0];
+    c[14] = a[0] * b[14] + a[1] * b[13] + a[2] * b[12] + a[3] * b[11] + a[4] * b[10] + a[5] * b[9] + a[6] * b[8] + a[7] * b[7] + a[8] * b[6] + a[9] * b[5] + a[10] * b[4] + a[11] * b[3] + a[12] * b[2] + a[13] * b[1] + a[14] * b[0];
+    c[15] = a[0] * b[15] + a[1] * b[14] + a[2] * b[13] + a[3] * b[12] + a[4] * b[11] + a[5] * b[10] + a[6] * b[9] + a[7] * b[8] + a[8] * b[7] + a[9] * b[6] + a[10] * b[5] + a[11] * b[4] + a[12] * b[3] + a[13] * b[2] + a[14] * b[1] + a[15] * b[0];
+    c[16] = a[0] * b[16] + a[1] * b[15] + a[2] * b[14] + a[3] * b[13] + a[4] * b[12] + a[5] * b[11] + a[6] * b[10] + a[7] * b[9] + a[8] * b[8] + a[9] * b[7] + a[10] * b[6] + a[11] * b[5] + a[12] * b[4] + a[13] * b[3] + a[14] * b[2] + a[15] * b[1] + a[16] * b[0];
+    c[17] = a[0] * b[17] + a[1] * b[16] + a[2] * b[15] + a[3] * b[14] + a[4] * b[13] + a[5] * b[12] + a[6] * b[11] + a[7] * b[10] + a[8] * b[9] + a[9] * b[8] + a[10] * b[7] + a[11] * b[6] + a[12] * b[5] + a[13] * b[4] + a[14] * b[3] + a[15] * b[2] + a[16] * b[1] + a[17] * b[0];
+    c[18] = a[0] * b[18] + a[1] * b[17] + a[2] * b[16] + a[3] * b[15] + a[4] * b[14] + a[5] * b[13] + a[6] * b[12] + a[7] * b[11] + a[8] * b[10] + a[9] * b[9] + a[10] * b[8] + a[11] * b[7] + a[12] * b[6] + a[13] * b[5] + a[14] * b[4] + a[15] * b[3] + a[16] * b[2] + a[17] * b[1] + a[18] * b[0];
+    c[19] = a[0] * b[19] + a[1] * b[18] + a[2] * b[17] + a[3] * b[16] + a[4] * b[15] + a[5] * b[14] + a[6] * b[13] + a[7] * b[12] + a[8] * b[11] + a[9] * b[10] + a[10] * b[9] + a[11] * b[8] + a[12] * b[7] + a[13] * b[6] + a[14] * b[5] + a[15] * b[4] + a[16] * b[3] + a[17] * b[2] + a[18] * b[1] + a[19] * b[0];
+    c[20] = a[1] * b[19] + a[2] * b[18] + a[3] * b[17] + a[4] * b[16] + a[5] * b[15] + a[6] * b[14] + a[7] * b[13] + a[8] * b[12] + a[9] * b[11] + a[10] * b[10] + a[11] * b[9] + a[12] * b[8] + a[13] * b[7] + a[14] * b[6] + a[15] * b[5] + a[16] * b[4] + a[17] * b[3] + a[18] * b[2] + a[19] * b[1];
+    c[21] = a[2] * b[19] + a[3] * b[18] + a[4] * b[17] + a[5] * b[16] + a[6] * b[15] + a[7] * b[14] + a[8] * b[13] + a[9] * b[12] + a[10] * b[11] + a[11] * b[10] + a[12] * b[9] + a[13] * b[8] + a[14] * b[7] + a[15] * b[6] + a[16] * b[5] + a[17] * b[4] + a[18] * b[3] + a[19] * b[2];
+    c[22] = a[3] * b[19] + a[4] * b[18] + a[5] * b[17] + a[6] * b[16] + a[7] * b[15] + a[8] * b[14] + a[9] * b[13] + a[10] * b[12] + a[11] * b[11] + a[12] * b[10] + a[13] * b[9] + a[14] * b[8] + a[15] * b[7] + a[16] * b[6] + a[17] * b[5] + a[18] * b[4] + a[19] * b[3];
+    c[23] = a[4] * b[19] + a[5] * b[18] + a[6] * b[17] + a[7] * b[16] + a[8] * b[15] + a[9] * b[14] + a[10] * b[13] + a[11] * b[12] + a[12] * b[11] + a[13] * b[10] + a[14] * b[9] + a[15] * b[8] + a[16] * b[7] + a[17] * b[6] + a[18] * b[5] + a[19] * b[4];
+    c[24] = a[5] * b[19] + a[6] * b[18] + a[7] * b[17] + a[8] * b[16] + a[9] * b[15] + a[10] * b[14] + a[11] * b[13] + a[12] * b[12] + a[13] * b[11] + a[14] * b[10] + a[15] * b[9] + a[16] * b[8] + a[17] * b[7] + a[18] * b[6] + a[19] * b[5];
+    c[25] = a[6] * b[19] + a[7] * b[18] + a[8] * b[17] + a[9] * b[16] + a[10] * b[15] + a[11] * b[14] + a[12] * b[13] + a[13] * b[12] + a[14] * b[11] + a[15] * b[10] + a[16] * b[9] + a[17] * b[8] + a[18] * b[7] + a[19] * b[6];
+    c[26] = a[7] * b[19] + a[8] * b[18] + a[9] * b[17] + a[10] * b[16] + a[11] * b[15] + a[12] * b[14] + a[13] * b[13] + a[14] * b[12] + a[15] * b[11] + a[16] * b[10] + a[17] * b[9] + a[18] * b[8] + a[19] * b[7];
+    c[27] = a[8] * b[19] + a[9] * b[18] + a[10] * b[17] + a[11] * b[16] + a[12] * b[15] + a[13] * b[14] + a[14] * b[13] + a[15] * b[12] + a[16] * b[11] + a[17] * b[10] + a[18] * b[9] + a[19] * b[8];
+    c[28] = a[9] * b[19] + a[10] * b[18] + a[11] * b[17] + a[12] * b[16] + a[13] * b[15] + a[14] * b[14] + a[15] * b[13] + a[16] * b[12] + a[17] * b[11] + a[18] * b[10] + a[19] * b[9];
+    c[29] = a[10] * b[19] + a[11] * b[18] + a[12] * b[17] + a[13] * b[16] + a[14] * b[15] + a[15] * b[14] + a[16] * b[13] + a[17] * b[12] + a[18] * b[11] + a[19] * b[10];
+    c[30] = a[11] * b[19] + a[12] * b[18] + a[13] * b[17] + a[14] * b[16] + a[15] * b[15] + a[16] * b[14] + a[17] * b[13] + a[18] * b[12] + a[19] * b[11];
+    c[31] = a[12] * b[19] + a[13] * b[18] + a[14] * b[17] + a[15] * b[16] + a[16] * b[15] + a[17] * b[14] + a[18] * b[13] + a[19] * b[12];
+    c[32] = a[13] * b[19] + a[14] * b[18] + a[15] * b[17] + a[16] * b[16] + a[17] * b[15] + a[18] * b[14] + a[19] * b[13];
+    c[33] = a[14] * b[19] + a[15] * b[18] + a[16] * b[17] + a[17] * b[16] + a[18] * b[15] + a[19] * b[14];
+    c[34] = a[15] * b[19] + a[16] * b[18] + a[17] * b[17] + a[18] * b[16] + a[19] * b[15];
+    c[35] = a[16] * b[19] + a[17] * b[18] + a[18] * b[17] + a[19] * b[16];
+    c[36] = a[17] * b[19] + a[18] * b[18] + a[19] * b[17];
+    c[37] = a[18] * b[19] + a[19] * b[18];
+    c[38] = a[19] * b[19];
+    return f_reduce(c);
+}
+
+fn f_sqr(a: F) -> F {
+    var c: array<u32, 39>;
+    c[0] = a[0] * a[0];
+    c[1] = (a[0] * a[1]) * 2u;
+    c[2] = (a[0] * a[2]) * 2u + a[1] * a[1];
+    c[3] = (a[0] * a[3] + a[1] * a[2]) * 2u;
+    c[4] = (a[0] * a[4] + a[1] * a[3]) * 2u + a[2] * a[2];
+    c[5] = (a[0] * a[5] + a[1] * a[4] + a[2] * a[3]) * 2u;
+    c[6] = (a[0] * a[6] + a[1] * a[5] + a[2] * a[4]) * 2u + a[3] * a[3];
+    c[7] = (a[0] * a[7] + a[1] * a[6] + a[2] * a[5] + a[3] * a[4]) * 2u;
+    c[8] = (a[0] * a[8] + a[1] * a[7] + a[2] * a[6] + a[3] * a[5]) * 2u + a[4] * a[4];
+    c[9] = (a[0] * a[9] + a[1] * a[8] + a[2] * a[7] + a[3] * a[6] + a[4] * a[5]) * 2u;
+    c[10] = (a[0] * a[10] + a[1] * a[9] + a[2] * a[8] + a[3] * a[7] + a[4] * a[6]) * 2u + a[5] * a[5];
+    c[11] = (a[0] * a[11] + a[1] * a[10] + a[2] * a[9] + a[3] * a[8] + a[4] * a[7] + a[5] * a[6]) * 2u;
+    c[12] = (a[0] * a[12] + a[1] * a[11] + a[2] * a[10] + a[3] * a[9] + a[4] * a[8] + a[5] * a[7]) * 2u + a[6] * a[6];
+    c[13] = (a[0] * a[13] + a[1] * a[12] + a[2] * a[11] + a[3] * a[10] + a[4] * a[9] + a[5] * a[8] + a[6] * a[7]) * 2u;
+    c[14] = (a[0] * a[14] + a[1] * a[13] + a[2] * a[12] + a[3] * a[11] + a[4] * a[10] + a[5] * a[9] + a[6] * a[8]) * 2u + a[7] * a[7];
+    c[15] = (a[0] * a[15] + a[1] * a[14] + a[2] * a[13] + a[3] * a[12] + a[4] * a[11] + a[5] * a[10] + a[6] * a[9] + a[7] * a[8]) * 2u;
+    c[16] = (a[0] * a[16] + a[1] * a[15] + a[2] * a[14] + a[3] * a[13] + a[4] * a[12] + a[5] * a[11] + a[6] * a[10] + a[7] * a[9]) * 2u + a[8] * a[8];
+    c[17] = (a[0] * a[17] + a[1] * a[16] + a[2] * a[15] + a[3] * a[14] + a[4] * a[13] + a[5] * a[12] + a[6] * a[11] + a[7] * a[10] + a[8] * a[9]) * 2u;
+    c[18] = (a[0] * a[18] + a[1] * a[17] + a[2] * a[16] + a[3] * a[15] + a[4] * a[14] + a[5] * a[13] + a[6] * a[12] + a[7] * a[11] + a[8] * a[10]) * 2u + a[9] * a[9];
+    c[19] = (a[0] * a[19] + a[1] * a[18] + a[2] * a[17] + a[3] * a[16] + a[4] * a[15] + a[5] * a[14] + a[6] * a[13] + a[7] * a[12] + a[8] * a[11] + a[9] * a[10]) * 2u;
+    c[20] = (a[1] * a[19] + a[2] * a[18] + a[3] * a[17] + a[4] * a[16] + a[5] * a[15] + a[6] * a[14] + a[7] * a[13] + a[8] * a[12] + a[9] * a[11]) * 2u + a[10] * a[10];
+    c[21] = (a[2] * a[19] + a[3] * a[18] + a[4] * a[17] + a[5] * a[16] + a[6] * a[15] + a[7] * a[14] + a[8] * a[13] + a[9] * a[12] + a[10] * a[11]) * 2u;
+    c[22] = (a[3] * a[19] + a[4] * a[18] + a[5] * a[17] + a[6] * a[16] + a[7] * a[15] + a[8] * a[14] + a[9] * a[13] + a[10] * a[12]) * 2u + a[11] * a[11];
+    c[23] = (a[4] * a[19] + a[5] * a[18] + a[6] * a[17] + a[7] * a[16] + a[8] * a[15] + a[9] * a[14] + a[10] * a[13] + a[11] * a[12]) * 2u;
+    c[24] = (a[5] * a[19] + a[6] * a[18] + a[7] * a[17] + a[8] * a[16] + a[9] * a[15] + a[10] * a[14] + a[11] * a[13]) * 2u + a[12] * a[12];
+    c[25] = (a[6] * a[19] + a[7] * a[18] + a[8] * a[17] + a[9] * a[16] + a[10] * a[15] + a[11] * a[14] + a[12] * a[13]) * 2u;
+    c[26] = (a[7] * a[19] + a[8] * a[18] + a[9] * a[17] + a[10] * a[16] + a[11] * a[15] + a[12] * a[14]) * 2u + a[13] * a[13];
+    c[27] = (a[8] * a[19] + a[9] * a[18] + a[10] * a[17] + a[11] * a[16] + a[12] * a[15] + a[13] * a[14]) * 2u;
+    c[28] = (a[9] * a[19] + a[10] * a[18] + a[11] * a[17] + a[12] * a[16] + a[13] * a[15]) * 2u + a[14] * a[14];
+    c[29] = (a[10] * a[19] + a[11] * a[18] + a[12] * a[17] + a[13] * a[16] + a[14] * a[15]) * 2u;
+    c[30] = (a[11] * a[19] + a[12] * a[18] + a[13] * a[17] + a[14] * a[16]) * 2u + a[15] * a[15];
+    c[31] = (a[12] * a[19] + a[13] * a[18] + a[14] * a[17] + a[15] * a[16]) * 2u;
+    c[32] = (a[13] * a[19] + a[14] * a[18] + a[15] * a[17]) * 2u + a[16] * a[16];
+    c[33] = (a[14] * a[19] + a[15] * a[18] + a[16] * a[17]) * 2u;
+    c[34] = (a[15] * a[19] + a[16] * a[18]) * 2u + a[17] * a[17];
+    c[35] = (a[16] * a[19] + a[17] * a[18]) * 2u;
+    c[36] = (a[17] * a[19]) * 2u + a[18] * a[18];
+    c[37] = (a[18] * a[19]) * 2u;
+    c[38] = a[19] * a[19];
+    return f_reduce(c);
+}
+
+fn f_sqr_n(a: F, n: u32) -> F {
+    var r = a;
+    for (var i = 0u; i < n; i++) {
+        r = f_sqr(r);
+    }
+    return r;
+}
+
+// a^(p-2) with libsecp256k1's addition chain.
+fn f_inv(a: F) -> F {
+    let x2 = f_mul(f_sqr(a), a);
+    let x3 = f_mul(f_sqr(x2), a);
+    let x6 = f_mul(f_sqr_n(x3, 3u), x3);
+    let x9 = f_mul(f_sqr_n(x6, 3u), x3);
+    let x11 = f_mul(f_sqr_n(x9, 2u), x2);
+    let x22 = f_mul(f_sqr_n(x11, 11u), x11);
+    let x44 = f_mul(f_sqr_n(x22, 22u), x22);
+    let x88 = f_mul(f_sqr_n(x44, 44u), x44);
+    let x176 = f_mul(f_sqr_n(x88, 88u), x88);
+    let x220 = f_mul(f_sqr_n(x176, 44u), x44);
+    let x223 = f_mul(f_sqr_n(x220, 3u), x3);
+    var t = f_mul(f_sqr_n(x223, 23u), x22);
+    t = f_mul(f_sqr_n(t, 5u), a);
+    t = f_mul(f_sqr_n(t, 3u), x2);
+    return f_mul(f_sqr_n(t, 2u), a);
+}
+
+// The unique representative below p.
+fn f_canonical(a: F) -> F {
+    var r = a;
+    // Bits 256..259 sit in limb 19 above bit 9: fold them with 2^256 ≡ 2^32 + 977, twice in
+    // case the first fold carries back up.
+    for (var round = 0u; round < 2u; round++) {
+        let top = r[19] >> 9u;
+        r[19] &= 0x1ffu;
+        r[0] += top * 977u;
+        r[2] += top * 64u;
+        var carry = 0u;
+        for (var i = 0u; i < 20u; i++) {
+            let v = r[i] + carry;
+            r[i] = v & LIMB_MASK;
+            carry = v >> 13u;
+        }
+    }
+    // Now r < 2^256 < 2p: subtract p once if r >= p.
+    var at_least_p = true;
+    for (var i = 19i; i >= 0i; i--) {
+        if r[i] != P13[i] {
+            at_least_p = r[i] > P13[i];
+            break;
+        }
+    }
+    if at_least_p {
+        var borrow = 0u;
+        for (var i = 0u; i < 20u; i++) {
+            let v = r[i] + 8192u - P13[i] - borrow;
+            r[i] = v & LIMB_MASK;
+            borrow = 1u - (v >> 13u);
+        }
+    }
+    return r;
+}
+
+fn f_is_zero(a: F) -> bool {
+    let r = f_canonical(a);
+    var bits = 0u;
+    for (var i = 0u; i < 20u; i++) {
+        bits |= r[i];
+    }
+    return bits == 0u;
+}
+
+fn fe_to_f(a: Fe) -> F {
+    var r: F;
+    for (var i = 0u; i < 20u; i++) {
+        let bit = 13u * i;
+        let word = bit / 32u;
+        let shift = bit % 32u;
+        var v = a[word] >> shift;
+        if shift > 19u && word < 7u {
+            v |= a[word + 1u] << (32u - shift);
+        }
+        r[i] = v & LIMB_MASK;
+    }
+    return r;
+}
+
+// A canonical element back to 8 little-endian 32-bit limbs.
+fn f_to_fe(a: F) -> Fe {
+    var r: Fe;
+    for (var i = 0u; i < 20u; i++) {
+        let bit = 13u * i;
+        let word = bit / 32u;
+        let shift = bit % 32u;
+        r[word] |= a[i] << shift;
+        if shift > 19u && word < 7u {
+            r[word + 1u] |= a[i] >> (32u - shift);
+        }
+    }
+    return r;
+}
+
+fn f_one() -> F {
+    var r: F;
+    r[0] = 1u;
+    return r;
+}
+
+fn jac_infinity() -> JacF {
+    var p: JacF;
+    p.infinity = true;
+    return p;
+}
+
+fn jac_from_affine(q: AffF) -> JacF {
+    return JacF(q.x, q.y, f_one(), q.infinity);
+}
+
+// dbl-2009-l.
+fn jac_double(p: JacF) -> JacF {
+    if p.infinity || f_is_zero(p.y) {
+        return jac_infinity();
+    }
+    let a = f_sqr(p.x);
+    let b = f_sqr(p.y);
+    let c = f_sqr(b);
+    var d = f_sub(f_sub(f_sqr(f_add(p.x, b)), a), c);
+    d = f_add(d, d);
+    let e = f_add(f_add(a, a), a);
+    let x3 = f_sub(f_sqr(e), f_add(d, d));
+    var c8 = f_add(c, c);
+    c8 = f_add(c8, c8);
+    c8 = f_add(c8, c8);
+    let y3 = f_sub(f_mul(e, f_sub(d, x3)), c8);
+    let yz = f_mul(p.y, p.z);
+    return JacF(x3, y3, f_add(yz, yz), false);
+}
+
+// Jacobian plus affine (madd-2007-bl), with the special cases.
+fn jac_add_affine(p: JacF, q: AffF) -> JacF {
+    if q.infinity {
+        return p;
+    }
+    if p.infinity {
+        return jac_from_affine(q);
+    }
+    let z1z1 = f_sqr(p.z);
+    let u2 = f_mul(q.x, z1z1);
+    let s2 = f_mul(q.y, f_mul(p.z, z1z1));
+    let h = f_sub(u2, p.x);
+    let s_diff = f_sub(s2, p.y);
+    if f_is_zero(h) {
+        if f_is_zero(s_diff) {
+            return jac_double(p);
+        }
+        return jac_infinity();
+    }
+    let hh = f_sqr(h);
+    var i = f_add(hh, hh);
+    i = f_add(i, i);
+    let j = f_mul(h, i);
+    let r = f_add(s_diff, s_diff);
+    let v = f_mul(p.x, i);
+    let x3 = f_sub(f_sub(f_sqr(r), j), f_add(v, v));
+    let y1j = f_mul(p.y, j);
+    let y3 = f_sub(f_mul(r, f_sub(v, x3)), f_add(y1j, y1j));
+    let z3 = f_sub(f_sub(f_sqr(f_add(p.z, h)), z1z1), hh);
+    return JacF(x3, y3, z3, false);
+}
+
+fn g_point_f(window: u32, digit: u32) -> AffF {
+    let q = g_point(window, digit);
+    return AffF(fe_to_f(q.x), fe_to_f(q.y), false);
+}
+
+// acc + k·G from the table: one mixed addition per nonzero window of k.
+fn jac_add_mul_g(start: JacF, k: Fe) -> JacF {
+    var acc = start;
+    for (var w = 0u; w < G_WINDOWS; w++) {
+        let digit = window_digit(k, w * G_WINDOW_BITS, G_WINDOW_BITS);
+        if digit != 0u {
+            acc = jac_add_affine(acc, g_point_f(w, digit));
+        }
+    }
+    return acc;
+}
+
+// Field self-test: for each case, two normalized inputs a and b (20 limbs each) from params
+// after a count word; writes canonical a·b, a², a+b, a−b, −a, 1/a and a to debug_out.
+@compute @workgroup_size(64)
+fn field_test(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params[0] {
+        return;
+    }
+    var a: F;
+    var b: F;
+    for (var i = 0u; i < 20u; i++) {
+        a[i] = params[1u + id.x * 40u + i];
+        b[i] = params[21u + id.x * 40u + i];
+    }
+    var results: array<Fe, 7>;
+    results[0] = f_to_fe(f_canonical(f_mul(a, b)));
+    results[1] = f_to_fe(f_canonical(f_sqr(a)));
+    results[2] = f_to_fe(f_canonical(f_add(a, b)));
+    results[3] = f_to_fe(f_canonical(f_sub(a, b)));
+    results[4] = f_to_fe(f_canonical(f_neg(a)));
+    results[5] = f_to_fe(f_canonical(f_inv(a)));
+    results[6] = f_to_fe(f_canonical(a));
+    for (var op = 0u; op < 7u; op++) {
+        for (var w = 0u; w < 8u; w++) {
+            debug_out[id.x * 56u + op * 8u + w] = results[op][w];
+        }
+    }
+}

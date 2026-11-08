@@ -44,12 +44,16 @@ def build_candidate() -> Path:
 def base_shaders(rev: str) -> Path:
     directory = REPO / "target" / "bench-base-shaders"
     directory.mkdir(parents=True, exist_ok=True)
-    for name in ["constants.wgsl", "common.wgsl", "key.wgsl", "nonce.wgsl"]:
-        source = subprocess.run(
+    for name in ["constants.wgsl", "common.wgsl", "field13.wgsl", "key.wgsl", "nonce.wgsl"]:
+        shown = subprocess.run(
             ["git", "show", f"{rev}:crates/anzen-vanity/src/{name}"],
-            cwd=REPO, capture_output=True, text=True, check=True,
-        ).stdout
-        (directory / name).write_text(source)
+            cwd=REPO, capture_output=True, text=True,
+        )
+        # Files a baseline predates are left out (the benchmark treats them as empty).
+        if shown.returncode == 0:
+            (directory / name).write_text(shown.stdout)
+        elif (directory / name).exists():
+            (directory / name).unlink()
     return directory
 
 

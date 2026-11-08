@@ -14,6 +14,7 @@ const KEY_SHADER: &str = concat!(
 const NONCE_SHADER: &str = concat!(
     include_str!("constants.wgsl"),
     include_str!("common.wgsl"),
+    include_str!("field13.wgsl"),
     include_str!("nonce.wgsl")
 );
 const PARAM_WORDS: usize = 132;
@@ -526,6 +527,100 @@ impl GpuSearch {
     #[doc(hidden)]
     pub fn open_with_sources(key_shader: &str, nonce_shader: &str) -> Result<Self> {
         pollster::block_on(Self::with_sources(key_shader, nonce_shader))
+    }
+
+    /// Run the nonce shader's field self-test: `inputs` is a case count then 40 limbs per case;
+    /// returns 56 words per case.
+    #[doc(hidden)]
+    pub fn field_test_blocking(&self, inputs: &[u32]) -> Result<Vec<u32>> {
+        let cases = inputs[0];
+        // SAFETY: as for the search kernels.
+        let module = unsafe {
+            self.device.create_shader_module_trusted(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("field test"),
+                    source: wgpu::ShaderSource::Wgsl(NONCE_SHADER.into()),
+                },
+                wgpu::ShaderRuntimeChecks::unchecked(),
+            )
+        };
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("field test"),
+                bind_group_layouts: &[Some(&self.layout)],
+                immediate_size: 0,
+            });
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("field test"),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some("field_test"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let bytes = u64::from(cases) * 56 * 4;
+        let params = upload(&self.device, "field inputs", inputs);
+        let out = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("field outputs"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("field readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let unused = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("field test found"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("field test"),
+            layout: &self.layout,
+            entries: &[
+                (0, &params),
+                (1, &self.nonce.g_table),
+                (2, &unused),
+                (3, &out),
+                (4, &self.empty),
+            ]
+            .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                binding,
+                resource: buffer.as_entire_binding(),
+            }),
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(cases.div_ceil(64), 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&out, 0, &readback, 0, bytes);
+        self.queue.submit([encoder.finish()]);
+        readback.map_async(wgpu::MapMode::Read, .., |_| {});
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .context("field test failed")?;
+        let words = bytemuck::cast_slice(
+            &readback
+                .get_mapped_range(..)
+                .map_err(|error| anyhow!("field test readback failed: {error:?}"))?,
+        )
+        .to_vec();
+        Ok(words)
     }
 
     #[doc(hidden)]

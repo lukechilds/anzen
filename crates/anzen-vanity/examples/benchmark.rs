@@ -84,7 +84,7 @@ fn pair(args: Vec<String>) -> anyhow::Result<()> {
     let common = read("constants.wgsl")? + &read("common.wgsl")?;
     let base = GpuSearch::open_with_sources(
         &(common.clone() + &read("key.wgsl")?),
-        &(common + &read("nonce.wgsl")?),
+        &(common + &read("field13.wgsl").unwrap_or_default() + &read("nonce.wgsl")?),
     )?;
     let candidate = GpuSearch::open()?;
     let (prepare, batch): (

@@ -20,7 +20,7 @@ const PER_INVOCATION: u32 = 8u;
 
 // Q + t·G in Jacobian coordinates for one locktime; `valid` is false when t >= n.
 struct Projective {
-    point: Jacobian,
+    point: JacF,
     valid: bool,
 }
 
@@ -52,10 +52,10 @@ fn projective(locktime: u32) -> Projective {
     }
 
     // 3. output = Q_even + t·G.
-    var internal: Affine;
-    internal.x = read_fe(P_INTERNAL_X);
-    internal.y = read_fe(P_INTERNAL_Y);
-    result.point = add_mul_g(from_affine(internal), tweak);
+    var internal: AffF;
+    internal.x = fe_to_f(read_fe(P_INTERNAL_X));
+    internal.y = fe_to_f(read_fe(P_INTERNAL_Y));
+    result.point = jac_add_mul_g(jac_from_affine(internal), tweak);
     result.valid = !result.point.infinity;
     return result;
 }
@@ -64,9 +64,8 @@ fn projective(locktime: u32) -> Projective {
 // every Z, then peel each Z's inverse off it. Invalid candidates use Z = 1.
 fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
     var points: array<Projective, PER_INVOCATION>;
-    var products: array<Fe, PER_INVOCATION>;
-    var one: Fe;
-    one[0] = 1u;
+    var products: array<F, PER_INVOCATION>;
+    let one = f_one();
     for (var j = 0u; j < PER_INVOCATION; j++) {
         points[j] = projective(first + j);
         if !points[j].valid {
@@ -75,19 +74,19 @@ fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
         if j == 0u {
             products[j] = points[j].point.z;
         } else {
-            products[j] = fe_mul(products[j - 1u], points[j].point.z);
+            products[j] = f_mul(products[j - 1u], points[j].point.z);
         }
     }
-    var inverse = fe_inv(products[PER_INVOCATION - 1u]);
+    var inverse = f_inv(products[PER_INVOCATION - 1u]);
     var batch: array<Candidate, PER_INVOCATION>;
     for (var j = PER_INVOCATION - 1u; j < PER_INVOCATION; j--) {
         var z_inverse = inverse;
         if j > 0u {
-            z_inverse = fe_mul(inverse, products[j - 1u]);
-            inverse = fe_mul(inverse, points[j].point.z);
+            z_inverse = f_mul(inverse, products[j - 1u]);
+            inverse = f_mul(inverse, points[j].point.z);
         }
         batch[j].valid = points[j].valid;
-        batch[j].output_x = fe_mul(points[j].point.x, fe_sqr(z_inverse));
+        batch[j].output_x = f_to_fe(f_canonical(f_mul(points[j].point.x, f_sqr(z_inverse))));
     }
     return batch;
 }
