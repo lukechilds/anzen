@@ -12,8 +12,8 @@ cargo test --locked -p anzen-integration-tests --test regtest_rpc -- --ignored -
 echo "== Real rollover/monthly/revocation integration =="
 cargo test --locked -p anzen-integration-tests --test regtest_ceremony -- --ignored --nocapture --test-threads=1
 
-echo "== Slow real 61,200/65,535-block recovery integration =="
+echo "== Real time-locked signer recovery and rotation integration =="
 cargo test --locked -p anzen-integration-tests --test regtest_recovery -- --ignored --nocapture --test-threads=1
 
-echo "== Live-update refresh cost on the long chain =="
+echo "== Live-update refresh cost on a long chain =="
 cargo test --locked -p anzen-integration-tests --test regtest_live_refresh -- --ignored --nocapture --test-threads=1

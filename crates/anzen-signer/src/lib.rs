@@ -23,7 +23,7 @@ use anzen_protocol::{
     Error, Result,
     address::{self, Network},
     consts::{
-        EMERGENCY_ACCESS_DELAY_SECONDS, HWW_RECOVERY_BLOCKS, MONTHLY_ALLOWANCE_DELAY_SECONDS,
+        EMERGENCY_ACCESS_DELAY_SECONDS, HWW_RECOVERY_SECONDS, MONTHLY_ALLOWANCE_DELAY_SECONDS,
     },
     crypto::Crypto,
     policy::{EpochAnchor, Limits, Linkage, PolicyGraph},
@@ -31,8 +31,7 @@ use anzen_protocol::{
     spend::Spend,
     wire::{
         self, OfflineAction, OfflineActionApproval, OfflineActionRequest, PolicyApproval,
-        PolicyRequest, ReplacementApproval, ReplacementRequest, RotationApproval, RotationRequest,
-        Signature, SweepApproval, SweepRequest,
+        PolicyRequest, RotationApproval, RotationRequest, Signature, SweepApproval, SweepRequest,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -99,7 +98,7 @@ pub struct OfflineActionReview {
     pub fee_sats: u64,
     pub input_count: usize,
     /// Required by script; the signer does not know the chain height.
-    pub recovery_delay_blocks: Option<u16>,
+    pub recovery_delay_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -115,18 +114,6 @@ pub struct RotationReview {
     pub funded_withdrawals: usize,
     pub revokes_connectors: bool,
     pub previous_policy: Linkage,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ReplacementReview {
-    pub network: Network,
-    pub old_vault_address: String,
-    pub new_vault_address: String,
-    pub amount_sats: u64,
-    pub recovery_fee_sats: u64,
-    pub monthly_limit_sats: u64,
-    pub emergency_access_limit_sats: u64,
-    pub funded_withdrawals: usize,
 }
 
 /// Reviews and signs requests with host-supplied primitives.
@@ -255,8 +242,8 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
             amount_sats: spend.amount_sats,
             fee_sats: spend.fee_sats,
             input_count: request.inputs.len(),
-            recovery_delay_blocks: (request.action == OfflineAction::HwwRecovery)
-                .then_some(HWW_RECOVERY_BLOCKS),
+            recovery_delay_seconds: (request.action == OfflineAction::HwwRecovery)
+                .then_some(HWW_RECOVERY_SECONDS),
         })
     }
 
@@ -342,59 +329,6 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         ))
     }
 
-    /// Review a replacement for an unavailable signer. This device must be unpaired; `limits`
-    /// are the previously approved limits the host authenticated from its recovery bundle.
-    pub fn review_replacement(
-        &mut self,
-        request: &ReplacementRequest,
-        limits: Limits,
-    ) -> Result<ReplacementReview> {
-        let plan = self.replacement(request, limits)?;
-        Ok(ReplacementReview {
-            network: request.network,
-            old_vault_address: self
-                .address(&plan.old_scripts.vault.script_pubkey, request.network)?,
-            new_vault_address: self
-                .address(&plan.new_scripts.vault.script_pubkey, request.network)?,
-            amount_sats: plan.recovery.amount_sats,
-            recovery_fee_sats: plan.recovery.fee_sats,
-            monthly_limit_sats: limits.monthly_limit_sats,
-            emergency_access_limit_sats: limits.emergency_access_limit_sats,
-            funded_withdrawals: plan
-                .renewed
-                .as_ref()
-                .map_or(0, |(_, graph)| graph.allowances.len()),
-        })
-    }
-
-    pub fn approve_replacement(
-        &mut self,
-        request: &ReplacementRequest,
-        limits: Limits,
-        now: Option<u64>,
-    ) -> Result<(ReplacementApproval, State)> {
-        let plan = self.replacement(request, limits)?;
-        let (policy_signatures, anchor) = match &plan.renewed {
-            Some((_, graph)) => (self.sign_policy(graph)?, Some(graph.anchor())),
-            None => (Vec::new(), None),
-        };
-        Ok((
-            ReplacementApproval {
-                version: wire::VERSION,
-                request: request.clone(),
-                policy_signatures,
-            },
-            State {
-                version: STATE_VERSION,
-                network: request.network,
-                keys: plan.new_keys,
-                limits,
-                anchor,
-                anchor_approved_at: now,
-            },
-        ))
-    }
-
     fn check_state(&mut self, state: &State) -> Result<()> {
         if state.version != STATE_VERSION {
             return Err(Error::UnsupportedVersion);
@@ -460,20 +394,6 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
             now,
         )?;
         Ok((request.build(self.crypto)?, linkage))
-    }
-
-    fn replacement(
-        &mut self,
-        request: &ReplacementRequest,
-        limits: Limits,
-    ) -> Result<wire::ReplacementPlan> {
-        if request.new_hww != self.keys.vault_key()? {
-            return Err(Error::WrongVault);
-        }
-        if !wire::same_limits(request.renewed_policy.as_ref(), limits) {
-            return Err(Error::PolicyLimitsChanged);
-        }
-        request.build(self.crypto)
     }
 
     fn sign_policy(&mut self, graph: &PolicyGraph) -> Result<Vec<Signature>> {

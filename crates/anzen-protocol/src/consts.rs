@@ -1,9 +1,9 @@
 //! Fixed protocol parameters. Changing any value changes vault addresses or transaction graphs.
 
-/// Relative block delay before the phone alone can spend a vault output.
-pub const PHONE_RECOVERY_BLOCKS: u16 = 61_200;
-/// Relative block delay before the hardware wallet alone can spend a vault output.
-pub const HWW_RECOVERY_BLOCKS: u16 = 65_535;
+/// Relative delay before the hardware wallet alone can spend a vault output: 65,535 BIP68 time
+/// units of 512 seconds (about 388 days), the longest relative time lock Bitcoin allows. The phone
+/// never gets sole control; renewing the policy every year restarts this delay.
+pub const HWW_RECOVERY_SECONDS: u32 = 65_535 * 512;
 /// Monthly allowance authorizations presigned in one annual policy.
 pub const MONTHS_PER_ROLLOVER: usize = 12;
 /// The MVP pays exactly one satoshi per estimated virtual byte.
@@ -28,6 +28,8 @@ pub const MONTHLY_DELAY_SEQUENCE: u32 =
 /// BIP68 time-based sequence for [`EMERGENCY_ACCESS_DELAY_SECONDS`].
 pub const EMERGENCY_DELAY_SEQUENCE: u32 =
     SEQUENCE_TYPE_FLAG | (EMERGENCY_ACCESS_DELAY_SECONDS / 512);
+/// BIP68 time-based sequence for [`HWW_RECOVERY_SECONDS`], and the value its `older()` commits to.
+pub const HWW_RECOVERY_SEQUENCE: u32 = SEQUENCE_TYPE_FLAG | (HWW_RECOVERY_SECONDS / 512);
 
 /// BIP341's provably unspendable internal key.
 pub const NUMS_KEY: [u8; 32] = [

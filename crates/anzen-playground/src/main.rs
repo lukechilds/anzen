@@ -3,7 +3,6 @@
 
 mod chain;
 mod cloud;
-mod jobs;
 mod node;
 
 use anyhow::{Context, Result, bail};
@@ -22,7 +21,6 @@ use rand::RngCore;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -34,8 +32,6 @@ struct Args {
     data_dir: PathBuf,
     #[arg(long, default_value_t = 8787)]
     port: u16,
-    #[arg(long)]
-    dangerously_enable_mainnet: bool,
     #[arg(long, env = "ANZEN_RPC_URL", default_value = "http://127.0.0.1:18443")]
     rpc_url: String,
     #[arg(long, env = "ANZEN_RPC_USER", default_value = "anzen")]
@@ -47,10 +43,8 @@ struct Args {
 struct Host {
     directory: PathBuf,
     admin_token: String,
-    allow_mainnet: bool,
     rpc: RpcConfig,
     node_gate: Mutex<()>,
-    jobs: Mutex<HashMap<String, Arc<jobs::Job>>>,
 }
 
 type Shared = Arc<Host>;
@@ -91,9 +85,11 @@ fn require_admin(host: &Host, headers: &HeaderMap) -> Result<()> {
     Ok(())
 }
 
+/// Lets the page check that this host is running and its link is valid. Mainnet and Mutinynet
+/// run entirely in the browser, so the host offers regtest only.
 async fn session_settings(State(host): State<Shared>, headers: HeaderMap) -> ApiResult {
     require_admin(&host, &headers).map_err(failure)?;
-    Ok(Json(json!({ "allow_mainnet": host.allow_mainnet })))
+    Ok(Json(json!({ "networks": ["regtest"] })))
 }
 
 #[tokio::main]
@@ -111,14 +107,12 @@ async fn main() -> Result<()> {
     let host = Arc::new(Host {
         directory: session_dir,
         admin_token: token(),
-        allow_mainnet: args.dangerously_enable_mainnet,
         rpc: RpcConfig {
             url: args.rpc_url,
             user: args.rpc_user,
             password: args.rpc_password,
         },
         node_gate: Mutex::new(()),
-        jobs: Mutex::new(HashMap::new()),
     });
     let cors = CorsLayer::new()
         .allow_origin([
@@ -131,7 +125,6 @@ async fn main() -> Result<()> {
         .route("/session", post(session_settings))
         .route("/chain", post(chain::control))
         .route("/node", post(node::control))
-        .route("/node/job", post(jobs::control))
         .route("/cloud", post(cloud::control))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .layer(cors)
@@ -148,7 +141,6 @@ async fn main() -> Result<()> {
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
-            jobs::cancel_all(&host);
         })
         .await?;
     Ok(())

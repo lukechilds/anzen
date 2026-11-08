@@ -1,8 +1,7 @@
 use anzen_common::DEFAULT_FEE_RATE_SAT_VB;
 use anzen_common::EMERGENCY_ACCESS_DELAY_SECONDS;
-use anzen_common::HWW_RECOVERY_BLOCKS;
+use anzen_common::HWW_RECOVERY_SECONDS;
 use anzen_common::MONTHLY_ALLOWANCE_DELAY_SECONDS;
-use anzen_common::PHONE_RECOVERY_BLOCKS;
 use anzen_common::keys::DeviceKeys;
 use anzen_common::policy::{ControllerPolicy, VaultPolicy};
 use anzen_common::protocol::{self, SoftwareCrypto};
@@ -95,7 +94,7 @@ fn fixed_config(phone: &DeviceKeys, hww: &DeviceKeys) -> VaultConfig {
     let policy = VaultPolicy::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
     let (hot_external, hot_internal) = phone.hot_descriptors(&secp).unwrap();
     VaultConfig {
-        version: 1,
+        version: anzen_common::storage::VAULT_CONFIG_VERSION,
         network: "regtest".to_owned(),
         phone_vault_pubkey: phone.vault_pubkey.to_string(),
         hww_vault_pubkey: hww.vault_pubkey.to_string(),
@@ -103,8 +102,7 @@ fn fixed_config(phone: &DeviceKeys, hww: &DeviceKeys) -> VaultConfig {
         phone_hot_internal_descriptor: hot_internal,
         vault_descriptor: policy.descriptor_string(),
         vault_address: policy.address.to_string(),
-        phone_recovery_blocks: PHONE_RECOVERY_BLOCKS,
-        hww_recovery_blocks: HWW_RECOVERY_BLOCKS,
+        hww_recovery_seconds: HWW_RECOVERY_SECONDS,
         monthly_limit_sats: 0,
         emergency_access_limit_sats: 0,
     }
@@ -299,6 +297,15 @@ fn vault_output_graph_matches_checked_in_json_vector() {
         transactions,
     };
     let actual = format!("{}\n", serde_json::to_string_pretty(&vector).unwrap());
+    // After an intentional policy change, `ANZEN_UPDATE_VECTORS=1` rewrites the vector.
+    if std::env::var_os("ANZEN_UPDATE_VECTORS").is_some() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-vectors/vault-output-graph.json"
+        );
+        std::fs::write(path, &actual).unwrap();
+        return;
+    }
     let expected = include_str!("../../../test-vectors/vault-output-graph.json");
     assert_eq!(
         actual, expected,

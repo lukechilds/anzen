@@ -42,6 +42,9 @@ impl Blockchain for Backend {
             best_block_hash: BlockHash::all_zeros(),
         })
     }
+    fn median_time_past(&self, _: u64) -> Result<u64> {
+        Ok(0)
+    }
     fn scan_vault(&self, _: &VaultConfig) -> Result<Vec<VaultUtxo>> {
         Ok(self.coins.clone())
     }

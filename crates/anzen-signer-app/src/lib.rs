@@ -10,15 +10,12 @@ pub mod application;
 
 /// Offline consumer types; intentionally no chain clients or phone implementation.
 pub mod api {
+    pub use anzen_common::cloud_backup::CloudRecoveryBackup;
     pub use anzen_common::cloud_restore::RestoreKeyRequest;
     pub use anzen_common::device_channel::DeviceMessage;
     pub use anzen_common::device_rotation::{ApprovedDevicePhoneRotation, DevicePhoneRotation};
     pub use anzen_common::outbox::{OutboxItem, OutgoingMessage, OutgoingMessageKind};
     pub use anzen_common::recovery_bundle::RecoveryVaultBundle;
-    pub use anzen_common::signer_replacement::{
-        ApprovedSignerReplacement, DeviceSignerReplacement,
-    };
-    pub use anzen_common::social::CloudRecoveryBackup;
     pub use anzen_common::storage::with_protected_storage;
     pub use anzen_common::storage::{PublicDeviceFile, VaultConfig};
     pub use anzen_protocol::wire::{

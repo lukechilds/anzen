@@ -23,9 +23,9 @@ pub async fn control(
         let directory = host.directory.join("cloud");
         match request {
             Request::Save { backup } => {
-                if backup.version != 1 || backup.kind != "vault-cloud-recovery" {
-                    bail!("unsupported encrypted cloud backup");
-                }
+                backup
+                    .validate()
+                    .context("unsupported encrypted cloud backup")?;
                 let bytes = serde_json::to_vec(&backup)?;
                 let id = sha256::Hash::hash(&bytes).to_string();
                 std::fs::create_dir_all(&directory)?;

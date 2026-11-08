@@ -10,13 +10,11 @@ license.workspace = true
 anyhow.workspace = true
 anzen-protocol = { workspace = true, features = ["software"] }
 anzen-storage.workspace = true
-base64.workspace = true
 bip39 = { workspace = true, features = ["rand"] }
 bitcoin.workspace = true
 chacha20poly1305.workspace = true
 hkdf.workspace = true
 miniscript.workspace = true
-pgp.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

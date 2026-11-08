@@ -1,4 +1,4 @@
-use super::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS};
+use super::HWW_RECOVERY_SEQUENCE;
 use anyhow::{Context, Result, bail};
 use bitcoin::{
     Address, Network, ScriptBuf,
@@ -28,7 +28,6 @@ pub struct VaultPolicy {
 #[serde(rename_all = "kebab-case")]
 pub enum SpendPath {
     Cooperative,
-    PhoneRecovery,
     HwwRecovery,
 }
 
@@ -86,7 +85,7 @@ impl VaultAddressTemplate {
         let internal_key = XOnlyPublicKey::from_str(BIP341_NUMS_KEY)
             .context("invalid BIP341 NUMS internal key")?;
         let hww_recovery_node = TapNodeHash::from_script(
-            &recovery_script(hww_pubkey, HWW_RECOVERY_BLOCKS),
+            &recovery_script(hww_pubkey, HWW_RECOVERY_SEQUENCE),
             LeafVersion::TapScript,
         );
         Ok(Self {
@@ -105,13 +104,7 @@ impl VaultAddressTemplate {
             &cooperative_script(phone_pubkey, self.hww_pubkey),
             LeafVersion::TapScript,
         );
-        let phone_recovery_node = TapNodeHash::from_script(
-            &recovery_script(phone_pubkey, PHONE_RECOVERY_BLOCKS),
-            LeafVersion::TapScript,
-        );
-        let recovery_node =
-            TapNodeHash::from_node_hashes(phone_recovery_node, self.hww_recovery_node);
-        let merkle_root = TapNodeHash::from_node_hashes(cooperative_node, recovery_node);
+        let merkle_root = TapNodeHash::from_node_hashes(cooperative_node, self.hww_recovery_node);
         self.internal_key.tap_tweak(secp, Some(merkle_root)).0
     }
 
@@ -136,9 +129,9 @@ fn cooperative_script(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> ScriptBuf {
         .into_script()
 }
 
-fn recovery_script(key: XOnlyPublicKey, delay: u16) -> ScriptBuf {
+fn recovery_script(key: XOnlyPublicKey, sequence: u32) -> ScriptBuf {
     Builder::new()
-        .push_int(i64::from(delay))
+        .push_int(i64::from(sequence))
         .push_opcode(OP_CSV)
         .push_opcode(OP_VERIFY)
         .push_x_only_key(&key)
@@ -157,7 +150,7 @@ impl VaultPolicy {
         network: Network,
     ) -> Result<Self> {
         let descriptor_text = format!(
-            "tr({BIP341_NUMS_KEY},{{multi_a(2,{phone},{hww}),{{and_v(v:older({PHONE_RECOVERY_BLOCKS}),pk({phone})),and_v(v:older({HWW_RECOVERY_BLOCKS}),pk({hww}))}}}})"
+            "tr({BIP341_NUMS_KEY},{{multi_a(2,{phone},{hww}),and_v(v:older({HWW_RECOVERY_SEQUENCE}),pk({hww}))}})"
         );
         let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_text)
             .with_context(|| format!("invalid vault descriptor: {descriptor_text}"))?;
@@ -201,21 +194,19 @@ impl VaultPolicy {
             _ => bail!("vault descriptor is not Taproot"),
         };
         let spend_info = tr.spend_info();
-        let target_depth = match path {
-            SpendPath::Cooperative => 1,
-            SpendPath::PhoneRecovery | SpendPath::HwwRecovery => 2,
-        };
         let target_delay = match path {
             SpendPath::Cooperative => None,
-            SpendPath::PhoneRecovery => Some(PHONE_RECOVERY_BLOCKS),
-            SpendPath::HwwRecovery => Some(HWW_RECOVERY_BLOCKS),
+            SpendPath::HwwRecovery => Some(HWW_RECOVERY_SEQUENCE),
         };
 
         for (depth, miniscript) in tr.iter_scripts() {
-            if depth != target_depth {
+            if depth != 1 {
                 continue;
             }
             let script = miniscript.encode();
+            if miniscript.to_string().contains("older(") != target_delay.is_some() {
+                continue;
+            }
             if let Some(delay) = target_delay {
                 let delay_script_num = bitcoin::script::Builder::new()
                     .push_int(i64::from(delay))
@@ -338,14 +329,13 @@ mod tests {
         assert_eq!(first.address, second.address);
         let text = first.descriptor_string();
         assert!(text.contains("multi_a(2"));
-        assert!(text.contains("older(61200)"));
-        assert!(text.contains("older(65535)"));
+        assert!(text.contains("and_v(v:older(4259839),pk("));
+        assert!(!text.contains(&format!("pk({})", phone.vault_pubkey)));
         assert!(text.starts_with("tr(50929b74"));
         assert_eq!(first.leaf(SpendPath::Cooperative).unwrap().depth, 1);
-        assert_eq!(first.leaf(SpendPath::PhoneRecovery).unwrap().depth, 2);
-        assert_eq!(first.leaf(SpendPath::HwwRecovery).unwrap().depth, 2);
+        assert_eq!(first.leaf(SpendPath::HwwRecovery).unwrap().depth, 1);
         assert_ne!(
-            first.leaf(SpendPath::PhoneRecovery).unwrap().leaf_hash,
+            first.leaf(SpendPath::Cooperative).unwrap().leaf_hash,
             first.leaf(SpendPath::HwwRecovery).unwrap().leaf_hash
         );
     }
@@ -381,11 +371,7 @@ mod tests {
                 policy.leaf(SpendPath::Cooperative).unwrap().script
             );
             assert_eq!(
-                recovery_script(phone.vault_pubkey, PHONE_RECOVERY_BLOCKS),
-                policy.leaf(SpendPath::PhoneRecovery).unwrap().script
-            );
-            assert_eq!(
-                recovery_script(hww.vault_pubkey, HWW_RECOVERY_BLOCKS),
+                recovery_script(hww.vault_pubkey, HWW_RECOVERY_SEQUENCE),
                 policy.leaf(SpendPath::HwwRecovery).unwrap().script
             );
         }

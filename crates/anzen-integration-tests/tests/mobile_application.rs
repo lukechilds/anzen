@@ -8,7 +8,7 @@ use anzen_wallet::{
         Blockchain, ChainTip, CloudRecoveryBackup, Network, OfflineAction, OutgoingMessageKind,
         PolicyLimits, PolicyRequest, VaultConfig, VaultUtxo,
     },
-    application::{RecoveryContact, WalletApplication, WalletRequest},
+    application::{WalletApplication, WalletRequest},
 };
 use bitcoin::{Address, Amount, BlockHash, OutPoint, Transaction, TxOut, Txid, hashes::Hash};
 use std::{
@@ -43,56 +43,28 @@ impl Devices {
             config,
         }
     }
-}
 
-struct ContactFixture {
-    _directory: TempDir,
-    app: WalletApplication,
-    public: RecoveryContact,
-}
-
-impl ContactFixture {
-    fn enroll(devices: &Devices) -> Self {
-        let directory = tempfile::tempdir().unwrap();
-        let app = WalletApplication::new(directory.path().into(), false);
-        app.initialize(Network::Regtest).unwrap();
-        let public = app.generate_recovery_contact("Alice").unwrap();
-        let request = devices.phone.propose_backup_with_contact(&public).unwrap();
-        let review = devices.signer.review_backup(&request).unwrap();
-        let approved = devices
+    /// Run the backup ceremony and return the phone's encrypted cloud backup.
+    fn back_up(&self) -> CloudRecoveryBackup {
+        let request = self.phone.propose_backup().unwrap();
+        let review = self.signer.review_backup(&request).unwrap();
+        let approved = self
             .signer
             .approve_backup(&review.review_id, &request)
             .unwrap();
-        devices.phone.store_backup(&approved).unwrap();
-        Self {
-            _directory: directory,
-            app,
-            public,
-        }
+        self.phone.store_backup(&approved).unwrap();
+        self.phone.export_backup().unwrap()
     }
+}
 
-    fn assert_recovers(&self, backup: &CloudRecoveryBackup, config: &VaultConfig) {
-        assert_eq!(backup.friends.len(), 1);
-        assert_eq!(backup.friends[0].fingerprint, self.public.fingerprint);
-        let directory = tempfile::tempdir().unwrap();
-        let replacement = WalletApplication::new(directory.path().into(), false);
-        replacement.initialize(Network::Regtest).unwrap();
-        let request = replacement
-            .propose_contact_restore(backup, &self.public)
-            .unwrap();
-        let review = self.app.review_contact_restore(&request).unwrap();
-        let approved = self
-            .app
-            .approve_contact_restore(&review.review_id, &request)
-            .unwrap();
-        let recovered = replacement.store_contact_restored_key(&approved).unwrap();
-        assert_eq!(recovered.config.vault_descriptor, config.vault_descriptor);
-        assert_eq!(
-            recovered.config.phone_vault_pubkey,
-            config.phone_vault_pubkey
-        );
-        assert_eq!(recovered.config.hww_vault_pubkey, config.hww_vault_pubkey);
-    }
+/// The fixtures' chain clock: ten-minute blocks, so a block's median time past follows its height.
+fn median_time(height: u64) -> u64 {
+    1_799_940_000 + height * 600
+}
+
+/// The first tip height at which a coin confirmed at `height` is past the signer's time lock.
+fn opening_height(height: u64) -> u64 {
+    height - 1 + u64::from(anzen_common::HWW_RECOVERY_SECONDS).div_ceil(600)
 }
 
 struct TestBackend {
@@ -109,9 +81,12 @@ impl Blockchain for TestBackend {
         Ok(ChainTip {
             network: Network::Regtest,
             height: 100,
-            median_time: 1_800_000_000,
+            median_time: median_time(100),
             best_block_hash: BlockHash::all_zeros(),
         })
+    }
+    fn median_time_past(&self, height: u64) -> Result<u64> {
+        Ok(median_time(height))
     }
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
         let address =
@@ -169,11 +144,15 @@ impl Blockchain for OfflineBackend {
     fn chain_tip(&self) -> Result<ChainTip> {
         Ok(ChainTip {
             height: self.height.get(),
+            median_time: median_time(self.height.get()),
             ..TestBackend {
                 broadcasts: Cell::new(0),
             }
             .chain_tip()?
         })
+    }
+    fn median_time_past(&self, height: u64) -> Result<u64> {
+        Ok(median_time(height))
     }
     fn scan_vault(&self, _: &VaultConfig) -> Result<Vec<VaultUtxo>> {
         if !self.live.get() {
@@ -275,8 +254,7 @@ fn offline_fixture(devices: &Devices, action: OfflineAction) -> OfflineBackend {
 #[test]
 fn recovered_hot_wallet_retries_the_exact_transaction_after_a_lost_response() {
     let devices = Devices::paired();
-    let contact = ContactFixture::enroll(&devices);
-    let backup = devices.phone.export_backup().unwrap();
+    let backup = devices.back_up();
     let original_address = Address::from_str(&devices.phone.receive_address().unwrap())
         .unwrap()
         .require_network(Network::Regtest)
@@ -299,6 +277,9 @@ fn recovered_hot_wallet_retries_the_exact_transaction_after_a_lost_response() {
                 broadcasts: Cell::new(0),
             }
             .chain_tip()
+        }
+        fn median_time_past(&self, height: u64) -> Result<u64> {
+            Ok(median_time(height))
         }
         fn scan_vault(&self, _: &VaultConfig) -> Result<Vec<VaultUtxo>> {
             Ok(vec![])
@@ -338,20 +319,16 @@ fn recovered_hot_wallet_retries_the_exact_transaction_after_a_lost_response() {
         attempts: RefCell::new(vec![]),
         lose_response: Cell::new(true),
     };
+    // The phone is lost; a new one restores its key from the cloud backup with the signer.
     std::fs::remove_file(devices.phone_dir.path().join("phone/device.json")).unwrap();
-    std::fs::remove_file(devices.signer_dir.path().join("hww/device.json")).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let fresh = WalletApplication::new(directory.path().into(), false);
     let identity = fresh.initialize(Network::Regtest).unwrap();
-    let request = fresh
-        .propose_contact_restore(&backup, &contact.public)
-        .unwrap();
-    let review = contact.app.review_contact_restore(&request).unwrap();
-    let response = contact
-        .app
-        .approve_contact_restore(&review.review_id, &request)
-        .unwrap();
-    fresh.store_contact_restored_key(&response).unwrap();
+    fresh.import_recovery_vault(&devices.config).unwrap();
+    let request = fresh.propose_restore(&backup).unwrap();
+    let review = devices.signer.review_restore(&request).unwrap();
+    let response = devices.signer.approve_restore(&review.review_id).unwrap();
+    fresh.store_restored_key(&response).unwrap();
     let cancelled = fresh.review_recovered_wallet(&backend).unwrap();
     fresh.reject_recovered_wallet(&cancelled.review_id).unwrap();
     assert!(
@@ -636,6 +613,9 @@ impl Blockchain for RotationBackend {
     fn chain_tip(&self) -> Result<ChainTip> {
         self.0.chain_tip()
     }
+    fn median_time_past(&self, height: u64) -> Result<u64> {
+        self.0.median_time_past(height)
+    }
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
         self.0.scan_vault(config)
     }
@@ -657,489 +637,15 @@ impl HotWalletBackend for RotationBackend {
 
 #[test]
 fn restored_rotation_is_public_only_preserves_policy_and_retries_the_same_spends() {
-    check_restored_rotation(8_000_000, 25_000_000, false);
-}
-
-#[test]
-fn lost_signer_replacement_preserves_policy_and_cannot_bypass_phone_recovery() {
-    check_signer_replacement(8_000_000, 25_000_000, false);
-}
-
-#[test]
-fn lost_signer_replacement_keeps_a_disabled_policy_disabled() {
-    check_signer_replacement(0, 0, false);
-}
-
-#[test]
-fn restored_rotation_preserves_authenticated_contacts_and_their_ability_to_recover() {
-    check_restored_rotation(8_000_000, 25_000_000, true);
-}
-
-#[test]
-fn lost_signer_replacement_preserves_contacts_and_their_ability_to_recover() {
-    check_signer_replacement(8_000_000, 25_000_000, true);
-}
-
-#[test]
-fn signer_replacement_moves_mature_cohorts_and_recovers_later_deposits_after_restart() {
-    let devices = Devices::paired();
-    let mut source = RotationBackend(offline_fixture(&devices, OfflineAction::HwwRecovery));
-    let oldest = source.0.coins[0].clone();
-    let youngest = VaultUtxo {
-        outpoint: OutPoint::new(Txid::from_byte_array([23; 32]), oldest.outpoint.vout),
-        confirmation_height: 20,
-        ..oldest.clone()
-    };
-    let coin_sats = oldest.txout.value.to_sat();
-    source.0.coins.push(youngest.clone());
-    source.0.height.set(61_208); // Oldest is one block early; the later deposit must not postpone it.
-    let directory = tempfile::tempdir().unwrap();
-    let signer = SignerApplication::new(directory.path().into(), false);
-    let identity = signer.initialize(Network::Regtest).unwrap();
-    let candidate = devices
-        .phone
-        .inspect_signer_replacement(&source, &identity)
-        .unwrap();
-    assert_eq!(candidate.recovery_next_block_height, Some(61_210));
-    assert_eq!(candidate.recovery_blocks_remaining, Some(1));
-    assert_eq!(candidate.selected_input_count, 1);
-    assert_eq!(candidate.selected_sats, coin_sats);
-    assert_eq!(candidate.total_sats, coin_sats * 2);
-    let request = devices
-        .phone
-        .propose_signer_replacement(&source, &identity)
-        .unwrap();
-    assert_eq!(request.replacement.recovery_inputs.len(), 1);
-    assert_eq!(
-        request.replacement.recovery_inputs[0].outpoint.to_string(),
-        oldest.outpoint.to_string()
-    );
-    let review = signer.review_signer_replacement(&request).unwrap();
-    assert_eq!(review.input_count, 1);
-    let approved = signer
-        .approve_signer_replacement(&review.review_id, &request)
-        .unwrap();
-    assert!(
-        devices
-            .phone
-            .activate_signer_replacement(&source, &approved)
-            .map(drop)
-            .expect_err("oldest input is one block early")
-            .to_string()
-            .contains("not mature")
-    );
-    assert_eq!(source.0.broadcasts.get(), 0);
-    source.0.height.set(61_209);
-    source.0.live.set(false);
-    assert!(
-        devices
-            .phone
-            .activate_signer_replacement(&source, &approved)
-            .map(drop)
-            .expect_err("input was spent")
-            .to_string()
-            .contains("no longer confirmed and unspent")
-    );
-    assert_eq!(source.0.broadcasts.get(), 0);
-    source.0.live.set(true);
-    devices
-        .phone
-        .activate_signer_replacement(&source, &approved)
-        .unwrap();
-
-    // The fixture now exposes only the young input. The real-node browser test checks the
-    // actual UTXO transition; this fixture isolates review/retry/persistence failures.
-    source.0.coins = vec![youngest.clone()];
-    source.0.live.set(true);
-    let reopened = WalletApplication::new(devices.phone_dir.path().into(), false);
-    let current = reopened.configuration().unwrap();
-    assert_ne!(current.vault_address, devices.config.vault_address);
-    assert_eq!(
-        current.phone_vault_pubkey,
-        devices.config.phone_vault_pubkey
-    );
-    let retired = reopened.previous_vaults(&source).unwrap();
-    assert_eq!(retired.len(), 1);
-    let retired = &retired[0];
-    assert_eq!(retired.vault_address, devices.config.vault_address);
-    assert!(retired.can_recover);
-    assert_eq!(retired.phone.total_sats, coin_sats);
-    assert_eq!(retired.phone.blocks_remaining, Some(10));
-    assert_eq!(retired.hww.blocks_remaining, Some(4_345));
-    assert!(
-        reopened
-            .review_previous_vault_recovery(&source, "../device")
-            .is_err()
-    );
-    let first = reopened
-        .review_previous_vault_recovery(&source, &retired.vault_id)
-        .unwrap();
-    assert_eq!(first.destination, current.vault_address);
-    assert_eq!(first.source_address, devices.config.vault_address);
-    assert_eq!(first.input_count, 1);
-    assert_eq!(first.amount_sats + first.fee_sats, coin_sats);
-    assert_eq!(first.blocks_remaining, 10);
-    reopened
-        .reject_previous_vault_recovery(&first.review_id)
-        .unwrap();
-    assert!(
-        reopened
-            .confirm_previous_vault_recovery(&source, &first.review_id)
-            .is_err()
-    );
-    let next = reopened
-        .review_previous_vault_recovery(&source, &retired.vault_id)
-        .unwrap();
-    let review_path = devices
-        .phone_dir
-        .path()
-        .join("phone/previous-vault-sweeps")
-        .join(&next.review_id)
-        .join("review.json");
-    let original = std::fs::read(&review_path).unwrap();
-    let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    // The review fixes the exact transaction ID; nothing is signed until confirmation.
-    assert!(changed["transfer"]["txid"].is_string());
-    assert!(changed["transfer"].get("psbt").is_none());
-    changed["destination"] = serde_json::json!(devices.config.vault_address);
-    std::fs::write(&review_path, serde_json::to_vec(&changed).unwrap()).unwrap();
-    assert!(
-        reopened
-            .confirm_previous_vault_recovery(&source, &next.review_id)
-            .is_err()
-    );
-    std::fs::write(&review_path, original).unwrap();
-    let config_path = devices.phone_dir.path().join("anzen.json");
-    let current_bytes = std::fs::read(&config_path).unwrap();
-    std::fs::write(&config_path, serde_json::to_vec(&devices.config).unwrap()).unwrap();
-    assert!(
-        reopened
-            .confirm_previous_vault_recovery(&source, &next.review_id)
-            .expect_err("current destination changed")
-            .to_string()
-            .contains("changed since review")
-    );
-    std::fs::write(&config_path, current_bytes).unwrap();
-    source.0.height.set(61_218);
-    assert!(
-        reopened
-            .confirm_previous_vault_recovery(&source, &next.review_id)
-            .expect_err("late deposit is one block early")
-            .to_string()
-            .contains("not mature")
-    );
-    source.0.height.set(61_219);
-    source.0.live.set(false);
-    assert!(
-        reopened
-            .confirm_previous_vault_recovery(&source, &next.review_id)
-            .expect_err("late deposit was spent")
-            .to_string()
-            .contains("no longer confirmed and unspent")
-    );
-    source.0.live.set(true);
-    source.0.lose_ack.set(true);
-    assert!(
-        reopened
-            .confirm_previous_vault_recovery(&source, &next.review_id)
-            .expect_err("accepted broadcast lost its response")
-            .to_string()
-            .contains("lost response")
-    );
-    assert!(
-        reopened
-            .reject_previous_vault_recovery(&next.review_id)
-            .is_err()
-    );
-    let reopened = WalletApplication::new(devices.phone_dir.path().into(), false);
-    let txid = reopened
-        .confirm_previous_vault_recovery(&source, &next.review_id)
-        .unwrap();
-    let calls = source.0.broadcasts.get();
-    assert_eq!(
-        reopened
-            .confirm_previous_vault_recovery(&source, &next.review_id)
-            .unwrap(),
-        txid
-    );
-    assert_eq!(source.0.broadcasts.get(), calls);
-    let retired = reopened.previous_vaults(&source).unwrap();
-    assert_eq!(retired[0].phone.total_sats, 0);
-    assert_eq!(retired[0].phone.blocks_remaining, None);
-    assert!(
-        reopened
-            .review_previous_vault_recovery(&source, &retired[0].vault_id)
-            .is_err()
-    );
-    assert_eq!(
-        reopened.configuration().unwrap().vault_address,
-        current.vault_address
-    );
-
-    // Monitoring is retained even when empty: later sends to the retired address reappear.
-    source.0.live.set(true);
-    source.0.coins[0].confirmation_height = 61_219;
-    let retired = reopened.previous_vaults(&source).unwrap();
-    assert_eq!(retired[0].phone.total_sats, coin_sats);
-    assert_eq!(retired[0].phone.blocks_remaining, Some(61_199));
-    assert_eq!(retired[0].hww.blocks_remaining, Some(65_534));
-}
-
-fn check_signer_replacement(
-    monthly_limit_sats: u64,
-    emergency_access_limit_sats: u64,
-    with_contact: bool,
-) {
-    let devices = Devices::paired();
-    let backend = TestBackend {
-        broadcasts: Cell::new(0),
-    };
-    if monthly_limit_sats > 0 || emergency_access_limit_sats > 0 {
-        let policy = devices
-            .phone
-            .propose_policy(
-                &backend,
-                PolicyLimits {
-                    monthly_limit_sats,
-                    emergency_access_limit_sats,
-                },
-            )
-            .unwrap();
-        let review = devices.signer.review_policy(&policy).unwrap();
-        let approved = devices.signer.approve_policy(&review.review_id).unwrap();
-        devices.phone.activate_policy(&backend, &approved).unwrap();
-    }
-    let contact = with_contact.then(|| ContactFixture::enroll(&devices));
-    let source = RotationBackend(offline_fixture(&devices, OfflineAction::HwwRecovery));
-    let old_config = devices.phone.configuration().unwrap();
-    let phone_identity = devices.phone.public_identity().unwrap();
-    let original_device =
-        std::fs::read(devices.phone_dir.path().join("phone/device.json")).unwrap();
-    let replacement_dir = tempfile::tempdir().unwrap();
-    let replacement = SignerApplication::new(replacement_dir.path().into(), false);
-    let replacement_identity = replacement.initialize(Network::Regtest).unwrap();
-    let mut wrong_identity = replacement_identity.clone();
-    wrong_identity.vault_pubkey = phone_identity.vault_pubkey.clone();
-    assert!(
-        devices
-            .phone
-            .propose_signer_replacement(&source, &wrong_identity)
-            .is_err()
-    );
-    // The unavailable device is actually inaccessible to this ceremony, not copied to its replacement.
-    std::fs::remove_file(devices.signer_dir.path().join("hww/device.json")).unwrap();
-    let candidate = devices
-        .phone
-        .inspect_signer_replacement(&source, &replacement_identity)
-        .unwrap();
-    assert_eq!(candidate.recovery_next_block_height, Some(61_210));
-    let request = devices
-        .phone
-        .propose_signer_replacement(&source, &replacement_identity)
-        .unwrap();
-    assert_eq!(
-        request.new_config.phone_vault_pubkey,
-        phone_identity.vault_pubkey
-    );
-    assert_eq!(
-        request.new_config.hww_vault_pubkey,
-        replacement_identity.vault_pubkey
-    );
-    assert_eq!(request.new_config.monthly_limit_sats, monthly_limit_sats);
-    let json = serde_json::to_string(&request).unwrap();
-    assert!(!json.contains("mnemonic"));
-    assert!(!json.contains("encrypted_payload"));
-    assert!(!json.contains("symmetric_key"));
-    let review = replacement.review_signer_replacement(&request).unwrap();
-    assert_eq!(
-        review.friend_fingerprints,
-        contact
-            .as_ref()
-            .map(|c| c.public.fingerprint.clone())
-            .into_iter()
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(review.recovery_delay_blocks, 61_200);
-    assert_eq!(review.monthly_limit_sats, monthly_limit_sats);
-    replacement
-        .reject_signer_replacement(&review.review_id)
-        .unwrap();
-    assert!(
-        replacement
-            .approve_signer_replacement(&review.review_id, &request)
-            .is_err()
-    );
-    let mut wrong = request.clone();
-    wrong.backup_request.payload.ciphertext[0] ^= 1;
-    assert!(replacement.review_signer_replacement(&wrong).is_err());
-    if let Some(policy) = &request.replacement.renewed_policy {
-        // The renewed policy must spend exactly the phone's recovery output.
-        let mut wrong = request.clone();
-        wrong
-            .replacement
-            .renewed_policy
-            .as_mut()
-            .unwrap()
-            .vault_inputs[0]
-            .value_sats += 1;
-        assert!(replacement.review_signer_replacement(&wrong).is_err());
-        let mut wrong = request.clone();
-        wrong.replacement.renewed_policy.as_mut().unwrap().limits =
-            anzen_protocol::policy::Limits {
-                monthly_limit_sats: policy.limits.monthly_limit_sats + 1,
-                ..policy.limits
-            };
-        assert!(replacement.review_signer_replacement(&wrong).is_err());
-    }
-    let mut wrong = request.clone();
-    wrong.new_config.monthly_limit_sats += 1;
-    assert!(replacement.review_signer_replacement(&wrong).is_err());
-    let mut wrong = request.clone();
-    let duplicate = wrong.replacement.recovery_inputs[0];
-    wrong.replacement.recovery_inputs.push(duplicate);
-    assert!(replacement.review_signer_replacement(&wrong).is_err());
-    let review = replacement.review_signer_replacement(&request).unwrap();
-    assert!(
-        replacement
-            .approve_signer_replacement(&review.review_id, &wrong)
-            .is_err()
-    );
-    let approval = replacement
-        .approve_signer_replacement(&review.review_id, &request)
-        .unwrap();
-    assert_eq!(source.0.broadcasts.get(), 0);
-    assert!(
-        devices
-            .phone
-            .activate_signer_replacement(&source, &approval)
-            .is_err()
-    );
-    source.0.height.set(61_208); // Still one block too early for next-block validity.
-    assert!(
-        devices
-            .phone
-            .activate_signer_replacement(&source, &approval)
-            .is_err()
-    );
-    assert_eq!(source.0.broadcasts.get(), 0);
-    assert_eq!(
-        devices.phone.configuration().unwrap().vault_address,
-        old_config.vault_address
-    );
-    source.0.height.set(61_209);
-    source.0.lose_ack.set(true);
-    assert!(
-        devices
-            .phone
-            .activate_signer_replacement(&source, &approval)
-            .is_err()
-    );
-    assert_eq!(
-        devices.phone.configuration().unwrap().vault_address,
-        old_config.vault_address
-    );
-    let result = devices
-        .phone
-        .activate_signer_replacement(&source, &approval)
-        .unwrap();
-    let count = source.0.broadcasts.get();
-    assert_eq!(
-        devices
-            .phone
-            .activate_signer_replacement(&source, &approval)
-            .unwrap()
-            .sweep_txid,
-        result.sweep_txid
-    );
-    assert_eq!(source.0.broadcasts.get(), count);
-    assert_eq!(
-        std::fs::read(devices.phone_dir.path().join("phone/device.json")).unwrap(),
-        original_device
-    );
-    assert_eq!(
-        devices.phone.configuration().unwrap().monthly_limit_sats,
-        monthly_limit_sats
-    );
-    assert_eq!(
-        devices
-            .phone
-            .configuration()
-            .unwrap()
-            .emergency_access_limit_sats,
-        emergency_access_limit_sats
-    );
-    assert_eq!(
-        result.renewed_schedule.is_some(),
-        monthly_limit_sats > 0 || emergency_access_limit_sats > 0
-    );
-    assert!(devices.phone.export_backup().is_ok());
-    if let Some(contact) = &contact {
-        contact.assert_recovers(
-            &devices.phone.export_backup().unwrap(),
-            &devices.phone.configuration().unwrap(),
-        );
-    }
-    assert!(
-        !replacement_dir
-            .path()
-            .join("hww/vault-config.json")
-            .exists()
-    );
-    replacement
-        .adopt_signer_replacement(&result.request_id)
-        .unwrap();
-    assert_eq!(
-        replacement
-            .export_recovery_bundle()
-            .unwrap()
-            .config
-            .vault_address,
-        result.new_vault_address
-    );
-    assert!(!replacement_dir.path().join("phone").exists());
-    assert!(!replacement_dir.path().join("cloud").exists());
-    assert!(!devices.phone_dir.path().join("hww/device.json").exists());
-    // A delayed completion message must not erase a later policy change on the new signer.
-    let renewed_chain = request
-        .replacement
-        .renewed_policy
-        .as_ref()
-        .map(confirmed_policy);
-    let chain: &dyn HotWalletBackend = match &renewed_chain {
-        Some(chain) => chain,
-        None => &backend,
-    };
-    let next = devices
-        .phone
-        .propose_policy(
-            chain,
-            PolicyLimits {
-                monthly_limit_sats: 7_000_000,
-                emergency_access_limit_sats: 20_000_000,
-            },
-        )
-        .unwrap();
-    let review = replacement.review_policy(&next).unwrap();
-    replacement.approve_policy(&review.review_id).unwrap();
-    assert_eq!(
-        replacement
-            .adopt_signer_replacement(&result.request_id)
-            .unwrap()
-            .monthly_limit_sats,
-        7_000_000
-    );
+    check_restored_rotation(8_000_000, 25_000_000);
 }
 
 #[test]
 fn restored_rotation_preserves_a_disabled_policy_without_creating_presigned_withdrawals() {
-    check_restored_rotation(0, 0, false);
+    check_restored_rotation(0, 0);
 }
 
-fn check_restored_rotation(
-    monthly_limit_sats: u64,
-    emergency_access_limit_sats: u64,
-    with_contact: bool,
-) {
+fn check_restored_rotation(monthly_limit_sats: u64, emergency_access_limit_sats: u64) {
     let devices = Devices::paired();
     let policy = devices
         .phone
@@ -1156,7 +662,6 @@ fn check_restored_rotation(
     let review = devices.signer.review_policy(&policy).unwrap();
     devices.signer.approve_policy(&review.review_id).unwrap();
     let source = RotationBackend(confirmed_policy(&policy));
-    let contact = with_contact.then(|| ContactFixture::enroll(&devices));
     let request = devices.phone.propose_backup().unwrap();
     let review = devices.signer.review_backup(&request).unwrap();
     let approval = devices
@@ -1178,27 +683,12 @@ fn check_restored_rotation(
         .unwrap();
     // Prove that the operation does not read either private key from the old combined CLI layout.
     std::fs::remove_file(devices.phone_dir.path().join("phone/device.json")).unwrap();
-    if with_contact {
-        // An unapproved replacement cloud object must not silently change the authenticated
-        // contact list that will be used by a subsequent rotation.
-        let mut changed_cloud = cloud.clone();
-        changed_cloud.friends.clear();
-        phone.propose_restore(&changed_cloud).unwrap();
-    }
     let request = phone.propose_restored_rotation(&source).unwrap();
     let request_json = serde_json::to_string(&request).unwrap();
     assert!(!request_json.contains("phone_mnemonic"));
     assert!(!request_json.contains("encrypted_payload"));
     assert!(!request_json.contains("symmetric_key"));
     let review = devices.signer.review_phone_rotation(&request).unwrap();
-    assert_eq!(
-        review.friend_fingerprints,
-        contact
-            .as_ref()
-            .map(|c| c.public.fingerprint.clone())
-            .into_iter()
-            .collect::<Vec<_>>()
-    );
     assert_eq!(review.monthly_limit_sats, monthly_limit_sats);
     assert_eq!(
         review.emergency_access_limit_sats,
@@ -1290,12 +780,6 @@ fn check_restored_rotation(
     );
     assert_ne!(result.new_vault_address, devices.config.vault_address);
     assert!(phone.export_backup().is_ok());
-    if let Some(contact) = &contact {
-        contact.assert_recovers(
-            &phone.export_backup().unwrap(),
-            &phone.configuration().unwrap(),
-        );
-    }
     // No automatic pairing change on the signer: adoption is a separate explicit user action.
     assert_eq!(
         devices
@@ -1418,7 +902,7 @@ fn offline_signer_rejects_unbound_tampered_and_unreviewed_actions() {
     let review = devices.signer.review_offline_action(&request).unwrap();
     assert_eq!(review.input_count, 2);
     assert_eq!(review.amount_sats + review.fee_sats, 2000);
-    assert!(review.recovery_delay_blocks.is_none());
+    assert!(review.recovery_delay_seconds.is_none());
     devices
         .signer
         .reject_offline_action(&review.review_id)
@@ -1474,7 +958,7 @@ fn replacement_phone_coordinates_both_hww_actions_without_the_lost_phone_key() {
         );
         assert_eq!(backend.broadcasts.get(), 0);
         if action == OfflineAction::HwwRecovery {
-            assert_eq!(review.recovery_delay_blocks, Some(65_535));
+            assert_eq!(review.recovery_delay_seconds, Some(65_535 * 512));
             assert!(
                 replacement
                     .activate_offline_action(&backend, &approved)
@@ -1483,7 +967,7 @@ fn replacement_phone_coordinates_both_hww_actions_without_the_lost_phone_key() {
                     .contains("not mature")
             );
             assert_eq!(backend.broadcasts.get(), 0);
-            backend.height.set(65_544);
+            backend.height.set(opening_height(10));
             backend.lose_ack.set(true);
             assert!(
                 replacement
@@ -1529,8 +1013,8 @@ fn hww_recovery_timing_and_requests_keep_mature_savings_separate_from_new_deposi
         .unwrap();
     std::fs::remove_file(devices.phone_dir.path().join("phone/device.json")).unwrap();
     let snapshot = phone.recovery_snapshot(&backend).unwrap();
-    assert_eq!(snapshot.phone.earliest_next_block_height, Some(61_210));
-    assert_eq!(snapshot.hww.earliest_next_block_height, Some(65_545));
+    let opens_at = median_time(9) + u64::from(anzen_common::HWW_RECOVERY_SECONDS);
+    assert_eq!(snapshot.hww.opens_at, Some(opens_at));
     assert_eq!(snapshot.hww.mature_sats, 0);
     let destination = phone.receive_address().unwrap();
     let request = phone
@@ -1546,14 +1030,14 @@ fn hww_recovery_timing_and_requests_keep_mature_savings_separate_from_new_deposi
         .signer
         .approve_offline_action(&review.review_id)
         .unwrap();
-    backend.height.set(65_543);
+    backend.height.set(opening_height(10) - 1);
     assert_eq!(
         phone
             .recovery_snapshot(&backend)
             .unwrap()
             .hww
-            .blocks_remaining,
-        Some(1)
+            .seconds_remaining,
+        Some(opens_at - median_time(opening_height(10) - 1))
     );
     assert!(
         phone
@@ -1562,9 +1046,9 @@ fn hww_recovery_timing_and_requests_keep_mature_savings_separate_from_new_deposi
             .to_string()
             .contains("not mature")
     );
-    backend.height.set(65_544);
+    backend.height.set(opening_height(10));
     let snapshot = phone.recovery_snapshot(&backend).unwrap();
-    assert_eq!(snapshot.hww.blocks_remaining, Some(0));
+    assert_eq!(snapshot.hww.seconds_remaining, Some(0));
     assert_eq!(snapshot.hww.total_sats - snapshot.hww.mature_sats, 1_000);
     assert_eq!(
         phone
@@ -1582,7 +1066,7 @@ fn hww_recovery_timing_and_requests_keep_mature_savings_separate_from_new_deposi
             .recovery_snapshot(&backend)
             .unwrap()
             .hww
-            .blocks_remaining,
+            .seconds_remaining,
         None
     );
 }
@@ -1656,297 +1140,6 @@ fn backup_ceremony_never_exports_plaintext_or_reads_the_other_device_store() {
     // A newer request supersedes an older response instead of replacing the current backup.
     devices.phone.propose_backup().unwrap();
     assert!(devices.phone.store_backup(&response).is_err());
-}
-
-#[test]
-fn recovery_contacts_are_independent_and_backup_updates_require_fingerprint_review() {
-    let devices = Devices::paired();
-    let friend_dir = tempfile::tempdir().unwrap();
-    let friend = WalletApplication::new(friend_dir.path().into(), false);
-    friend.initialize(Network::Regtest).unwrap();
-    assert!(friend.recovery_contact().unwrap().is_none());
-    let alice = friend.generate_recovery_contact("Alice").unwrap();
-    assert!(
-        friend
-            .generate_recovery_contact("Replacement Alice")
-            .is_err()
-    );
-    assert_eq!(
-        friend.recovery_contact().unwrap().unwrap().fingerprint,
-        alice.fingerprint
-    );
-    let shared = serde_json::to_string(&alice).unwrap();
-    assert!(!shared.contains("PRIVATE KEY"));
-    assert!(!shared.contains("private_key"));
-    assert!(!shared.contains("mnemonic"));
-    let private = std::fs::read(friend_dir.path().join("phone/recovery-contact.json")).unwrap();
-    let mut invalid = alice.clone();
-    invalid.fingerprint.push('0');
-    assert!(devices.phone.propose_backup_with_contact(&invalid).is_err());
-    let message = devices.phone.propose_backup_with_contact(&alice).unwrap();
-    let review = devices.signer.review_backup(&message).unwrap();
-    assert_eq!(review.friend_fingerprints, vec![alice.fingerprint.clone()]);
-    assert!(devices.phone.export_backup().is_err());
-    devices.signer.reject_backup(&review.review_id).unwrap();
-    assert!(
-        devices
-            .signer
-            .approve_backup(&review.review_id, &message)
-            .is_err()
-    );
-    let review = devices.signer.review_backup(&message).unwrap();
-    let approved = devices
-        .signer
-        .approve_backup(&review.review_id, &message)
-        .unwrap();
-    devices.phone.store_backup(&approved).unwrap();
-    let backup = devices.phone.export_backup().unwrap();
-    assert_eq!(backup.friends.len(), 1);
-    assert_eq!(backup.friends[0].fingerprint, alice.fingerprint);
-    assert_eq!(
-        backup.friends[0].public_key_armored,
-        alice.public_key_armored
-    );
-    assert!(devices.phone.propose_backup_with_contact(&alice).is_err());
-    assert_eq!(devices.phone.export_backup().unwrap(), backup);
-    // Recreating a backup must preserve existing contacts, never silently reset the list.
-    let renewed = devices.phone.propose_backup().unwrap();
-    let review = devices.signer.review_backup(&renewed).unwrap();
-    assert_eq!(review.friend_fingerprints, vec![alice.fingerprint.clone()]);
-    let approved = devices
-        .signer
-        .approve_backup(&review.review_id, &renewed)
-        .unwrap();
-    devices.phone.store_backup(&approved).unwrap();
-    let next = devices.phone.export_backup().unwrap();
-    assert_eq!(next.friends[0].fingerprint, alice.fingerprint);
-    assert_ne!(next.encrypted_payload, backup.encrypted_payload);
-    assert_ne!(
-        next.friends[0].encrypted_symmetric_key,
-        backup.friends[0].encrypted_symmetric_key
-    );
-    assert_eq!(
-        private,
-        std::fs::read(friend_dir.path().join("phone/recovery-contact.json")).unwrap()
-    );
-    assert!(
-        !devices
-            .phone_dir
-            .path()
-            .join("phone/recovery-contact.json")
-            .exists()
-    );
-    assert!(!devices.signer_dir.path().join("phone").exists());
-    // An unapproved contact proposal cannot mutate the active backup.
-    let bob_dir = tempfile::tempdir().unwrap();
-    let bob = WalletApplication::new(bob_dir.path().into(), false);
-    bob.initialize(Network::Regtest).unwrap();
-    let bob = bob.generate_recovery_contact("Bob").unwrap();
-    let proposal = devices.phone.propose_backup_with_contact(&bob).unwrap();
-    assert_eq!(devices.phone.export_backup().unwrap(), next);
-    let review = devices.signer.review_backup(&proposal).unwrap();
-    let mut fingerprints = vec![alice.fingerprint, bob.fingerprint];
-    fingerprints.sort();
-    assert_eq!(review.friend_fingerprints, fingerprints);
-    assert!(
-        devices
-            .signer
-            .approve_backup(&review.review_id, &renewed)
-            .is_err()
-    );
-    let approved = devices
-        .signer
-        .approve_backup(&review.review_id, &proposal)
-        .unwrap();
-    devices.phone.store_backup(&approved).unwrap();
-    assert_eq!(devices.phone.export_backup().unwrap().friends.len(), 2);
-}
-
-#[test]
-fn contact_recovery_needs_no_original_devices_and_keeps_the_real_sweep_delay() {
-    let devices = Devices::paired();
-    let mut source = RotationBackend(offline_fixture(&devices, OfflineAction::HwwRecovery));
-    let oldest = source.0.coins[0].clone();
-    let original_amount = oldest.txout.value.to_sat();
-    let youngest = VaultUtxo {
-        outpoint: OutPoint::new(Txid::from_byte_array([31; 32]), oldest.outpoint.vout),
-        txout: TxOut {
-            value: Amount::from_sat(1_000),
-            ..oldest.txout.clone()
-        },
-        confirmation_height: 100,
-    };
-    source.0.coins.push(youngest.clone());
-    let contact_dir = tempfile::tempdir().unwrap();
-    let contact = WalletApplication::new(contact_dir.path().into(), false);
-    contact.initialize(Network::Regtest).unwrap();
-    let public = contact.generate_recovery_contact("Alice").unwrap();
-    let proposal = devices.phone.propose_backup_with_contact(&public).unwrap();
-    let review = devices.signer.review_backup(&proposal).unwrap();
-    let approval = devices
-        .signer
-        .approve_backup(&review.review_id, &proposal)
-        .unwrap();
-    devices.phone.store_backup(&approval).unwrap();
-    let backup = devices.phone.export_backup().unwrap();
-    let expected_phone = devices.phone.public_identity().unwrap();
-    // Only the cloud object and contact survive. There is no public config import workaround.
-    std::fs::remove_file(devices.phone_dir.path().join("phone/device.json")).unwrap();
-    std::fs::remove_file(devices.signer_dir.path().join("hww/device.json")).unwrap();
-    let replacement_dir = tempfile::tempdir().unwrap();
-    let replacement = WalletApplication::new(replacement_dir.path().into(), false);
-    let identity = replacement.initialize(Network::Regtest).unwrap();
-    let fresh_key = std::fs::read(replacement_dir.path().join("phone/device.json")).unwrap();
-    let request = replacement
-        .propose_contact_restore(&backup, &public)
-        .unwrap();
-    let wire = serde_json::to_string(&request).unwrap();
-    assert!(!wire.contains("encrypted_payload"));
-    assert!(!wire.contains("phone_mnemonic"));
-    assert!(!wire.contains("\"symmetric_key\":")); // Only the encrypted OpenPGP wrapper is present.
-    let reviewed = contact.review_contact_restore(&request).unwrap();
-    assert_eq!(reviewed.recipient_public_key, identity.vault_pubkey);
-    contact.reject_contact_restore(&reviewed.review_id).unwrap();
-    assert!(
-        contact
-            .approve_contact_restore(&reviewed.review_id, &request)
-            .is_err()
-    );
-    let reviewed = contact.review_contact_restore(&request).unwrap();
-    let mut altered = request.clone();
-    altered.backup_id = "a".repeat(64);
-    assert!(
-        contact
-            .approve_contact_restore(&reviewed.review_id, &altered)
-            .is_err()
-    );
-    let response = contact
-        .approve_contact_restore(&reviewed.review_id, &request)
-        .unwrap();
-    let mut corrupt = response.clone();
-    corrupt.payload.ciphertext[0] ^= 1;
-    assert!(replacement.store_contact_restored_key(&corrupt).is_err());
-    let state = replacement.store_contact_restored_key(&response).unwrap();
-    assert_eq!(state.config.vault_address, devices.config.vault_address);
-    assert_eq!(state.config.phone_vault_pubkey, expected_phone.vault_pubkey);
-    assert!(!state.spending_policy_available);
-    assert_eq!(state.recipient_public_key, identity.vault_pubkey);
-    assert!(replacement.configuration().is_err()); // Watch-only source, never a replacement of this phone's own vault/key.
-    assert_eq!(
-        fresh_key,
-        std::fs::read(replacement_dir.path().join("phone/device.json")).unwrap()
-    );
-    assert_eq!(
-        replacement.contact_recovery_state().unwrap().request_id,
-        state.request_id
-    );
-    assert!(!contact_dir.path().join("cloud").exists());
-    assert!(!contact_dir.path().join("phone/restored-keys").exists());
-    assert!(!replacement_dir.path().join("hww").exists());
-    // A contact cannot authenticate a payload it never sees. The recipient must reject
-    // a changed cloud object without damaging a previously recovered key or identity.
-    let mut corrupt_backup = backup.clone();
-    corrupt_backup.encrypted_payload.ciphertext[0] ^= 1;
-    let changed_request = replacement
-        .propose_contact_restore(&corrupt_backup, &public)
-        .unwrap();
-    assert!(replacement.store_contact_restored_key(&response).is_err()); // Superseded request.
-    let reviewed = contact.review_contact_restore(&changed_request).unwrap();
-    let changed_response = contact
-        .approve_contact_restore(&reviewed.review_id, &changed_request)
-        .unwrap();
-    assert!(
-        replacement
-            .store_contact_restored_key(&changed_response)
-            .is_err()
-    );
-    assert_eq!(
-        replacement.contact_recovery_state().unwrap().request_id,
-        state.request_id
-    );
-    assert_eq!(
-        replacement.public_identity().unwrap().vault_pubkey,
-        identity.vault_pubkey
-    );
-    let status = replacement.contact_recovery_status(&source).unwrap();
-    assert_eq!(status.balance_sats, original_amount + 1_000);
-    assert_eq!(status.mature_balance_sats, 0);
-    assert_eq!(status.next_block_height, Some(61_210));
-    let destination = replacement.receive_address().unwrap();
-    let review = replacement
-        .review_contact_sweep(&source, &destination)
-        .unwrap();
-    assert_eq!(review.input_count, 1);
-    assert!(review.blocks_remaining > 0);
-    let record: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(replacement_dir.path().join(format!(
-            "phone/contact-sweeps/{}/review.json",
-            review.review_id
-        )))
-        .unwrap(),
-    )
-    .unwrap();
-    // The review fixes the exact transaction ID; the recovered key signs only on confirmation.
-    assert!(record["transfer"]["txid"].is_string());
-    assert!(record["transfer"].get("psbt").is_none());
-    replacement.reject_contact_sweep(&review.review_id).unwrap();
-    assert!(
-        replacement
-            .confirm_contact_sweep(&source, &review.review_id)
-            .is_err()
-    );
-    let review = replacement
-        .review_contact_sweep(&source, &destination)
-        .unwrap();
-    assert!(
-        replacement
-            .confirm_contact_sweep(&source, &review.review_id)
-            .unwrap_err()
-            .to_string()
-            .contains("not mature")
-    );
-    source.0.height.set(61_208);
-    assert!(
-        replacement
-            .confirm_contact_sweep(&source, &review.review_id)
-            .unwrap_err()
-            .to_string()
-            .contains("not mature")
-    );
-    assert_eq!(source.0.broadcasts.get(), 0);
-    source.0.height.set(61_209);
-    // An attacker sending newer deposits cannot postpone recovery of mature savings.
-    let status = replacement.contact_recovery_status(&source).unwrap();
-    assert_eq!(status.mature_balance_sats, original_amount);
-    assert_eq!(status.blocks_remaining, Some(0));
-    let at_maturity = replacement
-        .review_contact_sweep(&source, &destination)
-        .unwrap();
-    assert_eq!(at_maturity.input_count, 1);
-    assert_eq!(at_maturity.blocks_remaining, 0);
-    assert_eq!(at_maturity.review_id, review.review_id);
-    assert_eq!(
-        at_maturity.amount_sats + at_maturity.fee_sats,
-        original_amount
-    );
-    source.0.lose_ack.set(true);
-    assert!(
-        replacement
-            .confirm_contact_sweep(&source, &review.review_id)
-            .is_err()
-    );
-    assert!(replacement.reject_contact_sweep(&review.review_id).is_err());
-    let txid = replacement
-        .confirm_contact_sweep(&source, &review.review_id)
-        .unwrap();
-    let count = source.0.broadcasts.get();
-    assert_eq!(
-        replacement
-            .confirm_contact_sweep(&source, &review.review_id)
-            .unwrap(),
-        txid
-    );
-    assert_eq!(source.0.broadcasts.get(), count);
 }
 
 #[test]
@@ -2073,20 +1266,6 @@ fn cooperative_sweep_requires_the_exact_review_and_both_separate_devices() {
 }
 
 #[test]
-fn phone_recovery_does_not_broadcast_before_maturity() {
-    let devices = Devices::paired();
-    let backend = TestBackend {
-        broadcasts: Cell::new(0),
-    };
-    let error = devices
-        .phone
-        .phone_recovery(&backend, &devices.phone.receive_address().unwrap())
-        .unwrap_err();
-    assert!(error.to_string().contains("no vault UTXOs are mature"));
-    assert_eq!(backend.broadcasts.get(), 0);
-}
-
-#[test]
 fn pairing_never_requires_or_copies_the_other_devices_private_key() {
     let devices = Devices::paired();
     assert!(!devices.phone_dir.path().join("hww/device.json").exists());
@@ -2109,20 +1288,12 @@ fn pairing_never_requires_or_copies_the_other_devices_private_key() {
 #[test]
 fn signer_reconstructs_policy_and_rejects_changes_to_an_accepted_vault() {
     let devices = Devices::paired();
-    for field in [
-        "address",
-        "descriptor",
-        "phone-delay",
-        "hww-delay",
-        "hww-key",
-        "limit",
-    ] {
+    for field in ["address", "descriptor", "hww-delay", "hww-key", "limit"] {
         let mut altered = devices.config.clone();
         match field {
             "address" => altered.vault_address = devices.phone.receive_address().unwrap(),
             "descriptor" => altered.vault_descriptor.push(' '),
-            "phone-delay" => altered.phone_recovery_blocks -= 1,
-            "hww-delay" => altered.hww_recovery_blocks -= 1,
+            "hww-delay" => altered.hww_recovery_seconds -= 512,
             "hww-key" => altered.hww_vault_pubkey = altered.phone_vault_pubkey.clone(),
             "limit" => altered.monthly_limit_sats = 1000,
             _ => unreachable!(),
@@ -2206,7 +1377,10 @@ fn policy_review_and_approval_work_across_isolated_devices() {
     assert_eq!(schedule.entries.len(), 12);
     assert_eq!(backend.broadcasts.get(), 1);
     let snapshot = devices.phone.vault_snapshot(&backend).unwrap();
-    assert_eq!(snapshot.phone_recovery_next_block_height, Some(61_210));
+    assert_eq!(
+        snapshot.hww_recovery_opens_at,
+        Some(median_time(9) + u64::from(anzen_common::HWW_RECOVERY_SECONDS))
+    );
     let wallet_snapshot =
         serde_json::to_string(&devices.phone.wallet_snapshot(&backend).unwrap()).unwrap();
     assert!(!wallet_snapshot.contains("vault"));

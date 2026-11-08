@@ -506,43 +506,6 @@ mod tests {
     }
 
     #[test]
-    fn recovery_contact_private_key_stays_encrypted_and_out_of_native_responses() {
-        let directory = tempfile::tempdir().unwrap();
-        let call = |command| execute(directory.path(), "wallet", [7; 32], &settings(), command);
-        call(r#"{"method":"initialize","network":"regtest"}"#).unwrap();
-        let contact = call(r#"{"method":"generate_recovery_contact","name":"Alice"}"#).unwrap();
-        assert!(
-            contact["public_key_armored"]
-                .as_str()
-                .unwrap()
-                .contains("PGP PUBLIC KEY")
-        );
-        assert!(!contact.to_string().contains("PRIVATE KEY"));
-        assert!(contact.get("private_key_armored").is_none());
-        let path = directory.path().join("wallet/phone/recovery-contact.json");
-        let stored = std::fs::read_to_string(&path).unwrap();
-        assert!(stored.contains("anzen_native_storage"));
-        assert!(!stored.contains("PRIVATE KEY"));
-        assert!(!stored.contains("Alice"));
-        assert_eq!(
-            call(r#"{"method":"recovery_contact"}"#).unwrap()["contact"],
-            contact
-        );
-        assert!(call(r#"{"method":"generate_recovery_contact","name":"Overwrite"}"#).is_err());
-        assert_eq!(stored, std::fs::read_to_string(&path).unwrap());
-        assert!(
-            execute(
-                directory.path(),
-                "wallet",
-                [8; 32],
-                &settings(),
-                r#"{"method":"recovery_contact"}"#
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn setup_tap_pairs_and_protects_the_backup_in_one_exchange() {
         let phone = tempfile::tempdir().unwrap();
         let signer = tempfile::tempdir().unwrap();
@@ -614,10 +577,9 @@ mod tests {
     }
 
     #[test]
-    fn contact_restore_uses_only_encrypted_native_storage_and_public_messages() {
+    fn cloud_restore_uses_only_encrypted_native_storage_and_public_messages() {
         let owner = tempfile::tempdir().unwrap();
         let signer = tempfile::tempdir().unwrap();
-        let contact = tempfile::tempdir().unwrap();
         let replacement = tempfile::tempdir().unwrap();
         let call = |root: &Path, role: &str, key: u8, command: Value| {
             execute(root, role, [key; 32], &settings(), &command.to_string()).unwrap()
@@ -625,121 +587,79 @@ mod tests {
         let initialize = json!({"method":"initialize", "network":"regtest"});
         let old_phone = call(owner.path(), "wallet", 1, initialize.clone());
         let hww = call(signer.path(), "signer", 2, initialize.clone());
-        let config = call(
+        let setup = call(
             owner.path(),
             "wallet",
             1,
-            json!({"method":"pair_signer", "signer":hww}),
+            json!({"method":"setup_vault", "signer":hww}),
         );
-        call(
+        let accepted = call(
             signer.path(),
             "signer",
             2,
-            json!({"method":"accept_vault", "config":config}),
-        );
-        call(contact.path(), "wallet", 3, initialize.clone());
-        let public = call(
-            contact.path(),
-            "wallet",
-            3,
-            json!({"method":"generate_recovery_contact", "name":"Alice"}),
-        );
-        let request = call(
-            owner.path(),
-            "wallet",
-            1,
-            json!({"method":"propose_backup_with_contact", "contact":public}),
-        );
-        let review = call(
-            signer.path(),
-            "signer",
-            2,
-            json!({"method":"review_backup", "message":request}),
-        );
-        let approved = call(
-            signer.path(),
-            "signer",
-            2,
-            json!({"method":"approve_backup", "review_id":review["review_id"], "message":request}),
+            json!({"method":"accept_setup", "config":setup["config"], "backup":setup["backup"]}),
         );
         call(
             owner.path(),
             "wallet",
             1,
-            json!({"method":"store_backup", "message":approved}),
+            json!({"method":"store_backup", "message":accepted["backup"]}),
         );
+        let config = setup["config"].clone();
         let backup = call(owner.path(), "wallet", 1, json!({"method":"export_backup"}));
-        // From here neither original device exists. No filesystem or public-config shortcut.
+        // The phone is lost. Only the cloud backup and the signer remain.
         drop(owner);
-        drop(signer);
         let recipient = call(replacement.path(), "wallet", 4, initialize);
         let original_key =
             std::fs::read(replacement.path().join("wallet/phone/device.json")).unwrap();
+        call(
+            replacement.path(),
+            "wallet",
+            4,
+            json!({"method":"import_recovery_vault", "config":config}),
+        );
         let request = call(
             replacement.path(),
             "wallet",
             4,
-            json!({"method":"propose_contact_restore", "backup":backup, "contact":public}),
+            json!({"method":"propose_restore", "backup":backup}),
         );
         assert!(request.get("encrypted_payload").is_none());
         let review = call(
-            contact.path(),
-            "wallet",
-            3,
-            json!({"method":"review_contact_restore", "request":request}),
+            signer.path(),
+            "signer",
+            2,
+            json!({"method":"review_restore", "request":request}),
         );
         assert_eq!(review["recipient_public_key"], recipient["vault_pubkey"]);
         let approved = call(
-            contact.path(),
-            "wallet",
-            3,
-            json!({"method":"approve_contact_restore", "review_id":review["review_id"], "request":request}),
+            signer.path(),
+            "signer",
+            2,
+            json!({"method":"approve_restore", "review_id":review["review_id"]}),
         );
         assert!(approved.get("symmetric_key").is_none());
-        let recovered = call(
+        let restored = call(
             replacement.path(),
             "wallet",
             4,
-            json!({"method":"store_contact_restored_key", "message":approved}),
+            json!({"method":"store_restored_key", "message":approved}),
         );
-        assert_eq!(
-            recovered["config"]["phone_vault_pubkey"],
-            old_phone["vault_pubkey"]
-        );
-        assert_eq!(
-            recovered["config"]["vault_address"],
-            config["vault_address"]
-        );
-        assert_eq!(recovered["spending_policy_available"], false);
-        assert_eq!(
-            recovered,
-            call(
-                replacement.path(),
-                "wallet",
-                4,
-                json!({"method":"contact_recovery_state"})
-            )
-        );
+        assert_eq!(restored["old_phone_public_key"], old_phone["vault_pubkey"]);
+        assert_eq!(restored["vault_address"], config["vault_address"]);
         assert_eq!(
             original_key,
             std::fs::read(replacement.path().join("wallet/phone/device.json")).unwrap()
         );
         let protected = replacement.path().join("wallet/phone");
-        for name in [
-            "pending-contact-restore.json",
-            "contact-recovery-state.json",
-        ] {
-            let stored = std::fs::read_to_string(protected.join(name)).unwrap();
-            assert!(stored.contains("anzen_native_storage"));
-            assert!(!stored.contains("mnemonic"));
-            assert!(!stored.contains(config["vault_address"].as_str().unwrap()));
-        }
+        let stored = std::fs::read_to_string(protected.join("pending-restore.json")).unwrap();
+        assert!(stored.contains("anzen_native_storage"));
+        assert!(!stored.contains(config["vault_address"].as_str().unwrap()));
         for key in std::fs::read_dir(protected.join("restored-keys")).unwrap() {
             let stored = std::fs::read_to_string(key.unwrap().path()).unwrap();
             assert!(stored.contains("anzen_native_storage"));
             assert!(!stored.contains("mnemonic"));
         }
-        assert!(!contact.path().join("wallet/phone/restored-keys").exists());
         assert!(!replacement.path().join("signer").exists());
         assert!(
             execute(
@@ -747,7 +667,7 @@ mod tests {
                 "wallet",
                 [5; 32],
                 &settings(),
-                r#"{"method":"contact_recovery_state"}"#
+                r#"{"method":"restored_phone"}"#
             )
             .is_err()
         );

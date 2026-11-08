@@ -1,11 +1,10 @@
 use super::*;
-use anzen_common::storage::fs::StoragePath;
 use anzen_common::{
-    device_channel,
-    social::{
+    cloud_backup::{
         self, CloudBackupDraft, CloudRecoveryBackup, DeviceBackupKeyRequest,
         DeviceBackupKeyResponse, RecoveryPayload,
     },
+    device_channel,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -18,49 +17,16 @@ struct PendingBackup {
 impl WalletApplication {
     /// The signer receives only a random data-encryption key, never the seed or seed ciphertext.
     pub fn propose_backup(&self) -> Result<DeviceMessage> {
-        self.propose_backup_for_contacts(self.backup_contact_keys()?)
-    }
-
-    pub fn propose_backup_with_contact(&self, contact: &RecoveryContact) -> Result<DeviceMessage> {
-        contact.validate()?;
-        let mut keys = self.backup_contact_keys()?;
-        for key in &keys {
-            if social::friend_fingerprint(key.as_bytes())? == contact.fingerprint {
-                bail!("recovery contact is already configured");
-            }
-        }
-        keys.push(contact.public_key_armored.clone());
-        self.propose_backup_for_contacts(keys)
-    }
-
-    fn backup_contact_keys(&self) -> Result<Vec<String>> {
-        self.configuration()?;
-        let path = self.data_dir.join(storage::PHONE_BACKUP_FILE);
-        if !path.storage_exists() {
-            return Ok(Vec::new());
-        }
-        Ok(social::friend_public_keys(&self.export_backup()?))
-    }
-
-    fn propose_backup_for_contacts(
-        &self,
-        friend_public_keys: Vec<String>,
-    ) -> Result<DeviceMessage> {
         let config = self.configuration()?;
         let phone = load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?;
         let hww = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?;
-        // Bound untrusted OpenPGP parsing/encryption before doing any expensive work.
-        let mut request = DeviceBackupKeyRequest {
-            backup_id: String::new(),
-            symmetric_key: [0; 32],
-            friend_public_keys,
-        };
-        request.friend_fingerprints()?;
         let payload = zeroize::Zeroizing::new(RecoveryPayload::new(&config, &phone)?);
-        let (draft, key) = social::prepare_backup(&payload, &request.friend_public_keys)?;
+        let (draft, key) = cloud_backup::prepare_backup(&payload)?;
         let backup_id = sha256::Hash::hash(&serde_json::to_vec(&draft)?).to_string();
-        request.backup_id = backup_id.clone();
-        request.symmetric_key = *key;
+        let request = DeviceBackupKeyRequest {
+            backup_id: backup_id.clone(),
+            symmetric_key: *key,
+        };
         storage::write_json(
             &self.data_dir.join("phone/pending-backup.json"),
             &PendingBackup {
@@ -96,7 +62,7 @@ impl WalletApplication {
         {
             bail!("backup approval does not match the current phone backup request");
         }
-        let backup = social::complete_backup(pending.draft, response.wrapped_key)?;
+        let backup = cloud_backup::complete_backup(pending.draft, response.wrapped_key)?;
         storage::write_json(&self.data_dir.join(storage::PHONE_BACKUP_FILE), &backup)
     }
 

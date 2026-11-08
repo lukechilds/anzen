@@ -32,21 +32,17 @@ pub mod api {
     pub use crate::electrum::native::WebSocketConnector;
     pub use crate::{
         ceremony::{PolicyLimits, Schedule, TransactionKind},
-        recovery::{PhoneRecoveryPackage, RecoveryTiming, SweepResult},
+        recovery::{RecoveryClock, RecoveryTiming, SweepResult},
     };
     #[cfg(feature = "native")]
     pub use anzen_chain::BitcoinCoreBackend;
     pub use anzen_chain::{Blockchain, ChainTip, RpcConfig};
+    pub use anzen_common::cloud_backup::CloudRecoveryBackup;
     pub use anzen_common::cloud_restore::RestoreKeyRequest;
-    pub use anzen_common::contact_restore::ContactRestoreRequest;
     pub use anzen_common::device_channel::DeviceMessage;
     pub use anzen_common::device_rotation::{ApprovedDevicePhoneRotation, DevicePhoneRotation};
     pub use anzen_common::outbox::{OutboxItem, OutgoingMessage, OutgoingMessageKind};
     pub use anzen_common::recovery_bundle::RecoveryVaultBundle;
-    pub use anzen_common::signer_replacement::{
-        ApprovedSignerReplacement, DeviceSignerReplacement,
-    };
-    pub use anzen_common::social::CloudRecoveryBackup;
     pub use anzen_common::storage::with_protected_storage;
     pub use anzen_common::{
         storage::{PublicDeviceFile, VaultConfig},
@@ -104,13 +100,13 @@ use crate::{
         EncryptedEmergencyTransaction, EncryptedTransaction, HotAddressProvider, PolicyLimits,
         SCHEDULE_FILE, Schedule, ScheduleEntry, TransactionKind,
     },
-    recovery::{SweepPath, SweepResult},
+    recovery::SweepResult,
 };
 use anyhow::{Context, Result, bail};
 use anzen_chain::Blockchain;
 use anzen_common::policy::{ControllerPath, ControllerPolicy, VaultAddressTemplate};
 use anzen_protocol::wire::{PolicyApproval, PolicyRequest, SweepApproval, SweepRequest};
-use bitcoin::{Address, Amount, Network, OutPoint, Psbt, Transaction, TxOut, Txid, key::Secp256k1};
+use bitcoin::{Address, Amount, Network, OutPoint, Psbt, TxOut, Txid, key::Secp256k1};
 use std::{
     path::Path,
     str::FromStr,
@@ -850,24 +846,6 @@ pub fn apply_soft_limit(
                 .context("failed to broadcast soft-limit cold-return transaction")
         })
         .transpose()
-}
-
-pub fn recover(
-    data_dir: &Path,
-    config: &VaultConfig,
-    utxos: &[VaultUtxo],
-    tip_height: u64,
-    destination: &Address,
-) -> Result<(Transaction, SweepResult)> {
-    let phone = load_device_keys(data_dir, PHONE_DEVICE_FILE)?;
-    recovery::recover(
-        config,
-        utxos,
-        tip_height,
-        SweepPath::PhoneRecovery,
-        destination,
-        &phone,
-    )
 }
 
 pub fn create_cooperative_sweep(

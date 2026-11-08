@@ -20,6 +20,7 @@ pub struct Request {
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
     Tip {},
+    MedianTimePast { height: u64 },
     ScanVault { config: VaultConfig },
     ScanConnectors { config: VaultConfig },
     PreviousTransaction { utxo: VaultUtxo },
@@ -48,6 +49,9 @@ pub async fn control(
         let backend = BitcoinCoreBackend::connect(&host.rpc, request.network)?;
         match request.request {
             Operation::Tip {} => Ok(serde_json::to_value(backend.chain_tip()?)?),
+            Operation::MedianTimePast { height } => {
+                Ok(serde_json::to_value(backend.median_time_past(height)?)?)
+            }
             Operation::ScanVault { config } => {
                 config.validate_public_policy()?;
                 let _guard = host
@@ -94,7 +98,7 @@ pub async fn control(
 
 /// The best block and Bitcoin Core's mempool sequence, which changes on every mempool
 /// addition or removal. Deliberately not behind the node gate: it must stay responsive
-/// while a long mining job holds it.
+/// while another node operation holds it.
 fn activity(host: &Host, network: Network) -> Result<Value> {
     use bitcoincore_rpc::RpcApi;
     if network != Network::Regtest {
@@ -108,7 +112,6 @@ fn activity(host: &Host, network: Network) -> Result<Value> {
     Ok(json!({
         "tip": tip,
         "mempool_sequence": mempool["mempool_sequence"],
-        "mining": super::jobs::mining_active(host),
     }))
 }
 

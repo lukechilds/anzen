@@ -46,6 +46,9 @@ pub trait Blockchain {
     fn network(&self) -> Network;
     fn backend_description(&self) -> String;
     fn chain_tip(&self) -> Result<ChainTip>;
+    /// Median time past of the block at `height`. A time-based relative lock on a coin
+    /// confirmed at height `h` counts from the median time past at `h - 1` (BIP68).
+    fn median_time_past(&self, height: u64) -> Result<u64>;
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>>;
     fn scan_connectors(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>>;
     /// Full previous transaction for an offline signer to authenticate input amounts/scripts.
@@ -73,6 +76,17 @@ impl Blockchain for BitcoinCoreBackend {
             median_time: info.median_time,
             best_block_hash: info.best_block_hash,
         })
+    }
+
+    fn median_time_past(&self, height: u64) -> Result<u64> {
+        let hash = self.client.get_block_hash(height)?;
+        let header = self
+            .client
+            .get_block_header_info(&hash)
+            .context("Bitcoin Core getblockheader failed")?;
+        Ok(header
+            .median_time
+            .context("Bitcoin Core omitted the block's median time")? as u64)
     }
 
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {

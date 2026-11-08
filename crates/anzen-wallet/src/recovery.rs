@@ -1,12 +1,14 @@
-//! Vault sweeps: cooperative moves the signer approves and single-key recovery paths.
+//! Vault sweeps: cooperative moves the signer approves, and the hardware wallet's solo path
+//! once its time lock has passed.
 
 use crate::{
     ceremony::Schedule,
     transactions::{attach_signatures, finalize_vault_psbt, protocol_psbt, sign_vault_psbt},
 };
 use anyhow::{Context, Result, bail};
+use anzen_chain::{Blockchain, ChainTip};
 use anzen_common::{
-    DEFAULT_FEE_RATE_SAT_VB, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
+    DEFAULT_FEE_RATE_SAT_VB, HWW_RECOVERY_SECONDS,
     keys::DeviceKeys,
     policy::{ControllerPolicy, SpendPath, VaultPolicy},
     protocol::{self, SoftwareCrypto},
@@ -24,13 +26,12 @@ use bitcoin::{
     taproot::TapLeafHash,
 };
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SweepPath {
     Cooperative,
-    PhoneRecovery,
     HwwRecovery,
 }
 
@@ -38,7 +39,6 @@ impl SweepPath {
     fn policy_path(self) -> SpendPath {
         match self {
             Self::Cooperative => SpendPath::Cooperative,
-            Self::PhoneRecovery => SpendPath::PhoneRecovery,
             Self::HwwRecovery => SpendPath::HwwRecovery,
         }
     }
@@ -46,17 +46,57 @@ impl SweepPath {
     fn protocol_path(self) -> tx::SpendPath {
         match self {
             Self::Cooperative => tx::SpendPath::Cooperative,
-            Self::PhoneRecovery => tx::SpendPath::PhoneRecovery,
             Self::HwwRecovery => tx::SpendPath::HwwRecovery,
         }
     }
+}
 
-    fn delay(self) -> Option<u64> {
-        match self {
-            Self::Cooperative => None,
-            Self::PhoneRecovery => Some(u64::from(PHONE_RECOVERY_BLOCKS)),
-            Self::HwwRecovery => Some(u64::from(HWW_RECOVERY_BLOCKS)),
+/// What the solo path's time lock is judged by. BIP68 counts a coin's time from the median
+/// time past of the block before the one that confirmed it, and a spend fits in the next block
+/// once the tip's median time past has reached that start plus the delay.
+#[derive(Debug, Clone)]
+pub struct RecoveryClock {
+    /// The chain tip's median time past.
+    pub median_time: u64,
+    /// For each confirmation height, the median time past of the block before it.
+    coin_times: BTreeMap<u64, u64>,
+}
+
+impl RecoveryClock {
+    /// Read the start time of every coin in `utxos` from the chain.
+    pub fn read(
+        chain: &(impl Blockchain + ?Sized),
+        tip: &ChainTip,
+        utxos: &[VaultUtxo],
+    ) -> Result<Self> {
+        let mut coin_times = BTreeMap::new();
+        for utxo in utxos {
+            let height = utxo.confirmation_height;
+            if let std::collections::btree_map::Entry::Vacant(entry) = coin_times.entry(height) {
+                entry.insert(chain.median_time_past(height.saturating_sub(1))?);
+            }
         }
+        Ok(Self::new(tip.median_time, coin_times))
+    }
+
+    pub fn new(median_time: u64, coin_times: BTreeMap<u64, u64>) -> Self {
+        Self {
+            median_time,
+            coin_times,
+        }
+    }
+
+    /// When the solo path opens for `utxo`, as the tip median time past it needs.
+    pub fn opens_at(&self, utxo: &VaultUtxo) -> Result<u64> {
+        let start = self
+            .coin_times
+            .get(&utxo.confirmation_height)
+            .context("recovery clock has no start time for this coin")?;
+        Ok(start.saturating_add(u64::from(HWW_RECOVERY_SECONDS)))
+    }
+
+    pub fn is_open(&self, utxo: &VaultUtxo) -> Result<bool> {
+        Ok(self.median_time >= self.opens_at(utxo)?)
     }
 }
 
@@ -77,19 +117,6 @@ impl SweepResult {
             fee_sats: spend.fee_sats,
         }
     }
-}
-
-/// Phone key material decrypted from a cloud backup by the HWW or a recovery friend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PhoneRecoveryPackage {
-    pub version: u8,
-    pub kind: String,
-    pub phone_mnemonic: String,
-    #[serde(default)]
-    pub phone_vault_key_index: u32,
-    pub phone_vault_pubkey: String,
-    pub vault_descriptor: String,
-    pub vault_address: String,
 }
 
 fn policies(config: &VaultConfig) -> Result<(Scripts, VaultPolicy, ControllerPolicy)> {
@@ -137,7 +164,7 @@ pub fn vault_spend(
     Ok(spend)
 }
 
-/// Sign and finalize a sweep through a single-key recovery path.
+/// Sign and finalize a sweep through the hardware wallet's solo path.
 pub fn sign_single_key_sweep(
     config: &VaultConfig,
     utxos: &[VaultUtxo],
@@ -162,78 +189,30 @@ pub fn sign_single_key_sweep(
     Ok((transaction, SweepResult::from_spend(&spend)))
 }
 
-/// Sweep every mature vault output through a single-key recovery path.
+/// Sweep every vault output whose solo path is open, signed by the hardware wallet key.
 pub fn recover(
     config: &VaultConfig,
     all_utxos: &[VaultUtxo],
-    tip_height: u64,
-    path: SweepPath,
+    clock: &RecoveryClock,
     destination: &Address,
     signer: &DeviceKeys,
 ) -> Result<(Transaction, SweepResult)> {
-    let utxos = mature_utxos(all_utxos, path, tip_height);
+    let utxos = mature_utxos(all_utxos, clock)?;
     if utxos.is_empty() {
-        if let (Some(delay), Some(oldest)) = (path.delay(), all_utxos.first()) {
-            let valid_height = oldest.confirmation_height.saturating_add(delay);
-            let remaining = valid_height.saturating_sub(tip_height.saturating_add(1));
-            bail!(
-                "no vault UTXOs are mature for {path:?}; earliest next-block validity height is {valid_height} ({remaining} blocks remaining)"
-            );
-        }
-        bail!("vault has no confirmed UTXOs to sweep");
+        not_mature(all_utxos, clock)?;
     }
-    sign_single_key_sweep(config, &utxos, path, destination, signer)
+    sign_single_key_sweep(config, &utxos, SweepPath::HwwRecovery, destination, signer)
 }
 
-/// A reviewed phone-recovery transfer. The phone signs it only after its delay matures, and
-/// its transaction ID is fixed at review so a retry can never become a different spend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PhoneRecoveryTransfer {
-    pub inputs: Vec<VaultUtxo>,
-    pub destination: String,
-    pub txid: Txid,
-    pub amount_sats: u64,
-    pub fee_sats: u64,
-}
-
-impl PhoneRecoveryTransfer {
-    pub fn prepare(
-        config: &VaultConfig,
-        inputs: &[VaultUtxo],
-        destination: &Address,
-    ) -> Result<Self> {
-        let spend = vault_spend(config, inputs, SweepPath::PhoneRecovery, destination)?;
-        if spend.amount_sats < destination.script_pubkey().minimal_non_dust().to_sat() {
-            bail!("recovery destination is dust");
-        }
-        Ok(Self {
-            inputs: inputs.to_vec(),
-            destination: destination.to_string(),
-            txid: protocol::txid(spend.txid),
-            amount_sats: spend.amount_sats,
-            fee_sats: spend.fee_sats,
-        })
-    }
-
-    /// Sign the reviewed transaction with the phone key and finalize it.
-    pub fn sign(&self, config: &VaultConfig, phone: &DeviceKeys) -> Result<Transaction> {
-        if phone.vault_pubkey.to_string() != config.phone_vault_pubkey {
-            bail!("recovery key is not the surviving phone");
-        }
-        let destination =
-            Address::from_str(&self.destination)?.require_network(config.bitcoin_network()?)?;
-        let (transaction, result) = sign_single_key_sweep(
-            config,
-            &self.inputs,
-            SweepPath::PhoneRecovery,
-            &destination,
-            phone,
-        )?;
-        if result.txid != self.txid {
-            bail!("phone recovery transfer changed the reviewed transaction");
-        }
-        Ok(transaction)
+/// The error for a vault with nothing past its time lock yet.
+pub fn not_mature(all_utxos: &[VaultUtxo], clock: &RecoveryClock) -> Result<()> {
+    let timing = recovery_timing(all_utxos, clock)?;
+    match (timing.opens_at, timing.seconds_remaining) {
+        (Some(opens_at), Some(remaining)) => bail!(
+            "HWW recovery is not mature: the signer's time lock opens at median time {opens_at} ({} days remaining)",
+            remaining.div_ceil(86_400)
+        ),
+        _ => bail!("vault has no confirmed UTXOs to sweep"),
     }
 }
 
@@ -322,8 +301,7 @@ pub fn rotated_config(
         phone_hot_internal_descriptor: hot_internal,
         vault_descriptor: new_policy.descriptor_string(),
         vault_address: new_policy.address.to_string(),
-        phone_recovery_blocks: old_config.phone_recovery_blocks,
-        hww_recovery_blocks: old_config.hww_recovery_blocks,
+        hww_recovery_seconds: old_config.hww_recovery_seconds,
         monthly_limit_sats: old_config.monthly_limit_sats,
         emergency_access_limit_sats: old_config.emergency_access_limit_sats,
     })
@@ -345,56 +323,48 @@ pub fn allowances_reported_complete(
     Ok(!spent.iter().any(|utxo| chain.contains(&utxo.outpoint)))
 }
 
-pub fn mature_utxos(utxos: &[VaultUtxo], path: SweepPath, tip_height: u64) -> Vec<VaultUtxo> {
-    let Some(delay) = path.delay() else {
-        return utxos.to_vec();
-    };
-    let next_height = tip_height.saturating_add(1);
-    utxos
-        .iter()
-        .filter(|utxo| utxo.confirmation_height.saturating_add(delay) <= next_height)
-        .cloned()
-        .collect()
+pub fn mature_utxos(utxos: &[VaultUtxo], clock: &RecoveryClock) -> Result<Vec<VaultUtxo>> {
+    let mut mature = Vec::new();
+    for utxo in utxos {
+        if clock.is_open(utxo)? {
+            mature.push(utxo.clone());
+        }
+    }
+    Ok(mature)
 }
 
 #[derive(Debug, Serialize)]
 pub struct RecoveryTiming {
-    pub delay_blocks: u64,
-    pub earliest_next_block_height: Option<u64>,
-    pub blocks_remaining: Option<u64>,
+    pub delay_seconds: u64,
+    /// The tip median time past at which the earliest coin's solo path opens.
+    pub opens_at: Option<u64>,
+    pub seconds_remaining: Option<u64>,
     pub total_sats: u64,
     pub mature_sats: u64,
 }
 
 /// Report the earliest live recovery window, not the age of a newer unrelated deposit.
-pub fn recovery_timing(
-    utxos: &[VaultUtxo],
-    path: SweepPath,
-    tip_height: u64,
-) -> Result<RecoveryTiming> {
-    let delay_blocks = path.delay().unwrap_or(0);
-    let next = tip_height.saturating_add(1);
-    let earliest_next_block_height = utxos
-        .iter()
-        .map(|utxo| utxo.confirmation_height.saturating_add(delay_blocks))
-        .min();
+pub fn recovery_timing(utxos: &[VaultUtxo], clock: &RecoveryClock) -> Result<RecoveryTiming> {
+    let mut opens_at: Option<u64> = None;
     let mut total_sats = 0_u64;
     let mut mature_sats = 0_u64;
     for utxo in utxos {
+        let opens = clock.opens_at(utxo)?;
+        opens_at = Some(opens_at.map_or(opens, |earliest| earliest.min(opens)));
         let amount = utxo.txout.value.to_sat();
         total_sats = total_sats
             .checked_add(amount)
             .context("recovery balance overflow")?;
-        if utxo.confirmation_height.saturating_add(delay_blocks) <= next {
+        if clock.median_time >= opens {
             mature_sats = mature_sats
                 .checked_add(amount)
                 .context("mature recovery balance overflow")?;
         }
     }
     Ok(RecoveryTiming {
-        delay_blocks,
-        earliest_next_block_height,
-        blocks_remaining: earliest_next_block_height.map(|height| height.saturating_sub(next)),
+        delay_seconds: u64::from(HWW_RECOVERY_SECONDS),
+        opens_at,
+        seconds_remaining: opens_at.map(|time| time.saturating_sub(clock.median_time)),
         total_sats,
         mature_sats,
     })
@@ -404,10 +374,9 @@ pub fn recovery_timing(
 /// bounded and prioritize value so a stream of small deposits cannot block larger savings.
 pub fn recovery_review_inputs(
     utxos: &[VaultUtxo],
-    path: SweepPath,
-    tip_height: u64,
-) -> Vec<VaultUtxo> {
-    let mut selected = mature_utxos(utxos, path, tip_height);
+    clock: &RecoveryClock,
+) -> Result<Vec<VaultUtxo>> {
+    let mut selected = mature_utxos(utxos, clock)?;
     if selected.is_empty() {
         if let Some(oldest) = utxos.iter().map(|utxo| utxo.confirmation_height).min() {
             selected = utxos
@@ -419,7 +388,7 @@ pub fn recovery_review_inputs(
     }
     selected.sort_by_key(|utxo| (std::cmp::Reverse(utxo.txout.value.to_sat()), utxo.outpoint));
     selected.truncate(anzen_protocol::consts::MAX_INPUTS);
-    selected
+    Ok(selected)
 }
 
 #[cfg(test)]
@@ -427,152 +396,75 @@ mod tests {
     use super::*;
     use bitcoin::{Amount, OutPoint, ScriptBuf, TxOut};
 
-    #[test]
-    fn recovery_maturity_uses_next_block_height() {
-        let utxo = VaultUtxo {
-            outpoint: OutPoint::null(),
+    const DELAY: u64 = HWW_RECOVERY_SECONDS as u64;
+
+    fn utxo(vout: u32, sats: u64, height: u64) -> VaultUtxo {
+        VaultUtxo {
+            outpoint: OutPoint {
+                txid: bitcoin::Txid::from_byte_array([0; 32]),
+                vout,
+            },
             txout: TxOut {
-                value: Amount::from_sat(1),
+                value: Amount::from_sat(sats),
                 script_pubkey: ScriptBuf::new(),
             },
-            confirmation_height: 100,
-        };
-        assert!(
-            mature_utxos(
-                std::slice::from_ref(&utxo),
-                SweepPath::PhoneRecovery,
-                61_298
-            )
-            .is_empty()
-        );
-        assert_eq!(
-            mature_utxos(
-                std::slice::from_ref(&utxo),
-                SweepPath::PhoneRecovery,
-                61_299
-            )
-            .len(),
-            1
-        );
-        assert!(
-            mature_utxos(std::slice::from_ref(&utxo), SweepPath::HwwRecovery, 61_299).is_empty()
-        );
-        assert_eq!(
-            mature_utxos(&[utxo], SweepPath::HwwRecovery, 65_634).len(),
-            1
-        );
+            confirmation_height: height,
+        }
+    }
+
+    /// Coins confirmed at height 100 start at time 1,000; at height 200, at time 50,000.
+    fn clock(median_time: u64) -> RecoveryClock {
+        RecoveryClock::new(median_time, BTreeMap::from([(100, 1_000), (200, 50_000)]))
+    }
+
+    #[test]
+    fn the_solo_path_opens_when_the_tip_median_time_reaches_the_delay() {
+        let coin = utxo(0, 1, 100);
+        assert_eq!(DELAY, 65_535 * 512);
+        assert_eq!(clock(0).opens_at(&coin).unwrap(), 1_000 + DELAY);
+        assert!(!clock(1_000 + DELAY - 1).is_open(&coin).unwrap());
+        assert!(clock(1_000 + DELAY).is_open(&coin).unwrap());
+        assert!(clock(0).is_open(&utxo(0, 1, 300)).is_err());
     }
 
     #[test]
     fn recovery_reviews_are_bounded_and_newer_deposits_cannot_postpone_mature_savings() {
-        use bitcoin::hashes::Hash;
         let mut inputs = (0..1002)
-            .map(|vout| VaultUtxo {
-                outpoint: OutPoint {
-                    txid: bitcoin::Txid::all_zeros(),
+            .map(|vout| {
+                utxo(
                     vout,
-                },
-                txout: TxOut {
-                    value: Amount::from_sat(u64::from(vout) + 1),
-                    script_pubkey: ScriptBuf::new(),
-                },
-                confirmation_height: if vout == 1001 { 200 } else { 100 },
+                    u64::from(vout) + 1,
+                    if vout == 1001 { 200 } else { 100 },
+                )
             })
             .collect::<Vec<_>>();
-        let timing = recovery_timing(&inputs, SweepPath::HwwRecovery, 65_633).unwrap();
-        assert_eq!(timing.blocks_remaining, Some(1));
+        let before = clock(1_000 + DELAY - 1);
+        let timing = recovery_timing(&inputs, &before).unwrap();
+        assert_eq!(timing.seconds_remaining, Some(1));
         assert_eq!(timing.mature_sats, 0);
-        let reviewed = recovery_review_inputs(&inputs, SweepPath::HwwRecovery, 65_633);
+        let reviewed = recovery_review_inputs(&inputs, &before).unwrap();
         assert_eq!(reviewed.len(), 1000);
         assert_eq!(reviewed[0].outpoint.vout, 1000);
         assert!(reviewed.iter().all(|utxo| utxo.confirmation_height == 100));
-        let timing = recovery_timing(&inputs, SweepPath::HwwRecovery, 65_634).unwrap();
-        assert_eq!(timing.blocks_remaining, Some(0));
+        let open = clock(1_000 + DELAY);
+        let timing = recovery_timing(&inputs, &open).unwrap();
+        assert_eq!(timing.seconds_remaining, Some(0));
         assert_eq!(timing.total_sats - timing.mature_sats, 1002);
         assert_eq!(
-            recovery_review_inputs(&inputs, SweepPath::HwwRecovery, 65_634)[0]
+            recovery_review_inputs(&inputs, &open).unwrap()[0]
                 .outpoint
                 .vout,
             1000
         );
         inputs.reverse();
         assert_eq!(
-            recovery_review_inputs(&inputs, SweepPath::HwwRecovery, 65_634)[0]
+            recovery_review_inputs(&inputs, &open).unwrap()[0]
                 .outpoint
                 .vout,
             1000
         );
-        assert_eq!(
-            recovery_timing(&[], SweepPath::HwwRecovery, 65_634)
-                .unwrap()
-                .blocks_remaining,
-            None
-        );
+        assert_eq!(recovery_timing(&[], &open).unwrap().seconds_remaining, None);
         inputs[0].txout.value = Amount::from_sat(u64::MAX);
-        assert!(recovery_timing(&inputs, SweepPath::HwwRecovery, 65_634).is_err());
-    }
-
-    #[test]
-    fn friend_emergency_access_still_obeys_the_phone_recovery_delay() {
-        use anzen_common::{
-            PHONE_RECOVERY_BLOCKS,
-            social::{RecoveryPayload, create_backup, decrypt_with_friend, generate_friend_key},
-            storage::{HWW_DEVICE_FILE, PHONE_DEVICE_FILE, load_device_keys},
-        };
-        use bitcoin::{Address, Txid, hashes::Hash};
-        use std::str::FromStr;
-
-        let dir = anzen_common::storage::tempdir().unwrap();
-        let config = crate::test_support::initialize(dir.path()).unwrap().config;
-        let network = config.bitcoin_network().unwrap();
-        let phone = load_device_keys(dir.path(), PHONE_DEVICE_FILE).unwrap();
-        let hww = load_device_keys(dir.path(), HWW_DEVICE_FILE).unwrap();
-        let friend = generate_friend_key("Alice").unwrap();
-        let backup = create_backup(
-            &RecoveryPayload::new(&config, &phone).unwrap(),
-            &hww.seed,
-            &[friend.public_key_armored],
-        )
-        .unwrap();
-        let recovered =
-            decrypt_with_friend(&backup, friend.private_key_armored.as_bytes()).unwrap();
-        let recovered_phone = DeviceKeys::parse_for_network_at_index(
-            &bitcoin::key::Secp256k1::new(),
-            &recovered.phone_mnemonic,
-            network,
-            recovered.phone_vault_key_index,
-        )
-        .unwrap();
-        let destination = Address::from_str(&config.vault_address)
-            .unwrap()
-            .require_network(network)
-            .unwrap();
-        let utxo = VaultUtxo {
-            outpoint: OutPoint::new(Txid::all_zeros(), 0),
-            txout: TxOut {
-                value: Amount::from_sat(1_000_000),
-                script_pubkey: destination.script_pubkey(),
-            },
-            confirmation_height: 1,
-        };
-        let early = recover(
-            &config,
-            std::slice::from_ref(&utxo),
-            u64::from(PHONE_RECOVERY_BLOCKS) - 1,
-            SweepPath::PhoneRecovery,
-            &destination,
-            &recovered_phone,
-        );
-        assert!(early.is_err());
-        let (_, result) = recover(
-            &config,
-            &[utxo],
-            u64::from(PHONE_RECOVERY_BLOCKS),
-            SweepPath::PhoneRecovery,
-            &destination,
-            &recovered_phone,
-        )
-        .unwrap();
-        assert_eq!(result.input_count, 1);
+        assert!(recovery_timing(&inputs, &open).is_err());
     }
 }

@@ -7,11 +7,11 @@ Anzen combines:
 - a **mobile key** `M`;
 - a **hardware-wallet key** `H`;
 - renewable **2-of-2 cold storage**;
-- delayed single-device recovery;
+- a delayed fallback for the hardware wallet alone, and none for the phone;
 - a sequential, relatively timelocked monthly allowance chain;
 - one cancellable, one-week-delayed emergency withdrawal per vault epoch.
 
-The main balance normally requires both devices. The user performs an expected rollover roughly once per year, moving all funds into fresh vault outputs and resetting the relative recovery timers.
+The main balance normally requires both devices. The user performs an expected rollover roughly once per year, moving all funds into fresh vault outputs and restarting the hardware wallet's relative time lock.
 
 The phone can also access a policy-defined monthly spending limit without carrying the HWW. A lower soft limit controls how much of an unlocked allowance the phone keeps hot. The same annual policy may include one larger emergency withdrawal that the phone can initiate immediately, cancel during a one-week safety window, and complete only after that delay. A new vault starts with both features disabled; their limits are introduced later through an explicit phone proposal and HWW approval. No server, custodian, or online co-signer is required.
 
@@ -21,7 +21,7 @@ Anzen's operating model should remain simple even though the transaction graph u
 
 The HWW approves a human-readable vault policy, not a stream of unrelated transaction prompts. It independently verifies the complete transaction graph implied by that policy and signs the batch in one ceremony. Once approved, the phone can safely execute or revoke the permitted behavior for the next year without asking the user to reconstruct the policy or repeatedly access cold storage.
 
-Annual renewal should be one guided operation on the same calendar date each year. The wallet tracks the oldest live vault output, warns well before recovery paths mature, and guides the user through refreshing every live output and renewing the policy. Recovery and key rotation should likewise be complete workflows with safe defaults, explicit checks, and a clear destination—not collections of low-level tools that require the user to invent a recovery procedure during an emergency.
+Annual renewal should be one guided operation on the same calendar date each year. The wallet tracks the oldest live vault output, warns well before the signer's fallback opens, and guides the user through refreshing every live output and renewing the policy. Recovery and key rotation should likewise be complete workflows with safe defaults, explicit checks, and a clear destination—not collections of low-level tools that require the user to invent a recovery procedure during an emergency.
 
 This principle applies throughout the product: monthly spending begins disabled, the HWW validates proposals independently, partial funding degrades predictably with a warning, and dangerous or incomplete state transitions are rejected. The goal is not merely to document the safe path, but to make the safe path the normal and easiest way to use Anzen.
 
@@ -36,10 +36,7 @@ tr(
   NUMS,
   {
     multi_a(2, M, H),
-    {
-      and_v(v:older(61200), pk(M)),
-      and_v(v:older(65535), pk(H))
-    }
+    and_v(v:older(4259839), pk(H))
   }
 )
 ```
@@ -48,17 +45,13 @@ This means:
 
 ```text
 M + H       can spend immediately
-M alone     can spend after 61,200 blocks
-H alone     can spend after 65,535 blocks
+H alone     can spend after 65,535 × 512 seconds (33,553,920 s, about 388 days)
+M alone     can never spend
 ```
 
-Assuming ten-minute blocks:
+`4259839` is the time-based BIP68 encoding: the type flag `1 << 22` plus 65,535 units of 512 seconds. Both leaves sit at depth one, so either spend reveals one 32-byte sibling hash.
 
-- `61,200` blocks is approximately **425 days**, or **14 months**.
-- `65,535` blocks is approximately **455 days**, or **15 months**.
-- The phone gets approximately a **one-month priority window** before the HWW fallback activates.
-
-The cooperative leaf is placed at the shallowest level of the binary Taproot tree because it is expected to be used most often. The two recovery leaves are logically independent alternatives; their nesting only determines Merkle-tree depth and witness size.
+The phone deliberately has no leaf of its own. The hardware wallet's seed is backed up by its maker and restores to the same key, so a lost signer does not need a path; the phone key, held on an everyday device and in a cloud backup, should never be able to drain savings. The phone's access is limited to the presigned monthly and emergency actions below.
 
 The normal receive policy deliberately reuses the same `M` and `H` keys and the same Taproot address for every vault output, including rollover outputs and cold change. This sacrifices address-level privacy in favor of a simple, durable single vault address. An emergency rotation after a key compromise necessarily creates a new policy and address.
 
@@ -66,51 +59,31 @@ The normal receive policy deliberately reuses the same `M` and `H` keys and the 
 
 The wallet should prompt the user to roll over all vault funds approximately once per year.
 
-With the delays above, a 12-month expected rollover gives roughly:
+With the delay above, a 12-month expected rollover gives roughly **three weeks of grace** (about 23 days) before the HWW-only path opens.
 
-- **two months of grace** before the phone-only path activates;
-- **three months of grace** before the HWW-only path activates.
+The rollover should consume every current vault UTXO plus every live policy connector. When monthly spending is enabled, it creates one allowance-chain output funding up to twelve sequential releases, one remainder at the same vault address, and one monthly connector. Emergency access adds a second connector. With both features disabled or unfunded, rollover creates only the vault remainder. Every new vault output begins its time lock when it confirms; replacing the connectors invalidates all unused actions from the previous epoch.
 
-The rollover should consume every current vault UTXO plus every live policy connector. When monthly spending is enabled, it creates one allowance-chain output funding up to twelve sequential releases, one remainder at the same vault address, and one monthly connector. Emergency access adds a second connector. With both features disabled or unfunded, rollover creates only the vault remainder. Every new vault output begins its recovery timer when it confirms; replacing the connectors invalidates all unused actions from the previous epoch.
+The expected calendar date is a UX reminder. The actual deadline is per UTXO: its lock counts from the median time past of the block before the one that confirmed it, so the wallet tracks the oldest live vault output and shows the date the signer's fallback opens.
 
-The expected calendar date is a UX reminder. The actual deadlines are based on the confirmation height of each UTXO, so the wallet must track the oldest live vault output and show an estimated recovery date.
-
-## Why these delay values are used
+## Why this delay value is used
 
 Bitcoin relative timelocks are encoded through BIP68 `nSequence` semantics and enforced in script with `CHECKSEQUENCEVERIFY` / Miniscript `older()`.
 
-Only 16 bits are available for the relative delay value, so the maximum value is `65,535`.
-
-In block-based mode:
+Only 16 bits are available for the relative delay value, so the maximum value is `65,535`. In time-based mode each unit is 512 seconds:
 
 ```text
-65,535 blocks × 10 minutes ≈ 455 days
+65,535 × 512 s = 33,553,920 s ≈ 388.4 days
 ```
 
-This prevents directly expressing the originally desired pair of approximately 15 months for the phone and 16 months for the HWW in a single output. The chosen values are therefore close to the maximum while preserving approximately one month of phone priority.
+This is the longest relative delay a single output can express, and it comfortably exceeds an annual renewal. This is a **BIP68 limitation**. It is not a limitation on the number of timelock branches in one Taproot output.
 
-This is a **BIP68 limitation**. It is not a limitation on the number of timelock branches in one Taproot output.
+### Time, not blocks
 
-### Block-time drift
-
-Block-based delays are approximate in wall-clock time.
-
-If Bitcoin hashrate rises, blocks may arrive faster until the next difficulty adjustment. Over a long delay, realistic ASIC and hashrate growth may move the effective date earlier by several days. Random block-time variance can also shift it by several days.
-
-This is why the design uses margins measured in months rather than relying on an exact calendar day. The approximately one-month phone-priority window should be treated as an estimated block interval, not a guaranteed number of wall-clock days.
+The fallback is time-based rather than block-based. Bitcoin evaluates it against median time past: a coin's lock starts at the median time past of the block before the one that confirmed it, and a spend is valid in the next block once the tip's median time past has reached that start plus the delay. This makes the delay the same on mainnet, on Mutinynet's 30-second blocks and on regtest, and immune to hashrate growth and block-time variance. Median time past trails wall-clock time by about an hour, which is negligible against a year.
 
 ### Possible soft-fork improvement
 
-A future soft fork could extend relative-timelock range by assigning meaning to currently reserved `nSequence` bits or introducing a new relative-time primitive with a larger range.
-
-That could allow:
-
-- multi-year relative time locks;
-- true time-based delays much longer than the current approximately 12.7-month maximum;
-- a clean 15-month phone fallback and 16-month HWW fallback;
-- predictable long-term relative recovery without relying on block-count approximations.
-
-Until such a change is activated, block-based CSV is the only stateless single-output construction that gets close to the desired 15-month range.
+A future soft fork could extend relative-timelock range by assigning meaning to currently reserved `nSequence` bits or introducing a new relative-time primitive with a larger range. That would allow multi-year fallbacks and correspondingly longer renewal intervals. Until then, 65,535 time units is the longest stateless single-output delay.
 
 ## Revocable policy connectors
 
@@ -223,9 +196,11 @@ The child can also provide CPFP fee bumping for the presigned parent. The soft l
 - **HWW-only policy revocation:** can spend every live connector to an explicitly verified destination, invalidating all phone-held policy actions without moving vault principal.
 - **Phone + HWW:** can spend the entire balance immediately.
 - **Unused monthly allowances:** remain under full vault protection inside one live allowance-chain output.
-- **Annual rollover:** consumes every old connector, resets the recovery timers, and creates only the controller state required by the renewed policy.
+- **Phone alone, beyond that:** cannot move savings. Every other spend needs the HWW.
+- **HWW alone:** can sweep the vault after its time lock of about 388 days.
+- **Annual rollover:** consumes every old connector, restarts the HWW's time lock, and creates only the controller state required by the renewed policy.
 - **No essential transaction state:** keys plus the static descriptor are sufficient to recover the vault; presigned policy transactions are convenience authorizations only.
-- **No provider dependency:** spending limits and recovery paths require no server co-signer.
+- **No provider dependency:** spending limits and the fallback require no server co-signer.
 - **Safe long-lived receive policy:** relative timelocks start when each UTXO confirms, so payments to an old address do not enter an already-expired absolute policy.
 
 The chain enforces spacing rather than calendar dates: the next monthly-limit authorization becomes available roughly 30 days after the preceding chain output confirms. Unused authorizations cannot accumulate, because a later hop does not exist until the current one executes.
@@ -241,7 +216,7 @@ For the MVP:
 - `M` and `H` are software keys managed by separate simulated phone and HWW components;
 - hot-wallet receiving and change use normal external and internal address derivation;
 - the phone mnemonic and cold-storage descriptor are encrypted together with a random symmetric key and stored locally as a stand-in for cloud storage;
-- the symmetric key is authenticated-encrypted to an HWW-derived key and may also be independently OpenPGP-encrypted to each configured recovery friend's public key; the complete friend-wrapper manifest is authenticated with that symmetric key before it can be reused during rotation, and every friend is a 1-of-N recovery recipient rather than part of a threshold scheme;
+- the symmetric key is authenticated-encrypted to an HWW-derived key, so only the signer can unwrap the backup;
 - every incomplete monthly and emergency action PSBT is separately encrypted to a phone-derived encryption key and stored as an independent local ciphertext;
 - all ordinary transactions use a fixed fee rate of 1 sat/vB;
 - policy setup, rollover, signing, revocation, allowance use, emergency initiation/withdrawal/cancellation, soft-limit return, recovery, and sweeping are explicit CLI actions rather than automated behavior.
@@ -262,7 +237,7 @@ The JSON interchange embeds PSBTs plus a versioned policy/batch manifest, so the
 
 In addition to focused automated tests, the repository should provide isolated end-to-end terminal tests funded with 2 BTC and configured with a 0.1 BTC monthly limit. They should print human-readable seeds and public keys (regtest only), policies, timelocks, Miniscript, addresses, transaction IDs, balances, connector state, presigned transaction details, simulated time and block advancement, sequential allowance execution, phone and HWW revocation, successful and cancelled emergency access, on-time and forgotten annual rollover, recovery actions, and the loss/theft scenarios described below.
 
-The demonstration should use the real BIP68 30-day delay for each allowance hop on a real Bitcoin Core regtest node. The test harness may use regtest mock time and on-demand block generation to advance the chain monotonically, but it must show that step 1 is relative to rollover confirmation, step 2 is relative to step 1 confirmation, and a live-hop revocation invalidates later descendants. Block-based recovery paths must be exercised by mining their required block counts rather than by changing mock time.
+The demonstration should use the real BIP68 30-day delay for each allowance hop on a real Bitcoin Core regtest node. The test harness may use regtest mock time and on-demand block generation to advance the chain monotonically, but it must show that step 1 is relative to rollover confirmation, step 2 is relative to step 1 confirmation, and a live-hop revocation invalidates later descendants. The HWW's time-based fallback is exercised the same way: mock time moves forward and eleven blocks are mined so median time past reaches the boundary, and the test shows Bitcoin Core rejecting the sweep one second before it opens and accepting the same signed transaction at the boundary.
 
 ## Loss and theft scenarios
 
@@ -272,44 +247,42 @@ The demonstration should use the real BIP68 30-day delay for each allowance hop 
   - Rotate to a fresh mobile key while preserving the active monthly and emergency-access limits. The rotation proposal chains a replacement annual rollover and policy schedule to the emergency sweep, and the HWW signs both under one high-level rotation approval.
 
 - **Extracted mobile key**
-  - The attacker can steal the current hot balance and use the currently matured allowance authorization.
-  - The attacker cannot spend the main vault before the phone fallback matures.
-  - Recover the mobile key using the HWW and immediately sweep every vault output to fresh keys, invalidating the old allowance chain while replacing it with an equivalent schedule encrypted to the new phone key.
+  - The attacker can steal the current hot balance and use the currently matured allowance authorization or start the emergency withdrawal.
+  - The attacker can never spend the main vault: the phone has no path of its own.
+  - The HWW can cancel the emergency withdrawal and revoke every live action. Recover the mobile key using the HWW and sweep every vault output to fresh keys, invalidating the old allowance chain while replacing it with an equivalent schedule encrypted to the new phone key.
 
 - **Lost, broken, or stolen locked HWW**
   - A stolen device that does not yield its key is equivalent to a lost device for vault security.
-  - The phone can continue using the existing allowance chain.
-  - After approximately 61,200 blocks, the phone can recover each vault UTXO alone.
+  - Restore the HWW from its maker's seed backup. It restores the same key, so the vault, policy and phone are unchanged.
+  - The phone can continue using the existing allowance chain meanwhile.
 
 - **Extracted HWW key**
-  - The attacker cannot spend immediately.
-  - The phone fallback activates first.
-  - The legitimate phone sweeps funds during the approximately one-month priority window before the HWW-only path becomes valid.
+  - The attacker cannot spend immediately; the HWW-only path is at least about 388 days away.
+  - Any renewal before then moves every vault output and restarts the time lock. To retire the key, the owner sweeps with both devices to a new vault set up with a fresh signer.
 
 - **Lost phone and unavailable cloud backup**
-  - Funds remain locked until the HWW-only fallback matures.
-  - The surviving HWW can then recover the vault alone.
+  - Funds remain locked until the HWW-only fallback opens, about 388 days after the last renewal.
+  - The surviving HWW can then recover the vault alone, coordinated by a new phone or computer that supplies only public chain data.
 
-- **Both devices lost**
-  - Recovery depends on social recovery having been configured before the loss.
-  - Any configured friend can use their OpenPGP private key to unwrap the symmetric backup key and authenticate/decrypt the phone mnemonic plus descriptor.
-  - The recovered phone key still cannot bypass the 61,200-block phone-recovery delay. After that path matures, `anzen social emergency-access` can sweep directly to replacement keys without recreating either lost device.
-  - Without social recovery, simultaneous permanent loss of both devices is unrecoverable.
+- **Lost phone and lost HWW**
+  - If the HWW's seed backup survives, restore the HWW, then restore the phone key from the cloud backup with it.
+  - If the cloud backup is also gone, the restored HWW recovers the vault alone once its time lock opens.
+  - If the HWW's seed backup is also lost, the savings are unrecoverable, as with any hardware wallet.
 
 - **Cloud account compromised**
-  - The attacker obtains encrypted payload and key wrappers but still needs the HWW decryption capability or one configured friend's OpenPGP private key.
-  - A recovery friend is trusted with eventual phone-key capability and can spend matured monthly artifacts or use the delayed phone-recovery path; social recovery is therefore a deliberate 1-of-N trust expansion.
+  - The attacker obtains the encrypted payload and its HWW-wrapped key, and still needs the HWW to decrypt it.
+  - Even a decrypted phone key is no more than an extracted mobile key: bounded spending, never the savings.
 
 - **Rollover forgotten**
-  - The phone-only path eventually activates, followed by the HWW-only path.
-  - Any previously extracted key becomes dangerous at its corresponding maturity.
-  - The wallet must provide escalating warnings based on the oldest live UTXO.
+  - Nothing opens for the phone. Only the HWW-only path opens, about 388 days after the oldest live output's confirmation.
+  - A previously extracted HWW key becomes dangerous at that point.
+  - The wallet must provide escalating warnings based on the oldest live UTXO. A late renewal with both devices restarts the time lock.
 
 - **Both mobile and HWW keys compromised**
   - The attacker can satisfy the immediate 2-of-2 path and steal the full balance.
 
 ## Summary
 
-The design provides renewable 2-of-2 cold storage, bounded sequential mobile liquidity, and eventual recovery from either device loss using only existing Bitcoin consensus rules.
+The design provides renewable 2-of-2 cold storage, bounded sequential mobile liquidity, recovery from a lost phone with the signer, and a delayed hardware-wallet-only fallback, using only existing Bitcoin consensus rules. It is a hardware wallet with a second factor: the phone can never be the single point of theft.
 
-Its central trade-off is operational: users must complete an annual rollover before the delayed single-key paths activate. In exchange, they get strong cold-storage security without carrying the HWW for routine monthly spending and without relying on a third-party co-signer.
+Its central trade-off is operational: users must complete an annual rollover before the hardware wallet's solo path opens. In exchange, they get strong cold-storage security without carrying the HWW for routine monthly spending and without relying on a third-party co-signer.

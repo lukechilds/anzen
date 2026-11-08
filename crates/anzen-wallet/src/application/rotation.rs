@@ -11,13 +11,13 @@ use crate::{
 };
 use anzen_common::storage::fs::StoragePath;
 use anzen_common::{
+    cloud_backup::{
+        self, CloudBackupDraft, DeviceBackupKeyRequest, DeviceBackupKeyResponse, RecoveryPayload,
+    },
     device_channel,
     keys::DeviceKeys,
     policy::VaultPolicy,
     protocol::{self, SoftwareCrypto},
-    social::{
-        self, CloudBackupDraft, DeviceBackupKeyRequest, DeviceBackupKeyResponse, RecoveryPayload,
-    },
     storage::{DeviceFile, PHONE_BACKUP_FILE},
 };
 use anzen_protocol::{
@@ -125,11 +125,6 @@ impl WalletApplication {
             )?;
             phone
         };
-        let friends = if self.data_dir.join(PHONE_BACKUP_FILE).storage_exists() {
-            social::friend_public_keys(&self.export_backup()?)
-        } else {
-            Vec::new()
-        };
         let schedule = super::super::active_schedule(&self.data_dir)?;
         let mut addresses = HotWallet::ephemeral(&new_phone)?;
         self.build_rotation(
@@ -138,7 +133,6 @@ impl WalletApplication {
             old_config,
             &new_phone,
             &mut addresses,
-            &friends,
             |spent| recovery::allowances_reported_complete(schedule.as_ref(), spent),
         )
     }
@@ -159,7 +153,6 @@ impl WalletApplication {
         if serde_json::to_vec(&old_config)? != serde_json::to_vec(&bundle.config)? {
             bail!("recovery source changed since importing the signed policy");
         }
-        let friends = self.restored_contact_public_keys(&old_config)?;
         let new_phone = load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?;
         let mut addresses = HotWallet::open_or_create(&self.data_dir)?;
         let last_approved = bundle.last_approved_policy;
@@ -169,12 +162,10 @@ impl WalletApplication {
             old_config,
             &new_phone,
             &mut addresses,
-            &friends,
             |spent| allowances_complete(last_approved.as_ref(), spent),
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn build_rotation(
         &self,
         backend: &dyn HotWalletBackend,
@@ -182,7 +173,6 @@ impl WalletApplication {
         old_config: VaultConfig,
         new_phone: &DeviceKeys,
         addresses: &mut HotWallet,
-        friends: &[String],
         previous_complete: impl FnOnce(&[VaultUtxo]) -> Result<bool>,
     ) -> Result<DevicePhoneRotation> {
         let network = backend.network();
@@ -225,7 +215,7 @@ impl WalletApplication {
                 + usize::from(request.emergency_destination.is_some())
         });
         let (backup_draft, backup_request) =
-            self.prepare_rotation_backup(&new_config, new_phone, friends)?;
+            self.prepare_rotation_backup(&new_config, new_phone)?;
         let request = DevicePhoneRotation {
             rotation: RotationRequest {
                 version: wire::VERSION,
@@ -367,7 +357,7 @@ impl WalletApplication {
         {
             bail!("rotation backup approval mismatch");
         }
-        let backup = social::complete_backup(pending.backup_draft, response.wrapped_key)?;
+        let backup = cloud_backup::complete_backup(pending.backup_draft, response.wrapped_key)?;
         // Durable approved request and backup precede any broadcast. Retrying follows these
         // exact transaction IDs rather than scanning already-spent old inputs or creating a new spend.
         storage::write_json(
@@ -485,7 +475,7 @@ impl WalletApplication {
         storage::write_json(&archive.join(PHONE_DEVICE_FILE), &old_key)?;
         let old_backup = self.data_dir.join(PHONE_BACKUP_FILE);
         if old_backup.storage_exists() && !archive.join(PHONE_BACKUP_FILE).storage_exists() {
-            let backup: social::CloudRecoveryBackup = storage::read_json(&old_backup)?;
+            let backup: cloud_backup::CloudRecoveryBackup = storage::read_json(&old_backup)?;
             storage::write_json(&archive.join(PHONE_BACKUP_FILE), &backup)?;
         }
         for relative in [
@@ -524,11 +514,9 @@ impl WalletApplication {
         &self,
         config: &VaultConfig,
         phone: &DeviceKeys,
-        friend_public_keys: &[String],
     ) -> Result<(CloudBackupDraft, DeviceMessage)> {
-        social::recovery_contact_fingerprints(friend_public_keys)?;
         let payload = zeroize::Zeroizing::new(RecoveryPayload::new(config, phone)?);
-        let (draft, key) = social::prepare_backup(&payload, friend_public_keys)?;
+        let (draft, key) = cloud_backup::prepare_backup(&payload)?;
         let message = device_channel::seal(
             phone,
             XOnlyPublicKey::from_str(&config.hww_vault_pubkey)?,
@@ -536,7 +524,6 @@ impl WalletApplication {
             &DeviceBackupKeyRequest {
                 backup_id: sha256::Hash::hash(&serde_json::to_vec(&draft)?).to_string(),
                 symmetric_key: *key,
-                friend_public_keys: friend_public_keys.to_vec(),
             },
         )?;
         Ok((draft, message))

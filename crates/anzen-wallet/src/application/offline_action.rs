@@ -2,9 +2,8 @@
 use super::*;
 use crate::{
     offline_action,
-    recovery::{self, SweepPath},
+    recovery::{self, RecoveryClock},
 };
-use anzen_common::HWW_RECOVERY_BLOCKS;
 use anzen_common::storage::fs::StoragePath;
 
 #[derive(Serialize, Deserialize)]
@@ -17,8 +16,8 @@ struct PendingAction {
 pub struct RecoverySnapshot {
     pub vault_address: String,
     pub chain_height: u64,
+    pub median_time: u64,
     pub utxo_count: usize,
-    pub phone: RecoveryTiming,
     pub hww: RecoveryTiming,
 }
 
@@ -60,12 +59,13 @@ impl WalletApplication {
         let config = self.recovery_source()?;
         let tip = backend.chain_tip()?;
         let utxos = backend.scan_vault(&config)?;
+        let clock = RecoveryClock::read(backend, &tip, &utxos)?;
         Ok(RecoverySnapshot {
             vault_address: config.vault_address,
             chain_height: tip.height,
+            median_time: tip.median_time,
             utxo_count: utxos.len(),
-            phone: recovery::recovery_timing(&utxos, SweepPath::PhoneRecovery, tip.height)?,
-            hww: recovery::recovery_timing(&utxos, SweepPath::HwwRecovery, tip.height)?,
+            hww: recovery::recovery_timing(&utxos, &clock)?,
         })
     }
 
@@ -78,11 +78,11 @@ impl WalletApplication {
         self.check_backend(backend)?;
         let config = self.recovery_source()?;
         let utxos = match action {
-            OfflineAction::HwwRecovery => recovery::recovery_review_inputs(
-                &backend.scan_vault(&config)?,
-                SweepPath::HwwRecovery,
-                backend.chain_tip()?.height,
-            ),
+            OfflineAction::HwwRecovery => {
+                let utxos = backend.scan_vault(&config)?;
+                let clock = RecoveryClock::read(backend, &backend.chain_tip()?, &utxos)?;
+                recovery::recovery_review_inputs(&utxos, &clock)?
+            }
             OfflineAction::RevokeActions => backend.scan_connectors(&config)?,
         };
         if utxos.is_empty() {
@@ -136,18 +136,23 @@ impl WalletApplication {
             }
         } else if approval.request.action == OfflineAction::HwwRecovery {
             let live = backend.scan_vault(&config)?;
-            let next_height = backend.chain_tip()?.height.saturating_add(1);
+            let mut inputs = Vec::new();
             for input in &approval.request.inputs {
                 let outpoint = anzen_common::protocol::bitcoin_outpoint(input.outpoint);
-                let utxo = live
-                    .iter()
-                    .find(|u| u.outpoint == outpoint)
-                    .context("recovery input is no longer confirmed and unspent")?;
-                let valid = utxo
-                    .confirmation_height
-                    .saturating_add(u64::from(HWW_RECOVERY_BLOCKS));
-                if next_height < valid {
-                    bail!("HWW recovery is not mature; input requires next-block height {valid}");
+                inputs.push(
+                    live.iter()
+                        .find(|u| u.outpoint == outpoint)
+                        .context("recovery input is no longer confirmed and unspent")?
+                        .clone(),
+                );
+            }
+            let clock = RecoveryClock::read(backend, &backend.chain_tip()?, &inputs)?;
+            for input in &inputs {
+                let opens_at = clock.opens_at(input)?;
+                if clock.median_time < opens_at {
+                    bail!(
+                        "HWW recovery is not mature; an input's time lock opens at median time {opens_at}"
+                    );
                 }
             }
         }

@@ -1,6 +1,6 @@
 //! Persisted device and vault records, plus the storage boundary every application writes through.
 
-use super::{HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS, keys::DeviceKeys, policy::VaultPolicy};
+use super::{HWW_RECOVERY_SECONDS, keys::DeviceKeys, policy::VaultPolicy};
 use anyhow::{Context, Result, bail};
 #[cfg(target_arch = "wasm32")]
 pub use anzen_storage::browser;
@@ -21,6 +21,8 @@ pub const PHONE_DEVICE_FILE: &str = "phone/device.json";
 pub const HWW_DEVICE_FILE: &str = "hww/device.json";
 pub const HWW_PUBLIC_FILE: &str = "hww/public.json";
 pub const PHONE_BACKUP_FILE: &str = "cloud/phone-seed-backup.json";
+/// Version 2: both devices, or the hardware wallet alone after [`HWW_RECOVERY_SECONDS`].
+pub const VAULT_CONFIG_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultConfig {
@@ -32,8 +34,7 @@ pub struct VaultConfig {
     pub phone_hot_internal_descriptor: String,
     pub vault_descriptor: String,
     pub vault_address: String,
-    pub phone_recovery_blocks: u16,
-    pub hww_recovery_blocks: u16,
+    pub hww_recovery_seconds: u32,
     #[serde(default, alias = "hard_limit_sats")]
     pub monthly_limit_sats: u64,
     #[serde(default)]
@@ -47,7 +48,7 @@ impl VaultConfig {
 
     /// Reconstruct the fixed policy instead of trusting descriptor/address metadata from a peer.
     pub fn validate_public_policy(&self) -> Result<()> {
-        if self.version != 1 {
+        if self.version != VAULT_CONFIG_VERSION {
             bail!("unsupported vault configuration version");
         }
         let network = self.bitcoin_network()?;
@@ -58,8 +59,7 @@ impl VaultConfig {
             bail!("phone and hardware wallet must use independent keys");
         }
         let policy = VaultPolicy::new_for_network(phone, hww, network)?;
-        if self.phone_recovery_blocks != PHONE_RECOVERY_BLOCKS
-            || self.hww_recovery_blocks != HWW_RECOVERY_BLOCKS
+        if self.hww_recovery_seconds != HWW_RECOVERY_SECONDS
             || self.vault_descriptor != policy.descriptor_string()
             || self.vault_address != policy.address.to_string()
         {

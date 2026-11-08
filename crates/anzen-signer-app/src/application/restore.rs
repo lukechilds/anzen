@@ -1,5 +1,5 @@
 use super::*;
-use anzen_common::{cloud_restore::RestoreKeyResponse, device_channel, social};
+use anzen_common::{cloud_backup, cloud_restore::RestoreKeyResponse, device_channel};
 
 #[derive(Serialize, Deserialize)]
 struct PendingRestore {
@@ -20,7 +20,7 @@ impl SignerApplication {
         let config = self.configuration()?;
         request.validate(&config)?;
         let hww = load_device_keys(&self.data_dir, HWW_DEVICE_FILE)?;
-        social::unwrap_backup_key(&hww.seed, &request.wrapped_key)?;
+        cloud_backup::unwrap_backup_key(&hww.seed, &request.wrapped_key)?;
         let pending = PendingRestore {
             config,
             request: request.clone(),
@@ -46,7 +46,7 @@ impl SignerApplication {
         }
         pending.request.validate(&config)?;
         let hww = load_device_keys(&self.data_dir, HWW_DEVICE_FILE)?;
-        let key = social::unwrap_backup_key(&hww.seed, &pending.request.wrapped_key)?;
+        let key = cloud_backup::unwrap_backup_key(&hww.seed, &pending.request.wrapped_key)?;
         let response = RestoreKeyResponse {
             request_id: pending.request.id()?,
             symmetric_key: *key,

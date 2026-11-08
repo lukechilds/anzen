@@ -6,16 +6,10 @@
 use super::{HotWallet, HotWalletBackend, api::*};
 use anzen_common::storage::fs::StoragePath;
 mod backup;
-mod contact;
-mod contact_restore;
-mod contact_sweep;
-mod delayed_recovery;
 mod offline_action;
-mod previous_vault;
 mod recovered_wallet;
 mod restore;
 mod rotation;
-mod signer_replacement;
 use crate::ceremony;
 use anyhow::{Context, Result, bail};
 use anzen_common::{
@@ -26,15 +20,10 @@ use bitcoin::{
     Address, Psbt, Txid,
     hashes::{Hash, sha256},
 };
-pub use contact::RecoveryContact;
-pub use contact_restore::{ContactRecoveryState, ContactRecoveryStatus, ContactRestoreReview};
-pub use delayed_recovery::{RecoveryTransferReview, RecoveryTransferReview as ContactSweepReview};
 pub use offline_action::RecoverySnapshot;
-pub use previous_vault::PreviousVaultSnapshot;
 pub use restore::RestoredPhoneSummary;
 pub use rotation::DeviceRotationResult;
 use serde::{Deserialize, Serialize};
-pub use signer_replacement::SignerReplacementCandidate;
 use std::{path::PathBuf, str::FromStr};
 
 pub struct WalletApplication {
@@ -62,16 +51,6 @@ pub enum WalletRequest {
     },
     RecoverySource,
     RecoverySnapshot,
-    PreviousVaults,
-    ReviewPreviousVaultRecovery {
-        vault_id: String,
-    },
-    ConfirmPreviousVaultRecovery {
-        review_id: String,
-    },
-    RejectPreviousVaultRecovery {
-        review_id: String,
-    },
     ProposeOfflineAction {
         action: OfflineAction,
         destination: String,
@@ -80,44 +59,6 @@ pub enum WalletRequest {
         approval: Box<OfflineActionApproval>,
     },
     ProposeBackup,
-    ProposeBackupWithContact {
-        contact: RecoveryContact,
-    },
-    GenerateRecoveryContact {
-        name: String,
-    },
-    RecoveryContact,
-    InspectRecoveryContact {
-        contact: RecoveryContact,
-    },
-    ProposeContactRestore {
-        backup: Box<CloudRecoveryBackup>,
-        contact: RecoveryContact,
-    },
-    ReviewContactRestore {
-        request: Box<ContactRestoreRequest>,
-    },
-    ApproveContactRestore {
-        review_id: String,
-        request: Box<ContactRestoreRequest>,
-    },
-    RejectContactRestore {
-        review_id: String,
-    },
-    StoreContactRestoredKey {
-        message: Box<DeviceMessage>,
-    },
-    ContactRecoveryState,
-    ContactRecoveryStatus,
-    ReviewContactSweep {
-        destination: String,
-    },
-    ConfirmContactSweep {
-        review_id: String,
-    },
-    RejectContactSweep {
-        review_id: String,
-    },
     StoreBackup {
         message: Box<DeviceMessage>,
     },
@@ -141,15 +82,6 @@ pub enum WalletRequest {
     ProposeRotation {
         #[serde(default)]
         vanity: bool,
-    },
-    InspectSignerReplacement {
-        signer: PublicDeviceFile,
-    },
-    ProposeSignerReplacement {
-        signer: PublicDeviceFile,
-    },
-    ActivateSignerReplacement {
-        approval: Box<ApprovedSignerReplacement>,
     },
     #[serde(alias = "activate_restored_rotation")]
     ActivateRotation {
@@ -208,9 +140,6 @@ pub enum WalletRequest {
     ActivateSweep {
         approval: Box<SweepApproval>,
     },
-    PhoneRecovery {
-        destination: String,
-    },
 }
 
 impl WalletRequest {
@@ -220,17 +149,13 @@ impl WalletRequest {
             Self::PairSigner { .. } | Self::SetupVault { .. } => K::VaultSetup,
             Self::ProposePolicy { .. } | Self::RefreshPolicy => K::PolicyProposal,
             Self::ProposeSweep { .. } => K::SweepProposal,
-            Self::ProposeBackup | Self::ProposeBackupWithContact { .. } => K::BackupProposal,
+            Self::ProposeBackup => K::BackupProposal,
             Self::ProposeRestore { .. } => K::RestoreProposal,
             Self::ProposeOfflineAction { .. } => K::OfflineActionProposal,
             Self::ProposeRestoredRotation | Self::ProposeRotation { .. } => {
                 K::PhoneRotationProposal
             }
             Self::ActivateRotation { .. } => K::PhoneRotationCompleted,
-            Self::ProposeSignerReplacement { .. } => K::SignerReplacementProposal,
-            Self::ActivateSignerReplacement { .. } => K::SignerReplacementCompleted,
-            Self::ProposeContactRestore { .. } => K::ContactRestoreProposal,
-            Self::ApproveContactRestore { .. } => K::ContactRestoreApproved,
             _ => return None,
         })
     }
@@ -245,19 +170,7 @@ impl WalletRequest {
                 | Self::ImportRecoveryVault { .. }
                 | Self::ImportRecoveryBundle { .. }
                 | Self::RecoverySource
-                | Self::RejectPreviousVaultRecovery { .. }
                 | Self::ProposeBackup
-                | Self::ProposeBackupWithContact { .. }
-                | Self::GenerateRecoveryContact { .. }
-                | Self::RecoveryContact
-                | Self::InspectRecoveryContact { .. }
-                | Self::ProposeContactRestore { .. }
-                | Self::ReviewContactRestore { .. }
-                | Self::ApproveContactRestore { .. }
-                | Self::RejectContactRestore { .. }
-                | Self::StoreContactRestoredKey { .. }
-                | Self::ContactRecoveryState
-                | Self::RejectContactSweep { .. }
                 | Self::StoreBackup { .. }
                 | Self::ExportBackup
                 | Self::ProposeRestore { .. }
@@ -322,12 +235,12 @@ pub struct VaultSnapshot {
     pub utxo_count: usize,
     pub chain_height: u64,
     pub median_time: u64,
-    pub phone_recovery_next_block_height: Option<u64>,
-    pub hww_recovery_next_block_height: Option<u64>,
+    /// When the signer could first move savings alone: the tip median time past at which the
+    /// oldest coin's time lock opens. Renewing the vault moves every coin and restarts it.
+    pub hww_recovery_opens_at: Option<u64>,
     pub schedule: Option<Schedule>,
     pub recovery_backup_stored: bool,
     pub recovered_wallet_available: bool,
-    pub previous_vaults: Vec<PreviousVaultSnapshot>,
 }
 
 impl WalletApplication {
@@ -353,30 +266,10 @@ impl WalletApplication {
         let result = match request {
             WalletRequest::Outbox => serde_json::json!({"messages": self.outbox()?}),
             WalletRequest::ReadOutbox { id } => serde_json::to_value(self.read_outbox(&id)?)?,
-            WalletRequest::PreviousVaults => serde_json::to_value(self.previous_vaults(chain()?)?)?,
-            WalletRequest::ReviewPreviousVaultRecovery { vault_id } => {
-                serde_json::to_value(self.review_previous_vault_recovery(chain()?, &vault_id)?)?
-            }
-            WalletRequest::ConfirmPreviousVaultRecovery { review_id } => {
-                serde_json::json!({ "txid": self.confirm_previous_vault_recovery(chain()?, &review_id)? })
-            }
-            WalletRequest::RejectPreviousVaultRecovery { review_id } => {
-                self.reject_previous_vault_recovery(&review_id)?;
-                serde_json::json!({ "rejected": true })
-            }
             WalletRequest::Initialize { network } => {
                 serde_json::to_value(self.initialize(network)?)?
             }
             WalletRequest::Identity => serde_json::to_value(self.public_identity()?)?,
-            WalletRequest::InspectSignerReplacement { signer } => {
-                serde_json::to_value(self.inspect_signer_replacement(chain()?, &signer)?)?
-            }
-            WalletRequest::ProposeSignerReplacement { signer } => {
-                serde_json::to_value(self.propose_signer_replacement(chain()?, &signer)?)?
-            }
-            WalletRequest::ActivateSignerReplacement { approval } => {
-                serde_json::to_value(self.activate_signer_replacement(chain()?, &approval)?)?
-            }
             WalletRequest::ImportRecoveryVault { config } => {
                 self.import_recovery_vault(&config)?;
                 serde_json::to_value(config)?
@@ -401,52 +294,6 @@ impl WalletApplication {
                 serde_json::json!({"txid": self.activate_offline_action(chain()?, &approval)?})
             }
             WalletRequest::ProposeBackup => serde_json::to_value(self.propose_backup()?)?,
-            WalletRequest::ProposeBackupWithContact { contact } => {
-                serde_json::to_value(self.propose_backup_with_contact(&contact)?)?
-            }
-            WalletRequest::GenerateRecoveryContact { name } => {
-                serde_json::to_value(self.generate_recovery_contact(&name)?)?
-            }
-            WalletRequest::RecoveryContact => {
-                serde_json::json!({"contact": self.recovery_contact()?})
-            }
-            WalletRequest::InspectRecoveryContact { contact } => {
-                self.public_identity()?;
-                contact.validate()?;
-                serde_json::to_value(contact)?
-            }
-            WalletRequest::ProposeContactRestore { backup, contact } => {
-                serde_json::to_value(self.propose_contact_restore(&backup, &contact)?)?
-            }
-            WalletRequest::ReviewContactRestore { request } => {
-                serde_json::to_value(self.review_contact_restore(&request)?)?
-            }
-            WalletRequest::ApproveContactRestore { review_id, request } => {
-                serde_json::to_value(self.approve_contact_restore(&review_id, &request)?)?
-            }
-            WalletRequest::RejectContactRestore { review_id } => {
-                self.reject_contact_restore(&review_id)?;
-                serde_json::json!({"rejected":true})
-            }
-            WalletRequest::StoreContactRestoredKey { message } => {
-                serde_json::to_value(self.store_contact_restored_key(&message)?)?
-            }
-            WalletRequest::ContactRecoveryState => {
-                serde_json::to_value(self.contact_recovery_state()?)?
-            }
-            WalletRequest::ContactRecoveryStatus => {
-                serde_json::to_value(self.contact_recovery_status(chain()?)?)?
-            }
-            WalletRequest::ReviewContactSweep { destination } => {
-                serde_json::to_value(self.review_contact_sweep(chain()?, &destination)?)?
-            }
-            WalletRequest::ConfirmContactSweep { review_id } => {
-                serde_json::json!({"txid":self.confirm_contact_sweep(chain()?, &review_id)?})
-            }
-            WalletRequest::RejectContactSweep { review_id } => {
-                self.reject_contact_sweep(&review_id)?;
-                serde_json::json!({"rejected":true})
-            }
             WalletRequest::StoreBackup { message } => {
                 self.store_backup(&message)?;
                 serde_json::json!({"stored": true})
@@ -552,9 +399,6 @@ impl WalletApplication {
             }
             WalletRequest::ActivateSweep { approval } => {
                 serde_json::to_value(self.activate_sweep(chain()?, &approval)?)?
-            }
-            WalletRequest::PhoneRecovery { destination } => {
-                serde_json::to_value(self.phone_recovery(chain()?, &destination)?)?
             }
         };
         if let Some(kind) = outgoing_kind {
@@ -665,8 +509,7 @@ impl WalletApplication {
     }
 
     /// The automatic refresh behind live updates. Regtest syncs through Bitcoin Core by walking
-    /// every block since the last sync (over a minute after a 61,200-block time jump, or for a
-    /// never-synced wallet on a long chain), and the device can do nothing else meanwhile. So a
+    /// every block since the last sync (slow for a never-synced wallet on a long chain), and the device can do nothing else meanwhile. So a
     /// background refresh that far behind returns the last synced state instead, and an
     /// explicit sync catches up.
     pub fn background_wallet_snapshot(
@@ -710,7 +553,14 @@ impl WalletApplication {
         let config = self.configuration()?;
         let tip = backend.chain_tip()?;
         let utxos = backend.scan_vault(&config)?;
-        let oldest = utxos.iter().map(|utxo| utxo.confirmation_height).min();
+        let oldest = utxos.iter().min_by_key(|utxo| utxo.confirmation_height);
+        let hww_recovery_opens_at = match oldest {
+            Some(oldest) => Some(
+                crate::recovery::RecoveryClock::read(backend, &tip, std::slice::from_ref(oldest))?
+                    .opens_at(oldest)?,
+            ),
+            None => None,
+        };
         let balance_sats = utxos.iter().try_fold(0u64, |sum, utxo| {
             sum.checked_add(utxo.txout.value.to_sat())
                 .context("vault balance overflow")
@@ -721,10 +571,7 @@ impl WalletApplication {
             None
         };
         Ok(VaultSnapshot {
-            phone_recovery_next_block_height: oldest
-                .map(|height| height.saturating_add(u64::from(config.phone_recovery_blocks))),
-            hww_recovery_next_block_height: oldest
-                .map(|height| height.saturating_add(u64::from(config.hww_recovery_blocks))),
+            hww_recovery_opens_at,
             config,
             balance_sats,
             utxo_count: utxos.len(),
@@ -736,7 +583,6 @@ impl WalletApplication {
                 .join(storage::PHONE_BACKUP_FILE)
                 .storage_exists(),
             recovered_wallet_available: self.restored_phone().is_ok(),
-            previous_vaults: self.previous_vaults(backend)?,
         })
     }
 
@@ -781,27 +627,6 @@ impl WalletApplication {
         self.check_backend(backend)?;
         self.configuration()?;
         super::broadcast_cooperative_sweep(&self.data_dir, backend, approval)
-    }
-
-    pub fn phone_recovery(
-        &self,
-        backend: &dyn HotWalletBackend,
-        destination: &str,
-    ) -> Result<SweepResult> {
-        self.check_backend(backend)?;
-        let config = self.configuration()?;
-        let destination = Address::from_str(destination)?.require_network(backend.network())?;
-        let (transaction, result) = super::recover(
-            &self.data_dir,
-            &config,
-            &backend.scan_vault(&config)?,
-            backend.chain_tip()?.height,
-            &destination,
-        )?;
-        if backend.broadcast(&transaction)? != result.txid {
-            bail!("backend returned an unexpected recovery transaction ID");
-        }
-        Ok(result)
     }
 
     pub fn review_payment(

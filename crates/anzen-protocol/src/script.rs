@@ -1,11 +1,12 @@
 //! The two fixed Taproot policies every vault uses.
 //!
-//! Vault principal: `tr(NUMS,{multi_a(2,phone,hww),{and_v(v:older(61200),pk(phone)),
-//! and_v(v:older(65535),pk(hww))}})`. Connectors: `tr(NUMS,{pk(phone),pk(hww)})`.
+//! Vault principal: `tr(NUMS,{multi_a(2,phone,hww),and_v(v:older(4259839),pk(hww))})`: both
+//! devices together, or the hardware wallet alone after about 388 days (a time-based relative
+//! lock). Connectors: `tr(NUMS,{pk(phone),pk(hww)})`.
 
 use crate::{
     Error, Result,
-    consts::{HWW_RECOVERY_BLOCKS, NUMS_KEY, PHONE_RECOVERY_BLOCKS},
+    consts::{HWW_RECOVERY_SEQUENCE, NUMS_KEY},
     crypto::{Crypto, TAPBRANCH_TAG, TAPLEAF_TAG, TAPTWEAK_TAG, TweakedKey, tagged_hash},
 };
 use alloc::vec::Vec;
@@ -77,9 +78,9 @@ pub fn cooperative_script(keys: &VaultKeys) -> [u8; 70] {
     script
 }
 
-/// `<delay> OP_CSV OP_VERIFY <key> OP_CHECKSIG` (`and_v(v:older(delay),pk(key))`).
-pub fn recovery_script(key: &XOnlyKey, delay: u16) -> Vec<u8> {
-    let mut script = push_script_number(i64::from(delay));
+/// `<sequence> OP_CSV OP_VERIFY <key> OP_CHECKSIG` (`and_v(v:older(sequence),pk(key))`).
+pub fn recovery_script(key: &XOnlyKey, sequence: u32) -> Vec<u8> {
+    let mut script = push_script_number(i64::from(sequence));
     script.push(OP_CSV);
     script.push(OP_VERIFY);
     script.push(32);
@@ -150,7 +151,6 @@ fn validate_keys<C: Crypto + ?Sized>(crypto: &mut C, keys: &VaultKeys) -> Result
 pub struct VaultScript {
     pub keys: VaultKeys,
     pub cooperative_leaf: [u8; 32],
-    pub phone_recovery_leaf: [u8; 32],
     pub hww_recovery_leaf: [u8; 32],
     pub output: TweakedKey,
     pub script_pubkey: Vec<u8>,
@@ -160,17 +160,13 @@ impl VaultScript {
     pub fn new<C: Crypto + ?Sized>(crypto: &mut C, keys: &VaultKeys) -> Result<Self> {
         validate_keys(crypto, keys)?;
         let cooperative_leaf = tapleaf_hash(crypto, &cooperative_script(keys));
-        let phone_recovery_leaf =
-            tapleaf_hash(crypto, &recovery_script(&keys.phone, PHONE_RECOVERY_BLOCKS));
         let hww_recovery_leaf =
-            tapleaf_hash(crypto, &recovery_script(&keys.hww, HWW_RECOVERY_BLOCKS));
-        let recoveries = tapbranch_hash(crypto, phone_recovery_leaf, hww_recovery_leaf);
-        let root = tapbranch_hash(crypto, cooperative_leaf, recoveries);
+            tapleaf_hash(crypto, &recovery_script(&keys.hww, HWW_RECOVERY_SEQUENCE));
+        let root = tapbranch_hash(crypto, cooperative_leaf, hww_recovery_leaf);
         let output = output_key(crypto, root)?;
         Ok(Self {
             keys: *keys,
             cooperative_leaf,
-            phone_recovery_leaf,
             hww_recovery_leaf,
             script_pubkey: p2tr_script_pubkey(&output.output_key),
             output,

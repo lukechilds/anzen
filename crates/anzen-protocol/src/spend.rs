@@ -2,10 +2,7 @@
 
 use crate::{
     Error, Result,
-    consts::{
-        FEE_RATE_SAT_VB, HWW_RECOVERY_BLOCKS, MAX_INPUTS, PHONE_RECOVERY_BLOCKS, SEQUENCE_FINAL,
-        SEQUENCE_RBF,
-    },
+    consts::{FEE_RATE_SAT_VB, HWW_RECOVERY_SEQUENCE, MAX_INPUTS, SEQUENCE_FINAL, SEQUENCE_RBF},
     crypto::Crypto,
     policy::Input,
     script::Scripts,
@@ -42,8 +39,7 @@ impl Spend {
 /// The relative lock each vault spend path requires.
 pub fn vault_sequence(path: SpendPath) -> u32 {
     match path {
-        SpendPath::PhoneRecovery => u32::from(PHONE_RECOVERY_BLOCKS),
-        SpendPath::HwwRecovery => u32::from(HWW_RECOVERY_BLOCKS),
+        SpendPath::HwwRecovery => HWW_RECOVERY_SEQUENCE,
         _ => SEQUENCE_FINAL,
     }
 }

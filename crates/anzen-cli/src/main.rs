@@ -14,13 +14,12 @@ use anzen_wallet::{
         OfflineAction, PolicyRequest, PublicDeviceFile, RecoveryVaultBundle, RestoreKeyRequest,
         SweepApproval, SweepRequest, TransactionKind, VaultConfig,
     },
-    application::{RecoveryContact, WalletApplication},
+    application::WalletApplication,
 };
 use bitcoin::Network;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    fs,
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -60,11 +59,6 @@ enum Command {
     Hww {
         #[command(subcommand)]
         command: HwwCommand,
-    },
-    /// OpenPGP social-recovery and delayed emergency-access actions.
-    Social {
-        #[command(subcommand)]
-        command: SocialCommand,
     },
     /// Regtest-only node controls used by the end-to-end tests.
     Node {
@@ -125,8 +119,6 @@ enum PhoneCommand {
     },
     /// Decrypt the cloud backup with the key the HWW released to this phone.
     Restore { response: PathBuf },
-    /// Sweep mature vault outputs using the phone-only recovery path.
-    Recover { destination: String },
     /// Propose a cooperative sweep for the HWW to review.
     CreateSweep {
         destination: String,
@@ -145,12 +137,6 @@ enum PhoneCommand {
     },
     /// Activate an HWW-approved key rotation and replacement annual policy.
     ActivateRotation { approved_rotation: PathBuf },
-    /// Propose a new cloud backup that also wraps its key for a recovery friend.
-    AddRecoveryFriend {
-        public_key: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
     /// Store the cloud backup the HWW approved.
     StoreBackup { response: PathBuf },
 }
@@ -204,7 +190,7 @@ enum HwwCommand {
         #[arg(long)]
         yes: bool,
     },
-    /// Sweep mature vault outputs using the HWW-only recovery path.
+    /// Sweep vault outputs past the signer's time lock (about 388 days) with the HWW alone.
     Recover { destination: String },
     /// Immediately invalidate every live programmable-policy state.
     RevokePolicy {
@@ -231,34 +217,6 @@ enum HwwCommand {
     },
     /// Pair with the rotated vault after the phone broadcast the approved rotation.
     AdoptRotation { approved_rotation: PathBuf },
-}
-
-#[derive(Debug, Subcommand)]
-enum SocialCommand {
-    /// Generate a simulated recovery friend's OpenPGP keypair.
-    GenerateFriendKey {
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        public_key: PathBuf,
-        #[arg(long)]
-        private_key: PathBuf,
-    },
-    /// Decrypt the phone key and descriptor using one configured friend's private key.
-    DecryptBackup {
-        backup: PathBuf,
-        #[arg(long)]
-        private_key: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    /// Decrypt social recovery and sweep funds through the delayed phone-recovery path.
-    EmergencyAccess {
-        backup: PathBuf,
-        #[arg(long)]
-        private_key: PathBuf,
-        destination: String,
-    },
 }
 
 #[derive(Debug, Clone, Args)]
@@ -384,7 +342,6 @@ fn main() -> Result<()> {
             &cli.chain,
             network,
         ),
-        Command::Social { command } => run_social(command, &cli.data_dir, &cli.chain),
         Command::Node { command } => run_node(command, &cli.chain, network),
     }
 }
@@ -416,27 +373,17 @@ fn initialize_vault(data_dir: &Path, network: Network, allow_mainnet: bool) -> R
     let request = wallet.propose_backup()?;
     let review = signer.review_backup(&request)?;
     wallet.store_backup(&signer.approve_backup(&review.review_id, &request)?)?;
-    let backup = wallet.export_backup()?;
+    wallet.export_backup()?;
     println!("Vault initialized ({})", network_label(network));
     if network == Network::Bitcoin {
         println!("DANGER: mainnet mode uses real bitcoin and fixed 1 sat/vB MVP fees");
     }
     println!("Cold storage descriptor: {}", config.vault_descriptor);
     println!("Vault address: {}", config.vault_address);
-    println!(
-        "Phone recovery: {} blocks (~14 months)",
-        format_number(u64::from(config.phone_recovery_blocks))
-    );
-    println!(
-        "HWW recovery:   {} blocks (~15 months)",
-        format_number(u64::from(config.hww_recovery_blocks))
-    );
+    print_recovery_delay(&config);
     println!("Monthly spending: disabled");
     println!("Emergency access: disabled");
-    println!(
-        "Cloud recovery backup: phone key + descriptor encrypted; {} recovery friends",
-        backup.friends.len()
-    );
+    println!("Cloud recovery backup: phone key + descriptor encrypted to the HWW");
     Ok(())
 }
 
@@ -610,10 +557,6 @@ fn run_phone(
             println!("Replacement phone key: {}", restored.new_phone_public_key);
             println!("Rotate the vault to the replacement key before using it");
         }
-        PhoneCommand::Recover { destination } => {
-            let result = wallet.phone_recovery(backend()?.as_ref(), &destination)?;
-            print_sweep_result("Phone recovery sweep broadcast", &result);
-        }
         PhoneCommand::CreateSweep {
             destination,
             output,
@@ -690,30 +633,10 @@ fn run_phone(
                 None => println!("Programmable vault policy remains disabled"),
             }
         }
-        PhoneCommand::AddRecoveryFriend { public_key, output } => {
-            let armored = fs::read_to_string(&public_key).with_context(|| {
-                format!("failed to read friend public key {}", public_key.display())
-            })?;
-            let contact = RecoveryContact {
-                version: 1,
-                name: "Recovery friend".to_owned(),
-                fingerprint: anzen_common::social::friend_fingerprint(armored.as_bytes())?,
-                public_key_armored: armored,
-                transport_public_key: String::new(),
-            };
-            let request = wallet.propose_backup_with_contact(&contact)?;
-            println!("Recovery friend proposed: {}", contact.fingerprint);
-            write_artifact(&output, &request)?;
-            report_artifact(&output, "Cloud backup request")?;
-        }
         PhoneCommand::StoreBackup { response } => {
             let message: DeviceMessage = read_artifact(&response)?;
             wallet.store_backup(&message)?;
-            let backup = wallet.export_backup()?;
-            println!(
-                "Cloud recovery backup stored; {} recovery friends",
-                backup.friends.len()
-            );
+            println!("Cloud recovery backup stored");
         }
     }
     Ok(())
@@ -781,19 +704,10 @@ fn run_hww(
             let review = signer.review_backup(&message)?;
             eprintln!("SIMULATED HWW — CLOUD BACKUP");
             eprintln!("Vault address: {}", review.vault_address);
-            for fingerprint in &review.friend_fingerprints {
-                eprintln!("Recovery friend OpenPGP fingerprint: {fingerprint}");
-            }
-            eprintln!(
-                "Each friend gains the phone key and descriptor if they obtain the cloud backup"
-            );
-            eprintln!("The 61,200-block phone recovery delay still applies to vault funds");
+            eprintln!("Only this HWW can unwrap the phone's cloud backup");
             require_hww_approval(yes, &request, "cloud backup")?;
             let response = signer.approve_backup(&review.review_id, &message)?;
-            println!(
-                "HWW wrapped the cloud backup key for {} recovery friends",
-                review.friend_fingerprints.len()
-            );
+            println!("HWW wrapped the cloud backup key");
             write_artifact(&output, &response)?;
             report_artifact(&output, "HWW-approved cloud backup")?;
         }
@@ -825,10 +739,12 @@ fn run_hww(
             let config = signer.export_recovery_bundle()?.config;
             let backend = rpc_args.connect_chain(network)?;
             let tip = backend.chain_tip()?;
+            let utxos = backend.scan_vault(&config)?;
+            let clock = anzen_wallet::recovery::RecoveryClock::read(&*backend, &tip, &utxos)?;
             let request = anzen_wallet::offline_action::mature_recovery_request(
                 &config,
-                &backend.scan_vault(&config)?,
-                tip.height,
+                &utxos,
+                &clock,
                 &destination,
             )?;
             let review = signer.review_offline_action(&request)?;
@@ -920,113 +836,6 @@ fn run_hww(
     Ok(())
 }
 
-fn run_social(command: SocialCommand, data_dir: &Path, rpc_args: &ChainArgs) -> Result<()> {
-    match command {
-        SocialCommand::GenerateFriendKey {
-            name,
-            public_key,
-            private_key,
-        } => {
-            if public_key == private_key {
-                bail!("friend public and private key paths must be different");
-            }
-            let generated = anzen_common::social::generate_friend_key(&name)?;
-            anzen_common::storage::write_private(
-                &public_key,
-                generated.public_key_armored.as_bytes(),
-            )?;
-            anzen_common::storage::write_private(
-                &private_key,
-                generated.private_key_armored.as_bytes(),
-            )?;
-            println!(
-                "Recovery friend OpenPGP key generated: {}",
-                generated.fingerprint
-            );
-            println!("Public key: {}", public_key.display());
-            println!(
-                "Private key: {} (give only to the recovery friend)",
-                private_key.display()
-            );
-        }
-        SocialCommand::DecryptBackup {
-            backup,
-            private_key,
-            output,
-        } => {
-            let package = friend_recovery_package(data_dir, &backup, &private_key)?;
-            println!("Social recovery decrypted and authenticated");
-            println!("Phone vault key: {}", package.phone_vault_pubkey);
-            println!("Cold storage descriptor: {}", package.vault_descriptor);
-            println!("Vault address: {}", package.vault_address);
-            write_artifact(&output, &package)?;
-            report_artifact(&output, "Friend-decrypted phone recovery package")?;
-        }
-        SocialCommand::EmergencyAccess {
-            backup,
-            private_key,
-            destination,
-        } => {
-            let package = friend_recovery_package(data_dir, &backup, &private_key)?;
-            let config = anzen_common::storage::load_config(data_dir)?;
-            let network = config.bitcoin_network()?;
-            let destination = destination
-                .parse::<bitcoin::Address<_>>()?
-                .require_network(network)?;
-            let backend = rpc_args.connect_chain(network)?;
-            let tip = backend.chain_tip()?;
-            let utxos = backend.scan_vault(&config)?;
-            let phone = anzen_common::keys::DeviceKeys::parse_for_network_at_index(
-                &bitcoin::key::Secp256k1::new(),
-                &package.phone_mnemonic,
-                network,
-                package.phone_vault_key_index,
-            )?;
-            let (transaction, result) = anzen_wallet::recovery::recover(
-                &config,
-                &utxos,
-                tip.height,
-                anzen_wallet::recovery::SweepPath::PhoneRecovery,
-                &destination,
-                &phone,
-            )?;
-            let txid = backend.broadcast(&transaction)?;
-            if txid != result.txid {
-                bail!("chain backend returned an unexpected emergency-access transaction ID");
-            }
-            print_sweep_result("Social emergency-access sweep broadcast", &result);
-            println!("On-chain phone recovery delay was enforced");
-        }
-    }
-    Ok(())
-}
-
-fn friend_recovery_package(
-    data_dir: &Path,
-    backup_path: &Path,
-    private_key_path: &Path,
-) -> Result<anzen_wallet::recovery::PhoneRecoveryPackage> {
-    let config = anzen_common::storage::load_config(data_dir)?;
-    let backup: CloudRecoveryBackup = anzen_common::storage::read_json(backup_path)?;
-    let private_key = fs::read(private_key_path).with_context(|| {
-        format!(
-            "failed to read friend private key {}",
-            private_key_path.display()
-        )
-    })?;
-    let payload = anzen_common::social::decrypt_with_friend(&backup, &private_key)?;
-    payload.validate_against(&config)?;
-    Ok(anzen_wallet::recovery::PhoneRecoveryPackage {
-        version: 2,
-        kind: "phone-recovery".to_owned(),
-        phone_mnemonic: payload.phone_mnemonic.clone(),
-        phone_vault_key_index: payload.phone_vault_key_index,
-        phone_vault_pubkey: payload.phone_vault_pubkey.clone(),
-        vault_descriptor: payload.vault_descriptor.clone(),
-        vault_address: payload.vault_address.clone(),
-    })
-}
-
 fn print_active_policy(wallet: &WalletApplication) -> Result<()> {
     let config = wallet.configuration()?;
     println!("Cold storage descriptor: {}", config.vault_descriptor);
@@ -1039,14 +848,7 @@ fn print_active_policy(wallet: &WalletApplication) -> Result<()> {
         "Policy controller reserve: {} sats per active chain",
         anzen_protocol::consts::CONNECTOR_VALUE_SATS
     );
-    println!(
-        "Phone recovery: {} blocks (~14 months)",
-        format_number(u64::from(config.phone_recovery_blocks))
-    );
-    println!(
-        "HWW recovery:   {} blocks (~15 months)",
-        format_number(u64::from(config.hww_recovery_blocks))
-    );
+    print_recovery_delay(&config);
     if config.monthly_limit_sats == 0 {
         println!("Monthly spending: disabled");
     } else {
@@ -1127,18 +929,12 @@ fn print_status(
     );
     if let Some(oldest) = utxos.first() {
         println!("Oldest confirmation height: {}", oldest.confirmation_height);
-        print_recovery_activation(
-            "Phone",
-            oldest.confirmation_height + u64::from(config.phone_recovery_blocks),
-            tip.height + 1,
-            tip.median_time,
-        );
-        print_recovery_activation(
-            "HWW",
-            oldest.confirmation_height + u64::from(config.hww_recovery_blocks),
-            tip.height + 1,
-            tip.median_time,
-        );
+        let clock = anzen_wallet::recovery::RecoveryClock::read(
+            &*backend,
+            &tip,
+            std::slice::from_ref(oldest),
+        )?;
+        print_recovery_activation(clock.opens_at(oldest)?, tip.median_time);
     }
     Ok(())
 }
@@ -1475,19 +1271,26 @@ fn network_label(network: Network) -> &'static str {
     }
 }
 
-fn print_recovery_activation(label: &str, valid_height: u64, next_height: u64, median_time: u64) {
-    if next_height >= valid_height {
-        println!("{label} recovery: ACTIVE (valid next-block height {valid_height})");
+fn print_recovery_delay(config: &VaultConfig) {
+    println!(
+        "HWW alone:      after {} seconds (~388 days); renewing the vault restarts it",
+        format_number(u64::from(config.hww_recovery_seconds))
+    );
+}
+
+/// The signer's solo path opens once the chain's median time past reaches `opens_at`.
+fn print_recovery_activation(opens_at: u64, median_time: u64) {
+    let date = i64::try_from(opens_at)
+        .ok()
+        .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+        .map(|date| date.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "outside displayable range".to_owned());
+    if median_time >= opens_at {
+        println!("HWW recovery: ACTIVE (opened at median time {date})");
     } else {
-        let remaining = valid_height - next_height;
-        let estimated_timestamp = median_time.saturating_add(remaining.saturating_mul(600));
-        let estimated = i64::try_from(estimated_timestamp)
-            .ok()
-            .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
-            .map(|date| date.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| "outside displayable range".to_owned());
         println!(
-            "{label} recovery: valid next-block height {valid_height} ({remaining} blocks remaining; estimated {estimated} at 10-minute blocks)"
+            "HWW recovery: opens at median time {date} ({} days remaining)",
+            (opens_at - median_time).div_ceil(86_400)
         );
     }
 }

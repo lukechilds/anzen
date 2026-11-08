@@ -76,30 +76,17 @@ pub fn request(
     Ok(request)
 }
 
-/// A host-assembled HWW recovery request over every vault output mature at the next block.
+/// A host-assembled HWW recovery request over every vault output past its time lock.
 /// A computer connected to the signer supplies public chain data; the signer adds nothing.
 pub fn mature_recovery_request(
     config: &VaultConfig,
     all_utxos: &[VaultUtxo],
-    tip_height: u64,
+    clock: &crate::recovery::RecoveryClock,
     destination: &str,
 ) -> Result<OfflineActionRequest> {
-    let mature = crate::recovery::mature_utxos(
-        all_utxos,
-        crate::recovery::SweepPath::HwwRecovery,
-        tip_height,
-    );
+    let mature = crate::recovery::mature_utxos(all_utxos, clock)?;
     if mature.is_empty() {
-        match all_utxos.iter().map(|utxo| utxo.confirmation_height).min() {
-            Some(oldest) => {
-                let valid = oldest.saturating_add(u64::from(anzen_common::HWW_RECOVERY_BLOCKS));
-                bail!(
-                    "no vault UTXOs are mature for HWW recovery; earliest next-block validity height is {valid} ({} blocks remaining)",
-                    valid.saturating_sub(tip_height.saturating_add(1))
-                );
-            }
-            None => bail!("vault has no confirmed UTXOs to sweep"),
-        }
+        crate::recovery::not_mature(all_utxos, clock)?;
     }
     request(config, OfflineAction::HwwRecovery, &mature, destination)
 }

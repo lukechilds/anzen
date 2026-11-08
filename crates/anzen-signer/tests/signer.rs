@@ -7,8 +7,8 @@ use anzen_protocol::{
     script::{Scripts, VaultKeys, XOnlyKey},
     tx::{OutPoint, Txid},
     wire::{
-        self, OfflineAction, OfflineActionRequest, PolicyRequest, ReplacementRequest,
-        RotationRequest, Signature, SweepRequest,
+        self, OfflineAction, OfflineActionRequest, PolicyRequest, RotationRequest, Signature,
+        SweepRequest,
     },
 };
 use anzen_signer::{Keys, Signer, State};
@@ -367,7 +367,7 @@ fn sweeps_and_offline_actions_sign_each_input_through_the_expected_leaf() {
             .review_offline_action(&state, &request)
             .unwrap();
         assert_eq!(
-            review.recovery_delay_blocks.is_some(),
+            review.recovery_delay_seconds.is_some(),
             action == OfflineAction::HwwRecovery
         );
         let approval = fixture
@@ -499,99 +499,6 @@ fn rotation_preserves_limits_links_the_old_epoch_and_hands_over_new_state() {
             .review_rotation(&approved, &detached, None)
             .err(),
         Some(Error::WrongVault)
-    );
-}
-
-#[test]
-fn a_replacement_signer_renews_only_on_the_phone_recovery_output() {
-    let mut crypto = SoftwareCrypto::new();
-    let phone = SoftwareKeys::random();
-    let old_hww = SoftwareKeys::random();
-    let mut new_hww = SoftwareKeys::random();
-    let old_keys = VaultKeys {
-        phone: phone.xonly(),
-        hww: old_hww.xonly(),
-    };
-    let new_keys = VaultKeys {
-        phone: phone.xonly(),
-        hww: new_hww.xonly(),
-    };
-    let recovery_inputs = vec![vault_input(7, 90_000_000)];
-    let old_scripts = Scripts::new(&mut crypto, &old_keys).unwrap();
-    let new_scripts = Scripts::new(&mut crypto, &new_keys).unwrap();
-    let recovery = anzen_protocol::spend::vault_sweep(
-        &mut crypto,
-        &old_scripts,
-        &recovery_inputs,
-        anzen_protocol::tx::SpendPath::PhoneRecovery,
-        &new_scripts.vault.script_pubkey,
-    )
-    .unwrap();
-    let limits = Limits {
-        monthly_limit_sats: 10_000_000,
-        emergency_access_limit_sats: 0,
-    };
-    let vault = vec![Input {
-        outpoint: OutPoint::new(recovery.txid, 0),
-        value_sats: recovery.amount_sats,
-    }];
-    let plan = anzen_protocol::policy::plan(&anzen_protocol::policy::PolicyInputs {
-        scripts: &new_scripts,
-        vault: &vault,
-        controllers: &[],
-        limits,
-    })
-    .unwrap();
-    let request = ReplacementRequest {
-        version: wire::VERSION,
-        network: Network::Regtest,
-        old_keys,
-        new_hww: new_hww.xonly(),
-        recovery_inputs,
-        renewed_policy: Some(PolicyRequest {
-            version: wire::VERSION,
-            network: Network::Regtest,
-            keys: new_keys,
-            vault_inputs: vault,
-            controller_inputs: vec![],
-            limits,
-            emergency_destination: None,
-            allowance_destinations: (0..plan.allowance_count)
-                .map(|index| hot(&mut crypto, index as u8 + 1))
-                .collect(),
-            previous_allowances_complete: false,
-        }),
-    };
-    let review = Signer::new(&mut crypto, &mut new_hww)
-        .review_replacement(&request, limits)
-        .unwrap();
-    assert_eq!(review.funded_withdrawals, plan.allowance_count);
-    let (approval, state) = Signer::new(&mut crypto, &mut new_hww)
-        .approve_replacement(&request, limits, None)
-        .unwrap();
-    assert_eq!(approval.policy_signatures.len(), plan.allowance_count + 1);
-    assert_eq!(state.keys, new_keys);
-
-    // Another device cannot approve on this signer's behalf.
-    let mut stranger = SoftwareKeys::random();
-    assert_eq!(
-        Signer::new(&mut crypto, &mut stranger)
-            .review_replacement(&request, limits)
-            .err(),
-        Some(Error::WrongVault)
-    );
-    // Limits cannot silently change during replacement.
-    assert_eq!(
-        Signer::new(&mut crypto, &mut new_hww)
-            .review_replacement(
-                &request,
-                Limits {
-                    monthly_limit_sats: 0,
-                    emergency_access_limit_sats: 0
-                }
-            )
-            .err(),
-        Some(Error::PolicyLimitsChanged)
     );
 }
 

@@ -31,11 +31,6 @@ pub enum OutgoingMessageKind {
     PhoneRotationProposal,
     PhoneRotationApproved,
     PhoneRotationCompleted,
-    SignerReplacementProposal,
-    SignerReplacementApproved,
-    SignerReplacementCompleted,
-    ContactRestoreProposal,
-    ContactRestoreApproved,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

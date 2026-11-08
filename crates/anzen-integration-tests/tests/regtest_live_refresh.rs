@@ -5,7 +5,7 @@ use bitcoin::{Address, Network};
 use std::{env, str::FromStr, time::Instant};
 
 #[test]
-#[ignore = "requires a disposable Bitcoin Core regtest node; run after the long-mining suites"]
+#[ignore = "requires a disposable Bitcoin Core regtest node"]
 fn background_refresh_never_walks_a_long_regtest_catch_up() {
     let rpc = BitcoinCoreBackend::connect(
         &RpcConfig {
@@ -16,12 +16,24 @@ fn background_refresh_never_walks_a_long_regtest_catch_up() {
         Network::Regtest,
     )
     .unwrap();
+    // Make the chain long enough that walking it from genesis is a long catch-up.
+    let miner_dir = tempfile::tempdir().unwrap();
+    let miner = WalletApplication::new(miner_dir.path().into(), false);
+    miner.initialize(Network::Regtest).unwrap();
+    let mined_to = Address::from_str(&miner.receive_address().unwrap())
+        .unwrap()
+        .require_network(Network::Regtest)
+        .unwrap();
+    let tip = rpc.chain_info().unwrap().blocks;
+    if tip < 1_100 {
+        rpc.mine(1_100 - tip, &mined_to).unwrap();
+    }
     let dir = tempfile::tempdir().unwrap();
     let app = WalletApplication::new(dir.path().into(), false);
     app.initialize(Network::Regtest).unwrap();
 
-    // The chain is long (this runs after the recovery suites). A seed generated here with no
-    // address revealed yet cannot have been paid, so its first sync starts at the tip.
+    // A seed generated here with no address revealed yet cannot have been paid, so its first
+    // sync starts at the tip.
     let started = Instant::now();
     let first = app.background_wallet_snapshot(&rpc).unwrap();
     assert!(first.behind_blocks.is_none() && started.elapsed().as_secs() < 10);

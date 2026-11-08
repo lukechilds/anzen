@@ -5,8 +5,8 @@
 //! envelopes, the device channel, the outbox and the wrapper messages for multi-device flows.
 //! It has no chain client and no PSBT or wallet logic.
 
+pub mod cloud_backup;
 pub mod cloud_restore;
-pub mod contact_restore;
 pub mod crypto;
 pub mod device_channel;
 pub mod device_rotation;
@@ -15,13 +15,12 @@ pub mod outbox;
 pub mod policy;
 pub mod protocol;
 pub mod recovery_bundle;
-pub mod signer_replacement;
-pub mod social;
 pub mod storage;
 pub mod types;
 
-pub const PHONE_RECOVERY_BLOCKS: u16 = 61_200;
-pub const HWW_RECOVERY_BLOCKS: u16 = 65_535;
+/// The hardware wallet's solo path opens after the longest BIP68 time lock: 65,535 × 512
+/// seconds, about 388 days. Renewing the vault each year restarts it.
+pub use anzen_protocol::consts::{HWW_RECOVERY_SECONDS, HWW_RECOVERY_SEQUENCE};
 pub const MONTHS_PER_ROLLOVER: usize = 12;
 pub const DEFAULT_MONTHLY_LIMIT_SATS: u64 = 10_000_000;
 pub const DEFAULT_FEE_RATE_SAT_VB: u64 = 1;

@@ -26,7 +26,6 @@ pub struct PhoneRotationReview {
     pub emergency_access_limit_sats: u64,
     pub funded_withdrawals: usize,
     pub revokes_connectors: bool,
-    pub friend_fingerprints: Vec<String>,
     pub previous_policy: Linkage,
     pub previous_policy_warning: Option<String>,
 }
@@ -49,9 +48,7 @@ impl SignerApplication {
         if review.new_vault_address != request.new_config.vault_address {
             bail!("rotation configuration does not match its new keys");
         }
-        let friend_fingerprints = self
-            .backup_key(&request.new_config, &request.backup_request)?
-            .friend_fingerprints()?;
+        self.backup_key(&request.new_config, &request.backup_request)?;
         let record = RotationReviewRecord {
             state,
             request_id: request.id()?,
@@ -69,7 +66,6 @@ impl SignerApplication {
             emergency_access_limit_sats: review.emergency_access_limit_sats,
             funded_withdrawals: review.funded_withdrawals,
             revokes_connectors: review.revokes_connectors,
-            friend_fingerprints,
             previous_policy_warning: linkage_warning(review.previous_policy),
             previous_policy: review.previous_policy,
         })

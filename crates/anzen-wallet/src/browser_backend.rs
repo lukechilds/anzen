@@ -50,6 +50,9 @@ impl Blockchain for BrowserBackend {
         );
         Ok(tip)
     }
+    fn median_time_past(&self, height: u64) -> Result<u64> {
+        self.call(json!({"method":"median_time_past", "height":height}))
+    }
     fn scan_vault(&self, config: &VaultConfig) -> Result<Vec<VaultUtxo>> {
         self.call(json!({"method":"scan_vault", "config":config}))
     }

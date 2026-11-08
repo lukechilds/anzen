@@ -1,5 +1,6 @@
-//! Graphs recorded from the original rust-bitcoin phone builder across funding shapes and limits.
-//! The protocol builder must reproduce every accepted graph byte-for-byte and reject the rest.
+//! Graphs pinned across funding shapes and limits. The protocol builder must reproduce every
+//! accepted graph byte-for-byte and reject the rest. After an intentional policy change, run with
+//! `ANZEN_UPDATE_VECTORS=1` to rewrite the recorded transactions.
 
 use anzen_protocol::{
     address::{self, Network},
@@ -31,7 +32,9 @@ fn protocol_reproduces_every_recorded_phone_graph() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../test-vectors/policy-graphs.json"
     );
-    let document: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut document: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let update = std::env::var_os("ANZEN_UPDATE_VECTORS").is_some();
     let mut crypto = SoftwareCrypto::new();
     let keys = VaultKeys {
         phone: XOnlyKey::from_hex(document["keys"]["phone"].as_str().unwrap()).unwrap(),
@@ -39,7 +42,7 @@ fn protocol_reproduces_every_recorded_phone_graph() {
     };
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     let (mut accepted, mut rejected) = (0, 0);
-    for case in document["cases"].as_array().unwrap() {
+    for case in document["cases"].as_array_mut().unwrap() {
         let vault = inputs(&case["vault_inputs"]);
         let controllers = inputs(&case["controller_inputs"]);
         let limits: Limits = serde_json::from_value(case["limits"].clone()).unwrap();
@@ -70,6 +73,20 @@ fn protocol_reproduces_every_recorded_phone_graph() {
                 .collect(),
         };
         let graph = policy::build(&mut crypto, &request, &destinations).unwrap();
+        if update {
+            case["outcome"]["transactions"] = graph
+                .transactions()
+                .iter()
+                .map(|actual| {
+                    serde_json::json!({
+                        "fee_sats": actual.fee_sats,
+                        "hex": hex(&actual.transaction.serialize()),
+                        "txid": actual.txid.to_string(),
+                    })
+                })
+                .collect();
+        }
+        let outcome = &case["outcome"];
         let expected = outcome["transactions"].as_array().unwrap();
         let actual = graph.transactions();
         assert_eq!(expected.len(), actual.len());
@@ -81,4 +98,8 @@ fn protocol_reproduces_every_recorded_phone_graph() {
         accepted += 1;
     }
     assert_eq!((accepted, rejected), (80, 64));
+    if update {
+        let text = serde_json::to_string_pretty(&document).unwrap();
+        std::fs::write(path, format!("{text}\n")).unwrap();
+    }
 }

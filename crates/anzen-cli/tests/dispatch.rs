@@ -15,6 +15,6 @@ fn each_device_command_uses_only_its_own_device_library() {
     let source = include_str!("../src/main.rs");
     let phone = section(source, "fn run_phone(", "fn run_hww(");
     assert!(!phone.contains("cold_wallet::") && !phone.contains("SignerApplication"));
-    let hww = section(source, "fn run_hww(", "fn run_social(");
+    let hww = section(source, "fn run_hww(", "fn print_active_policy(");
     assert!(!hww.contains("hot_wallet::") && !hww.contains("WalletApplication"));
 }

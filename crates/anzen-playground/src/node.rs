@@ -35,8 +35,9 @@ pub async fn control(
                 backend.mine(blocks, &mining_address())?;
             }
             NodeRequest::AdvanceTime { seconds } => {
-                if seconds == 0 || seconds > 366 * 24 * 60 * 60 {
-                    bail!("advance between one second and one year");
+                // Up to 400 days: far enough to open the signer's ~388-day time lock.
+                if seconds == 0 || seconds > 400 * 24 * 60 * 60 {
+                    bail!("advance between one second and 400 days");
                 }
                 let block = backend
                     .client

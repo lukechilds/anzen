@@ -24,8 +24,8 @@ pub const FIXED_SIGNING_DIGEST: [u8; 32] = [
 ];
 pub const MONTHLY_DELAY_SEQUENCE: u32 = (1 << 22) | 5_063;
 pub const EMERGENCY_DELAY_SEQUENCE: u32 = (1 << 22) | 1_182;
-pub const PHONE_RECOVERY_BLOCKS: u16 = 61_200;
-pub const HWW_RECOVERY_BLOCKS: u16 = 65_535;
+/// The hardware wallet's time-based recovery lock: 65,535 units of 512 seconds.
+pub const HWW_RECOVERY_SEQUENCE: u32 = (1 << 22) | 65_535;
 pub const BIP341_NUMS_XONLY: [u8; 32] = [
     0x50, 0x92, 0x9b, 0x74, 0xc1, 0xa0, 0x49, 0x54, 0xb7, 0x8b, 0x4b, 0x60, 0x35, 0xe9, 0x7a, 0x5e,
     0x07, 0x8a, 0x5a, 0x0f, 0x28, 0xec, 0x96, 0xd5, 0x47, 0xbf, 0xee, 0x9a, 0xce, 0x80, 0x3a, 0xc0,
@@ -148,10 +148,8 @@ impl PolicyCommitment {
     pub fn new<H: Sha256>(hasher: &mut H, phone: [u8; 32], hww: [u8; 32]) -> Self {
         let cooperative_script = cooperative_script(phone, hww);
         let cooperative_leaf_hash = tapleaf_hash(hasher, &cooperative_script);
-        let phone_recovery = tapleaf_hash(hasher, &recovery_script(phone, PHONE_RECOVERY_BLOCKS));
-        let hww_recovery = tapleaf_hash(hasher, &recovery_script(hww, HWW_RECOVERY_BLOCKS));
-        let recoveries = tapbranch_hash(hasher, phone_recovery, hww_recovery);
-        let merkle_root = tapbranch_hash(hasher, cooperative_leaf_hash, recoveries);
+        let hww_recovery = tapleaf_hash(hasher, &recovery_script(hww, HWW_RECOVERY_SEQUENCE));
+        let merkle_root = tapbranch_hash(hasher, cooperative_leaf_hash, hww_recovery);
         let output_key_tweak = tagged_hash(
             hasher,
             TAPTWEAK_TAG_HASH,
@@ -666,12 +664,13 @@ pub fn single_signature_script(key: [u8; 32]) -> [u8; CONTROLLER_SCRIPT_LEN] {
     script
 }
 
-pub fn recovery_script(key: [u8; 32], delay: u16) -> [u8; 40] {
+pub fn recovery_script(key: [u8; 32], sequence: u32) -> [u8; 40] {
     let mut script = [0_u8; 40];
     script[0] = 3;
-    script[1] = delay as u8;
-    script[2] = (delay >> 8) as u8;
-    script[3] = 0; // Sign bit: both configured delays have their high bit set.
+    // Three little-endian bytes; the time flag (bit 22) leaves the sign bit clear.
+    script[1] = sequence as u8;
+    script[2] = (sequence >> 8) as u8;
+    script[3] = (sequence >> 16) as u8;
     script[4] = 0xb2; // OP_CHECKSEQUENCEVERIFY
     script[5] = 0x69; // OP_VERIFY
     script[6] = 32;
@@ -839,7 +838,11 @@ mod tests {
         assert_eq!(cooperative.len(), 70);
         assert_eq!(&cooperative[1..33], &phone);
         assert_eq!(&cooperative[35..67], &hww);
-        assert_eq!(recovery_script(phone, PHONE_RECOVERY_BLOCKS).len(), 40);
+        // `older(4259839)`: the minimal three-byte push of the time-based sequence.
+        assert_eq!(
+            &recovery_script(hww, HWW_RECOVERY_SEQUENCE)[..4],
+            &[3, 0xff, 0xff, 0x40]
+        );
 
         assert_eq!(TAPLEAF_TAG_HASH, <[u8; 32]>::from(Sha2::digest(b"TapLeaf")));
         assert_eq!(
@@ -861,18 +864,12 @@ mod tests {
             ScriptBuf::from_bytes(cooperative.to_vec()).as_script(),
             LeafVersion::TapScript,
         );
-        let phone_recovery_leaf = TapLeafHash::from_script(
-            ScriptBuf::from_bytes(recovery_script(phone, PHONE_RECOVERY_BLOCKS).to_vec())
-                .as_script(),
-            LeafVersion::TapScript,
-        );
         let hww_recovery_leaf = TapLeafHash::from_script(
-            ScriptBuf::from_bytes(recovery_script(hww, HWW_RECOVERY_BLOCKS).to_vec()).as_script(),
+            ScriptBuf::from_bytes(recovery_script(hww, HWW_RECOVERY_SEQUENCE).to_vec()).as_script(),
             LeafVersion::TapScript,
         );
-        let recoveries =
-            TapNodeHash::from_node_hashes(phone_recovery_leaf.into(), hww_recovery_leaf.into());
-        let merkle_root = TapNodeHash::from_node_hashes(cooperative_leaf.into(), recoveries);
+        let merkle_root =
+            TapNodeHash::from_node_hashes(cooperative_leaf.into(), hww_recovery_leaf.into());
         let nums = XOnlyPublicKey::from_slice(&BIP341_NUMS_XONLY).unwrap();
         let tweak = TapTweakHash::from_key_and_tweak(nums, Some(merkle_root));
 
@@ -1058,15 +1055,15 @@ mod tests {
         );
         assert_eq!(
             jobs[0],
-            hex_literal::hex!("f8822d0163062def93d76aff8ff68e310e9b5ff74cf7b01da0ab24dc79b19cf7")
+            hex_literal::hex!("38093984bcf5c3279d50533cb1b46d75d097e786b26e6ac650b371e410d271d0")
         );
         assert_eq!(
             jobs[jobs.len() - 1],
-            hex_literal::hex!("b747e0da869f4d3b063d43486fabb53da892b4ab7029f4045b12fa22f0d74c31")
+            hex_literal::hex!("b14b42404fc3c5723094ec34216b0733b090198e6ac44c00b69aef2b45fb15d3")
         );
         assert_eq!(
             <[u8; 32]>::from(digest.finalize()),
-            hex_literal::hex!("46214a1b16f883aa7f668262078e52ed415bfae0c6a554ad125d42752c713afa")
+            hex_literal::hex!("d110e79de9a09738ec1d1d89bd158a10d635598df866e820a4251cd4c44b918a")
         );
     }
 }

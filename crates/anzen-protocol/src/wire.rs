@@ -320,81 +320,6 @@ pub struct RotationApproval {
     pub policy_signatures: Vec<Signature>,
 }
 
-/// Replace an unavailable signer. The surviving phone moves the old vault through its recovery
-/// path; the replacement signer only renews the policy on that output under the new keys.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReplacementRequest {
-    pub version: u8,
-    pub network: Network,
-    pub old_keys: VaultKeys,
-    pub new_hww: XOnlyKey,
-    pub recovery_inputs: Vec<Input>,
-    pub renewed_policy: Option<PolicyRequest>,
-}
-
-pub struct ReplacementPlan {
-    pub old_scripts: Scripts,
-    pub new_keys: VaultKeys,
-    pub new_scripts: Scripts,
-    pub recovery: Spend,
-    pub renewed: Option<(Scripts, PolicyGraph)>,
-}
-
-impl ReplacementRequest {
-    pub fn new_keys(&self) -> VaultKeys {
-        VaultKeys {
-            phone: self.old_keys.phone,
-            hww: self.new_hww,
-        }
-    }
-
-    pub fn build<C: Crypto + ?Sized>(&self, crypto: &mut C) -> Result<ReplacementPlan> {
-        if self.version != VERSION {
-            return Err(Error::UnsupportedVersion);
-        }
-        if self.new_hww == self.old_keys.hww {
-            return Err(Error::WrongVault);
-        }
-        let old_scripts = Scripts::new(crypto, &self.old_keys)?;
-        let new_keys = self.new_keys();
-        let new_scripts = Scripts::new(crypto, &new_keys)?;
-        let recovery = spend::vault_sweep(
-            crypto,
-            &old_scripts,
-            &self.recovery_inputs,
-            SpendPath::PhoneRecovery,
-            &new_scripts.vault.script_pubkey,
-        )?;
-        if recovery.amount_sats < crate::tx::minimal_non_dust(&new_scripts.vault.script_pubkey) {
-            return Err(Error::DustDestination);
-        }
-        let renewed = self
-            .renewed_policy
-            .as_ref()
-            .map(|policy| {
-                check_renewal(policy, self.network, &new_keys, &recovery)?;
-                policy.build(crypto)
-            })
-            .transpose()?;
-        Ok(ReplacementPlan {
-            old_scripts,
-            new_keys,
-            new_scripts,
-            recovery,
-            renewed,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReplacementApproval {
-    pub version: u8,
-    pub request: ReplacementRequest,
-    pub policy_signatures: Vec<Signature>,
-}
-
 /// A renewed policy must spend exactly the funding transaction's single output under the new
 /// keys and consume nothing else.
 fn check_renewal(
@@ -437,7 +362,7 @@ pub fn check_linkage(
     }
 }
 
-/// Limits carried unchanged by a rotation or replacement.
+/// Limits carried unchanged by a rotation.
 pub fn same_limits(renewed: Option<&PolicyRequest>, previous: Limits) -> bool {
     match renewed {
         Some(policy) => policy.limits == previous,

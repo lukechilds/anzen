@@ -53,7 +53,7 @@ try {
   // Opaque transport fixture, not a decryptable recovery backup. Real backup encryption,
   // approval and recovery are covered end to end in the WASM browser scenarios.
   const blob = { version: 1, purpose: 'opaque-transport-test', nonce: Array(24).fill(0), ciphertext: [1, 2, 3, 4] };
-  const backup = { version: 1, kind: 'vault-cloud-recovery', encrypted_payload: blob, hww_encrypted_symmetric_key: blob, friends: [], encrypted_friend_manifest: blob };
+  const backup = { version: 2, kind: 'vault-cloud-recovery', encrypted_payload: blob, hww_encrypted_symmetric_key: blob };
   await request('/cloud', 'bad-token', { method: 'list' }, { fail: true });
   await request('/cloud', admin, { method: 'load', id: '../../phone/device' }, { fail: true });
   const saved = await request('/cloud', admin, { method: 'save', backup });
@@ -62,25 +62,13 @@ try {
   assert.deepEqual(await request('/cloud', admin, { method: 'load', id: saved.id }), backup);
   console.log('PASS: opaque cloud object round trip, idempotent save and invalid path rejection.');
 
-  const job = body => request('/node/job', admin, body);
-  await request('/node/job', 'bad-token', { method: 'start', blocks: 1 }, { fail: true });
-  await request('/node/job', admin, { method: 'start', blocks: 70001 }, { fail: true });
-  async function waitJob(id) {
-    for (let attempt = 0; attempt < 100; attempt++) {
-      const state = await job({ method: 'status', id });
-      if (!['queued', 'running'].includes(state.status)) return state;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    throw new Error('Mining job did not finish or cancel within 10 seconds');
-  }
-  const short = await job({ method: 'start', blocks: 3 });
-  assert.equal((await waitJob(short.id)).mined_blocks, 3);
-  const long = await job({ method: 'start', blocks: 61200 });
-  await job({ method: 'cancel', id: long.id });
-  const cancelled = await waitJob(long.id);
-  assert.equal(cancelled.status, 'cancelled');
-  assert.ok(cancelled.mined_blocks < 61200);
-  console.log('PASS: mining-job progress, cancellation, request bounds and authentication.');
+  await request('/node', 'bad-token', { method: 'advance_time', seconds: 60 }, { fail: true });
+  await request('/node', admin, { method: 'advance_time', seconds: 401 * 86400 }, { fail: true });
+  const before = await request('/node', admin, { method: 'status' });
+  const after = await request('/node', admin, { method: 'advance_time', seconds: 396 * 86400 });
+  assert.ok(after.median_time >= before.median_time + 396 * 86400);
+  assert.equal(after.height, before.height + 11);
+  console.log('PASS: a 13-month time jump moves median time past, with bounds and authentication.');
 } finally {
   child.kill('SIGTERM');
   await once(child, 'exit');

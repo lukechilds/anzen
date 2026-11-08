@@ -1,8 +1,8 @@
 use super::*;
 use anzen_common::storage::fs::StoragePath;
 use anzen_common::{
+    cloud_backup::{self, DeviceBackupKeyRequest, DeviceBackupKeyResponse},
     device_channel,
-    social::{self, DeviceBackupKeyRequest, DeviceBackupKeyResponse},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -22,27 +22,19 @@ pub struct BackupReview {
     pub review_id: String,
     pub vault_address: String,
     pub phone_public_key: String,
-    pub friend_fingerprints: Vec<String>,
 }
 
 impl SignerApplication {
     /// Vault setup in one exchange. Holding the devices together is the user's consent: the
     /// vault cannot move funds before a reviewed policy, and the backup request is sealed by the
-    /// phone key of the vault being accepted. A backup naming recovery contacts still needs
-    /// its own review, so setup refuses one.
+    /// phone key of the vault being accepted.
     pub fn accept_setup(
         &self,
         config: &VaultConfig,
         backup: &DeviceMessage,
     ) -> Result<SetupAccepted> {
         config.validate_public_policy()?;
-        if !self
-            .backup_key(config, backup)?
-            .friend_public_keys
-            .is_empty()
-        {
-            bail!("a backup with recovery contacts must be reviewed on the signer");
-        }
+        self.backup_key(config, backup)?;
         self.accept_vault(config)?;
         Ok(SetupAccepted {
             vault_address: config.vault_address.clone(),
@@ -52,8 +44,7 @@ impl SignerApplication {
 
     pub fn review_backup(&self, message: &DeviceMessage) -> Result<BackupReview> {
         let config = self.configuration()?;
-        let request = self.backup_key(&config, message)?;
-        let friend_fingerprints = request.friend_fingerprints()?;
+        self.backup_key(&config, message)?;
         let pending = PendingBackup {
             config,
             request_hash: sha256::Hash::hash(&serde_json::to_vec(message)?).to_string(),
@@ -64,7 +55,6 @@ impl SignerApplication {
             review_id,
             vault_address: pending.config.vault_address,
             phone_public_key: pending.config.phone_vault_pubkey,
-            friend_fingerprints,
         })
     }
 
@@ -93,7 +83,7 @@ impl SignerApplication {
         let hww = load_device_keys(&self.data_dir, HWW_DEVICE_FILE)?;
         let response = DeviceBackupKeyResponse {
             backup_id: request.backup_id.clone(),
-            wrapped_key: social::wrap_backup_key(&hww.seed, &request.symmetric_key)?,
+            wrapped_key: cloud_backup::wrap_backup_key(&hww.seed, &request.symmetric_key)?,
         };
         let phone = bitcoin::secp256k1::XOnlyPublicKey::from_str(&config.phone_vault_pubkey)?;
         device_channel::seal(
@@ -134,7 +124,6 @@ impl SignerApplication {
         {
             bail!("invalid backup commitment");
         }
-        request.friend_fingerprints()?;
         Ok(request)
     }
 

@@ -47,9 +47,8 @@ fn descriptors(
 ) {
     let phone = keys.phone.to_hex();
     let hww = keys.hww.to_hex();
-    let vault = format!(
-        "tr({NUMS},{{multi_a(2,{phone},{hww}),{{and_v(v:older(61200),pk({phone})),and_v(v:older(65535),pk({hww}))}}}})"
-    );
+    let vault =
+        format!("tr({NUMS},{{multi_a(2,{phone},{hww}),and_v(v:older(4259839),pk({hww}))}})");
     let controller = format!("tr({NUMS},{{pk({phone}),pk({hww})}})");
     (
         Descriptor::from_str(&vault).unwrap(),
@@ -90,8 +89,7 @@ fn witness_for(keys: &VaultKeys, path: SpendPath) -> Witness {
     let info = tr.spend_info();
     let (target_key, depth, delay) = match path {
         SpendPath::Cooperative => (None, 1, None),
-        SpendPath::PhoneRecovery => (Some(keys.phone), 2, Some(61_200)),
-        SpendPath::HwwRecovery => (Some(keys.hww), 2, Some(65_535)),
+        SpendPath::HwwRecovery => (Some(keys.hww), 1, Some(4_259_839)),
         SpendPath::ControllerPhone => (Some(keys.phone), 1, None),
         SpendPath::ControllerHww => (Some(keys.hww), 1, None),
     };
@@ -161,7 +159,6 @@ fn every_leaf_hash_matches_rust_bitcoin() {
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     for (path, leaf) in [
         (SpendPath::Cooperative, scripts.vault.cooperative_leaf),
-        (SpendPath::PhoneRecovery, scripts.vault.phone_recovery_leaf),
         (SpendPath::HwwRecovery, scripts.vault.hww_recovery_leaf),
         (SpendPath::ControllerPhone, scripts.controller.phone_leaf),
         (SpendPath::ControllerHww, scripts.controller.hww_leaf),
@@ -181,7 +178,6 @@ fn serialization_vsize_and_sighashes_match_rust_bitcoin() {
     let mut crypto = SoftwareCrypto::new();
     let paths = [
         SpendPath::Cooperative,
-        SpendPath::PhoneRecovery,
         SpendPath::HwwRecovery,
         SpendPath::ControllerPhone,
         SpendPath::ControllerHww,
@@ -198,7 +194,7 @@ fn serialization_vsize_and_sighashes_match_rust_bitcoin() {
                 .enumerate()
                 .map(|(index, _)| anzen_protocol::tx::TxIn {
                     previous_output: OutPoint::new(random_txid(), index as u32),
-                    sequence: [u32::MAX, 0xffff_fffd, 61_200, 4_199_367][index % 4],
+                    sequence: [u32::MAX, 0xffff_fffd, 4_259_839, 4_199_367][index % 4],
                 })
                 .collect(),
             output: vec![
@@ -386,11 +382,7 @@ fn sweeps_pay_exactly_the_fixed_fee_rate() {
             value_sats: 1_000_000,
         })
         .collect::<Vec<_>>();
-    for path in [
-        SpendPath::Cooperative,
-        SpendPath::PhoneRecovery,
-        SpendPath::HwwRecovery,
-    ] {
+    for path in [SpendPath::Cooperative, SpendPath::HwwRecovery] {
         let destination = hot_destination();
         let sweep = spend::vault_sweep(&mut crypto, &scripts, &inputs, path, &destination).unwrap();
         let mut bitcoin_tx = to_bitcoin(&sweep.transaction);

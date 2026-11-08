@@ -215,9 +215,7 @@ impl Transaction {
 pub enum SpendPath {
     /// Vault `multi_a(2,phone,hww)` at depth one.
     Cooperative,
-    /// Vault `and_v(v:older(61200),pk(phone))` at depth two.
-    PhoneRecovery,
-    /// Vault `and_v(v:older(65535),pk(hww))` at depth two.
+    /// Vault `and_v(v:older(4259839),pk(hww))` at depth one.
     HwwRecovery,
     /// Connector `pk(phone)` at depth one.
     ControllerPhone,
@@ -232,9 +230,7 @@ impl SpendPath {
         let control_block = |depth: usize| 33 + 32 * depth;
         match self {
             Self::Cooperative => 1 + item(64) * 2 + item(70) + item(control_block(1)),
-            Self::PhoneRecovery | Self::HwwRecovery => {
-                1 + item(64) + item(40) + item(control_block(2))
-            }
+            Self::HwwRecovery => 1 + item(64) + item(40) + item(control_block(1)),
             Self::ControllerPhone | Self::ControllerHww => {
                 1 + item(64) + item(34) + item(control_block(1))
             }

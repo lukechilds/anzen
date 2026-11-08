@@ -6,15 +6,25 @@ This file records the product rationale and implementation trade-offs that are u
 
 Anzen is intended to avoid the usual self-custody trade-off between security, usability, and trustlessness. Singlesig hot and hardware wallets are simple and sovereign but make one key a catastrophic point of failure. Conventional multivendor multisig raises the compromise threshold without adding a provider, but also adds devices, backups, locations, and recovery procedures that users must manage correctly. Collaborative custody can hide that complexity, but gives a provider a signing role and makes its continued availability and behavior part of the security model.
 
-Anzen instead combines two independent device keys with Bitcoin-enforced recovery paths. The comparison with 2-of-3 multisig is specifically about compromise resistance: an attacker must obtain two independent device keys to spend immediately. The constructions are not identical. Anzen replaces a third key and its operational burden with staggered, delayed recovery paths and an expected annual renewal.
+Anzen instead combines two independent device keys with one Bitcoin-enforced fallback: the hardware wallet alone, after a time lock of about 388 days. In effect it is a hardware wallet with a second factor. The phone adds a required second signature, a bounded monthly allowance and an emergency withdrawal, but never a path of its own to the savings. The comparison with 2-of-3 multisig is specifically about compromise resistance: an attacker must obtain two independent device keys to spend immediately. The constructions are not identical. Anzen replaces a third key and its operational burden with that delayed hardware-wallet path and an expected annual renewal.
 
 The phone is both a normal hot wallet and one vault cosigner. The HWW is the independent cold signer. This supports a checking-and-savings mental model: the hot balance is available for ordinary use, while the vault policy controls how cold savings may move into it.
 
-## Why recovery paths are staggered
+## Why only the hardware wallet has a fallback
 
-Either device must eventually be able to recover from permanent loss of the other, but allowing both single-key paths at the same time would create a race with no honest-party advantage after one key is extracted. The phone path therefore matures first. If the HWW key is compromised, the legitimate phone gets approximately one month in which it can sweep every live vault output before the HWW-only path becomes valid.
+A vault needs a way out if a device is permanently lost, but the two devices are not alike. A hardware wallet's seed is already backed up through its maker's own recovery process, and restoring it yields the same key, so a lost signer is not a lost key: the user restores it and carries on, and the vault does not change. The phone key lives on an everyday device and in its cloud backup, both exposed to theft, malware and account compromise.
 
-The delays are intentionally longer than the expected annual renewal interval. A normal rollover refreshes every live output before either fallback matures, so delayed recovery remains dormant during ordinary operation. The exact delay selection, BIP68 constraints, and block-time uncertainty are specified in `anzen-design.md`.
+The fallback therefore runs one way. The vault script has two leaves: both devices together, or the hardware wallet alone after the longest relative time lock Bitcoin allows. The phone alone never reaches the savings, so a stolen or compromised phone is never a single point of theft. At most it gets the monthly allowance and the emergency withdrawal, both fixed by the approved policy, delayed, and revocable by the signer.
+
+Giving each device its own eventual path would mean staggering the delays so the honest device wins the race after one key leaks, and it would let the weaker phone key, or anyone holding its cloud backup, eventually drain the vault. With one path there is no race to win and nothing to stagger.
+
+The cost is the hardware wallet's own: losing the signer together with its backup, and the phone, leaves the savings locked for good. Losing the phone and its cloud backup leaves the signer able to recover alone once the time lock passes. A thief with the signer, and its PIN, must wait out the same time lock, and any renewal in that window moves every coin to fresh outputs and restarts the clock; rotating the phone key does the same.
+
+## Why the time lock is time-based and about 388 days
+
+BIP68 gives a relative lock 16 bits, so its longest time-based value is 65,535 units of 512 seconds: 33,553,920 seconds, about 388 days, written `older(4259839)` (the time-type flag plus 65,535). A time-based lock means the same on mainnet, Mutinynet's 30-second blocks and regtest, and does not drift with hashrate. It counts from the median time past of the block before the one that confirmed the coin, and a spend fits in the next block once the tip's median time past has passed it.
+
+The delay is longer than the expected annual renewal interval. A normal renewal refreshes every live output about three weeks before the fallback opens, so it stays dormant during ordinary operation and matters only when renewal stops. The exact semantics are specified in `anzen-design.md`.
 
 ## Why the HWW approves a policy
 
@@ -72,17 +82,17 @@ Phone-key rotation first uses a dynamic controller-only transaction to consume a
 
 The separation also lets rotation use the same validation path whether monthly and emergency features are enabled or disabled, and lets renewed policy reuse the normal rollover machinery. It is not a Bitcoin requirement. A future format could combine connector revocation with the cooperative sweep and make that sweep create the policy outputs directly, saving transactions and unconfirmed ancestors at the cost of coupling rotation validation to the policy layout. Because the MVP broadcasts these state transitions separately, production rotation must persist and rebroadcast each accepted transaction crash-safely before installing replacement state.
 
-## Why vault setup is a single tap
+## Why vault setup is a single exchange
 
-Setup needs three things from the signer: its public key, its acceptance of the vault built from both keys, and its wrap of the phone's recovery-backup key. Once the phone has the signer's key, the other two are one request and one response, so setup is a single exchange while the devices are held together, as with Bitkey's hardware. The signer asks nothing during setup: no funds can move before a policy exists, the backup request is sealed by the phone key of the vault being accepted, and physical proximity both authenticates the channel and expresses consent. This replaces comparing vault addresses across a file transfer, which protected a channel the user could not see.
+Setup needs three things from the signer: its public key, its acceptance of the vault built from both keys, and its wrap of the phone's recovery-backup key. Once the phone has the signer's key, the other two are one request and one response, so setup is a single exchange over the Bluetooth link, with Bitkey's simplicity as the model. The signer asks nothing during setup: no funds can move before a policy exists, the backup request is sealed by the phone key of the vault being accepted, and the authenticated Bluetooth pairing (a code confirmed on both screens the first time) establishes which signer the phone is talking to. This replaces comparing vault addresses across a file transfer, which protected a channel the user could not see.
 
-Everything that signs remains a separate, explicit review on the signer. The spending policy is chosen after the first deposit because its presigned transactions spend real vault coins, and the signer shows it as a plain monthly amount and an emergency amount before approval. Messages are the same versioned objects over any link; a file exchange remains the fallback where no tap link exists.
+Everything that signs remains a separate, explicit review on the signer. The spending policy is chosen after the first deposit because its presigned transactions spend real vault coins, and the signer shows it as a plain monthly amount and an emergency amount before approval. Messages are the same versioned objects over any link; a file exchange remains the fallback where no Bluetooth link exists.
 
 ## Trust and interoperability
 
 Anzen's security-critical behavior must remain enforceable without an Anzen company, server, update channel, or online cosigner. Chain backends provide data and broadcast transactions but cannot change a valid transaction or script. Cloud storage holds only encrypted recovery material and individually encrypted policy artifacts.
 
-Social recovery is an explicit optional trust expansion: each configured friend receives eventual phone-key recovery capability, but still cannot bypass the phone path's on-chain delay. It is not part of the default custody threshold.
+The phone's cloud backup is wrapped to the hardware wallet alone, so a compromised cloud account reveals nothing without the signer, and even a decrypted phone key cannot reach the savings by itself. There are no recovery contacts or other optional trust expansions. Recovering a lost signer is its maker's existing seed backup, which Anzen deliberately does not duplicate.
 
 The protocol is intentionally split between hot-wallet and cold-wallet roles rather than tied to the reference applications. Independent mobile, desktop, and hardware-wallet implementations should be able to exchange the same versioned policy and recovery objects and validate each other without vendor infrastructure.
 
@@ -99,7 +109,7 @@ Ledger app ──> anzen-signer
 
 - `anzen-protocol` is the one deterministic definition of the vault scripts, the annual policy graph, sweeps, revocations and their signature messages. It is `no_std` and builds every transaction from typed parameters, so the phone and every signer derive byte-identical transactions from the same request.
 - `anzen-signer` is the auditable hardware-wallet surface: it rebuilds each request with `anzen-protocol`, reports what it does, signs only what was reviewed, and keeps an epoch anchor that forces every renewal to conflict with or consume the previously approved policy. It is `no_std` and has no BDK wallet, Electrum, Bitcoin Core, filesystem or clock dependency.
-- `anzen-wallet` owns phone keys, the BDK hot wallet, encrypted monthly/emergency policy transactions, phone recovery, and phone-key rotation. Future iOS and Android apps build on this API.
+- `anzen-wallet` owns phone keys, the BDK hot wallet, encrypted monthly/emergency policy transactions, restoring a lost phone from its cloud backup, and phone-key rotation. Future iOS and Android apps build on this API.
 - `anzen-signer-app` hosts `anzen-signer` for the CLI, the mobile hardware-wallet mode and the browser signer: seed storage, persisted signer state, backups and restoration. It has no wallet or chain dependency.
 - `anzen-common` and `anzen-storage` hold shared host formats (keys, configuration, encrypted backups, device messages) and atomic private storage. They exist to avoid duplication, not as APIs that wallet UIs must understand; each device crate re-exports the shared types its consumers need.
 
@@ -115,6 +125,6 @@ Both implementations verify the connected network before scanning or broadcastin
 
 ## Continuous integration
 
-GitHub Actions runs formatting, Clippy, unit/CLI tests, the real Bitcoin Core integration suite, and every isolated end-to-end test on pushes to `main` and pull requests. A preparation job reads test names dynamically from `./scripts/run-e2e.sh --list`, then a matrix assigns every test to a separate GitHub-hosted worker so the long recovery-delay tests run concurrently. A final aggregate check passes only when preparation and every matrix worker pass.
+GitHub Actions runs formatting, Clippy, unit/CLI tests, the real Bitcoin Core integration suite, and every isolated end-to-end test on pushes to `main` and pull requests. A preparation job reads test names dynamically from `./scripts/run-e2e.sh --list`, then a matrix assigns every test to a separate GitHub-hosted worker so the long end-to-end tests run concurrently. A final aggregate check passes only when preparation and every matrix worker pass.
 
 The quality job restores Cargo registry and `target/` data with the GitHub Actions cache. Docker jobs build through Buildx with separate GHA-backed `test` and `runtime` cache scopes. The E2E preparation job builds the runtime image once and uploads it as a short-lived workflow artifact; every matrix worker loads that exact image and tells Compose not to rebuild it. The Dockerfile compiles dependencies before copying application source, keeping dependency layers reusable when Rust code changes.

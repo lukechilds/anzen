@@ -45,11 +45,9 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
         .success()
         .stdout(predicate::str::contains("Cold storage descriptor: tr("))
         .stdout(predicate::str::contains(
-            "Phone recovery: 61,200 blocks (~14 months)",
+            "HWW alone:      after 33,553,920 seconds (~388 days)",
         ))
-        .stdout(predicate::str::contains(
-            "HWW recovery:   65,535 blocks (~15 months)",
-        ))
+        .stdout(predicate::str::contains("Phone recovery").not())
         .stdout(predicate::str::contains("Monthly spending: disabled"))
         .stdout(predicate::str::contains("Emergency access: disabled"))
         .stdout(predicate::str::contains("hot external descriptor").not())
@@ -60,8 +58,8 @@ fn device_setup_and_vault_init_are_separate_and_monthly_spending_starts_disabled
         .args(["--data-dir", data_dir, "policy"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("older(61200)"))
-        .stdout(predicate::str::contains("older(65535)"))
+        .stdout(predicate::str::contains("and_v(v:older(4259839),pk("))
+        .stdout(predicate::str::contains("older(61200)").not())
         .stdout(predicate::str::contains("Vault address: bcrt1p"))
         .stdout(predicate::str::contains("Monthly spending: disabled"))
         .stdout(predicate::str::contains("Emergency access: disabled"));
@@ -323,7 +321,7 @@ fn dangerous_mainnet_flag_cannot_convert_an_existing_regtest_vault() {
 }
 
 #[test]
-fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
+fn the_cloud_backup_hides_the_descriptor_and_only_the_hww_can_open_it() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_str().unwrap();
     for args in [vec!["phone", "init"], vec!["hww", "init"], vec!["init"]] {
@@ -334,84 +332,13 @@ fn openpgp_friend_decrypts_the_descriptor_bound_cloud_backup() {
             .assert()
             .success();
     }
-
-    let public = dir.path().join("alice.pub.asc");
-    let private = dir.path().join("alice.sec.asc");
-    let recovery = dir.path().join("friend-recovery.json");
-    let backup = dir.path().join("cloud/phone-seed-backup.json");
-    Command::cargo_bin("anzen")
-        .unwrap()
-        .args([
-            "--data-dir",
-            data_dir,
-            "social",
-            "generate-friend-key",
-            "--name",
-            "Alice",
-        ])
-        .arg("--public-key")
-        .arg(&public)
-        .arg("--private-key")
-        .arg(&private)
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("OpenPGP key generated"));
-    // The phone proposes the new backup; the HWW reviews the friend and wraps only its key.
-    let backup_request = dir.path().join("backup-request.json");
-    let backup_response = dir.path().join("backup-response.json");
-    Command::cargo_bin("anzen")
-        .unwrap()
-        .args(["--data-dir", data_dir, "phone", "add-recovery-friend"])
-        .arg(&public)
-        .arg("--output")
-        .arg(&backup_request)
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Recovery friend proposed"));
-    Command::cargo_bin("anzen")
-        .unwrap()
-        .args(["--data-dir", data_dir, "hww", "confirm-backup"])
-        .arg(&backup_request)
-        .arg("--output")
-        .arg(&backup_response)
-        .arg("--yes")
-        .assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "Recovery friend OpenPGP fingerprint",
-        ));
-    Command::cargo_bin("anzen")
-        .unwrap()
-        .args(["--data-dir", data_dir, "phone", "store-backup"])
-        .arg(&backup_response)
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("1 recovery friends"));
-
     let config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.path().join("anzen.json")).unwrap()).unwrap();
-    let backup_text = std::fs::read_to_string(&backup).unwrap();
+    let backup_text =
+        std::fs::read_to_string(dir.path().join("cloud/phone-seed-backup.json")).unwrap();
     let backup_json: serde_json::Value = serde_json::from_str(&backup_text).unwrap();
-    assert_eq!(backup_json["friends"].as_array().unwrap().len(), 1);
+    assert_eq!(backup_json["version"], 2);
+    assert!(backup_json.get("friends").is_none());
     assert!(!backup_text.contains(config["vault_descriptor"].as_str().unwrap()));
-
-    Command::cargo_bin("anzen")
-        .unwrap()
-        .args(["--data-dir", data_dir, "social", "decrypt-backup"])
-        .arg(&backup)
-        .arg("--private-key")
-        .arg(&private)
-        .arg("--output")
-        .arg(&recovery)
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Social recovery decrypted"))
-        .stdout(predicate::str::contains("Cold storage descriptor: tr("));
-    let recovered: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&recovery).unwrap()).unwrap();
-    assert_eq!(recovered["vault_descriptor"], config["vault_descriptor"]);
-    assert_eq!(
-        recovered["phone_vault_pubkey"],
-        config["phone_vault_pubkey"]
-    );
+    assert!(!backup_text.contains(config["phone_vault_pubkey"].as_str().unwrap()));
 }

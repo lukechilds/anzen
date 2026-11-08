@@ -366,32 +366,24 @@ impl<C: Connector> Blockchain for ElectrumBackend<C> {
         self.run(false, |client| {
             let tip = client.block_headers_subscribe()?;
             let height = u32::try_from(tip.height)?;
-            let start = height.saturating_sub(10);
-            let headers = client.batch_block_header(start..=height)?;
-            ensure!(
-                headers.len() == (height - start + 1) as usize,
-                "missing Electrum tip headers"
-            );
+            let headers = linked_headers(client, height)?;
             ensure!(
                 headers.last() == Some(&tip.header),
                 "chain tip changed during query; retry"
             );
-            for pair in headers.windows(2) {
-                ensure!(
-                    pair[1].prev_blockhash == pair[0].block_hash(),
-                    "Electrum tip headers are not linked"
-                );
-            }
-            // Median time past from linked headers, not a server-reported timestamp. Consensus
-            // still checks every timelocked broadcast.
-            let mut times: Vec<_> = headers.iter().map(|h| u64::from(h.time)).collect();
-            times.sort_unstable();
             Ok(ChainTip {
                 network,
                 height: u64::from(height),
-                median_time: times[times.len() / 2],
+                median_time: median_time(&headers),
                 best_block_hash: tip.header.block_hash(),
             })
+        })
+    }
+
+    fn median_time_past(&self, height: u64) -> Result<u64> {
+        let height = u32::try_from(height)?;
+        self.run(false, |client| {
+            Ok(median_time(&linked_headers(client, height)?))
         })
     }
 
@@ -452,6 +444,31 @@ impl<C: Connector> HotWalletBackend for ElectrumBackend<C> {
             wallet.sync_electrum(&BdkElectrumClient::new(client))
         })
     }
+}
+
+/// The up to eleven headers ending at `height`, checked to link to each other.
+fn linked_headers(client: &Client, height: u32) -> Result<Vec<bitcoin::block::Header>> {
+    let start = height.saturating_sub(10);
+    let headers = client.batch_block_header(start..=height)?;
+    ensure!(
+        headers.len() == (height - start + 1) as usize,
+        "missing Electrum headers"
+    );
+    for pair in headers.windows(2) {
+        ensure!(
+            pair[1].prev_blockhash == pair[0].block_hash(),
+            "Electrum headers are not linked"
+        );
+    }
+    Ok(headers)
+}
+
+/// Median time past from linked headers, not a server-reported timestamp. Consensus still
+/// checks every timelocked broadcast.
+fn median_time(headers: &[bitcoin::block::Header]) -> u64 {
+    let mut times: Vec<_> = headers.iter().map(|h| u64::from(h.time)).collect();
+    times.sort_unstable();
+    times[times.len() / 2]
 }
 
 fn scan(client: &Client, address: &Address) -> Result<Vec<VaultUtxo>> {

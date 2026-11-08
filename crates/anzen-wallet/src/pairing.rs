@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use anzen_common::{
-    HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS,
+    HWW_RECOVERY_SECONDS,
     keys::DeviceKeys,
     policy::VaultPolicy,
     storage::{
@@ -41,7 +41,7 @@ pub fn initialize_vault_with_public_hww(
     let policy = VaultPolicy::new_for_network(phone.vault_pubkey, hww_key, network)?;
     let (hot_external, hot_internal) = phone.hot_descriptors(&secp)?;
     let config = VaultConfig {
-        version: 1,
+        version: anzen_common::storage::VAULT_CONFIG_VERSION,
         network: network_name(network).to_owned(),
         phone_vault_pubkey: phone.vault_pubkey.to_string(),
         hww_vault_pubkey: hww_key.to_string(),
@@ -49,8 +49,7 @@ pub fn initialize_vault_with_public_hww(
         phone_hot_internal_descriptor: hot_internal,
         vault_descriptor: policy.descriptor_string(),
         vault_address: policy.address.to_string(),
-        phone_recovery_blocks: PHONE_RECOVERY_BLOCKS,
-        hww_recovery_blocks: HWW_RECOVERY_BLOCKS,
+        hww_recovery_seconds: HWW_RECOVERY_SECONDS,
         monthly_limit_sats: 0,
         emergency_access_limit_sats: 0,
     };

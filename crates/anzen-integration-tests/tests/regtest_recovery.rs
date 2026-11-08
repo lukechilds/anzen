@@ -1,18 +1,16 @@
 use anzen_chain::{BitcoinCoreBackend, Blockchain, RpcConfig};
-use anzen_common::HWW_RECOVERY_BLOCKS;
-use anzen_common::PHONE_RECOVERY_BLOCKS;
-use anzen_common::social::{self, CloudRecoveryBackup};
+use anzen_common::HWW_RECOVERY_SECONDS;
+use anzen_common::cloud_backup::{self, CloudRecoveryBackup};
 use anzen_common::storage::{
     HWW_DEVICE_FILE, PHONE_BACKUP_FILE, PHONE_DEVICE_FILE, VaultConfig, load_config, load_device,
-    read_json,
+    load_device_keys, read_json,
 };
+use anzen_protocol::wire::OfflineAction;
 use anzen_signer_app::{self, application::SignerApplication};
 use anzen_wallet::offline_action;
-use anzen_wallet::recovery::SweepResult;
+use anzen_wallet::recovery::RecoveryClock;
 use anzen_wallet::{
-    self, HotWallet, HotWalletBackend,
-    api::PolicyLimits,
-    application::{RecoveryContact, WalletApplication},
+    self, HotWallet, HotWalletBackend, api::PolicyLimits, application::WalletApplication,
 };
 use bitcoin::{Address, Network};
 use bitcoincore_rpc::RpcApi;
@@ -67,14 +65,6 @@ fn address(text: &str) -> Address {
         .unwrap()
 }
 
-fn phone_recover(
-    devices: &Devices,
-    rpc: &BitcoinCoreBackend,
-    destination: &Address,
-) -> anyhow::Result<SweepResult> {
-    devices.wallet.phone_recovery(rpc, &destination.to_string())
-}
-
 /// The host scans and broadcasts; the offline signer only reviews and signs.
 fn hww_recover(
     devices: &Devices,
@@ -82,67 +72,53 @@ fn hww_recover(
     destination: &Address,
 ) -> anyhow::Result<bitcoin::Txid> {
     let config = devices.signer.export_recovery_bundle()?.config;
-    let request = offline_action::mature_recovery_request(
-        &config,
-        &rpc.scan_vault(&config)?,
-        rpc.chain_tip()?.height,
-        &destination.to_string(),
-    )?;
-    let review = devices.signer.review_offline_action(&request)?;
+    let utxos = rpc.scan_vault(&config)?;
+    let clock = RecoveryClock::read(rpc, &rpc.chain_tip()?, &utxos)?;
+    let request =
+        offline_action::mature_recovery_request(&config, &utxos, &clock, &destination.to_string())?;
+    sign_and_broadcast(devices, rpc, &config, &request)
+}
+
+fn sign_and_broadcast(
+    devices: &Devices,
+    rpc: &BitcoinCoreBackend,
+    config: &VaultConfig,
+    request: &anzen_protocol::wire::OfflineActionRequest,
+) -> anyhow::Result<bitcoin::Txid> {
+    let review = devices.signer.review_offline_action(request)?;
     let approval = devices.signer.approve_offline_action(&review.review_id)?;
-    let transaction = offline_action::finalize(&config, &approval)?;
+    let transaction = offline_action::finalize(config, &approval)?;
     rpc.broadcast(&transaction)
 }
 
+/// Mine eleven blocks at mock time `time`, which moves the chain's median time past to it, or
+/// one second past it when earlier blocks already carry that time. Returns the new value.
+fn advance_median_time(rpc: &BitcoinCoreBackend, time: u64, address: &Address) -> u64 {
+    rpc.set_mock_time(time).unwrap();
+    rpc.mine(11, address).unwrap();
+    let median_time = rpc.chain_info().unwrap().median_time;
+    assert!((time..=time + 1).contains(&median_time), "{median_time}");
+    median_time
+}
+
 #[test]
-#[ignore = "requires a disposable Bitcoin Core regtest node and mines 65,535 blocks"]
-fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
+#[ignore = "requires a disposable Bitcoin Core regtest node"]
+fn real_regtest_enforces_the_signer_time_lock_and_rotates_the_phone_epoch() {
     let rpc = rpc_from_env();
-    let phone_dir = tempfile::tempdir().unwrap();
     let hww_dir = tempfile::tempdir().unwrap();
     let rotation_dir = tempfile::tempdir().unwrap();
-    let phone_vault = initialize(phone_dir.path());
     let hww_vault = initialize(hww_dir.path());
     let rotation_vault = initialize(rotation_dir.path());
-    let recovery_friend = social::generate_friend_key("Rotation recovery friend").unwrap();
-    let contact = RecoveryContact {
-        version: 1,
-        name: "Rotation recovery friend".into(),
-        fingerprint: recovery_friend.fingerprint.clone(),
-        public_key_armored: recovery_friend.public_key_armored.clone(),
-        transport_public_key: String::new(),
-    };
-    let backup_request = rotation_vault
-        .wallet
-        .propose_backup_with_contact(&contact)
-        .unwrap();
-    let backup_review = rotation_vault
-        .signer
-        .review_backup(&backup_request)
-        .unwrap();
-    rotation_vault
-        .wallet
-        .store_backup(
-            &rotation_vault
-                .signer
-                .approve_backup(&backup_review.review_id, &backup_request)
-                .unwrap(),
-        )
-        .unwrap();
-    let mut phone_hot = HotWallet::open_or_create(phone_dir.path()).unwrap();
-    let destination = phone_hot.next_receive_address().unwrap();
+    let mut destination_hot = HotWallet::open_or_create(hww_dir.path()).unwrap();
+    let destination = destination_hot.next_receive_address().unwrap();
 
-    // Fund both halves of the rotating wallet before the recovery delay. Regtest halves its
-    // subsidy every 150 blocks, so fresh mining after 65,535 blocks cannot fund another test.
+    // Fund the rotating wallet first: regtest halves its subsidy every 150 blocks.
     let rotation_hot_address = HotWallet::open_or_create(rotation_dir.path())
         .unwrap()
         .next_receive_address()
         .unwrap();
     rpc.mine(1, &rotation_hot_address).unwrap();
 
-    rpc.mine(1, &address(&phone_vault.config.vault_address))
-        .unwrap();
-    let phone_confirmation = rpc.chain_info().unwrap().blocks;
     rpc.mine(1, &address(&hww_vault.config.vault_address))
         .unwrap();
     let hww_confirmation = rpc.chain_info().unwrap().blocks;
@@ -177,34 +153,47 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     };
     assert!(hot_balance_before.to_sat() > 1_000);
 
-    let early_phone = phone_recover(&phone_vault, &rpc, &destination).unwrap_err();
-    assert!(
-        format!("{early_phone:#}").contains("blocks remaining"),
-        "{early_phone:#}"
-    );
-
-    mine_until_next_height(
-        &rpc,
-        phone_confirmation + u64::from(PHONE_RECOVERY_BLOCKS),
-        &destination,
-    );
-    let phone_sweep = phone_recover(&phone_vault, &rpc, &destination).unwrap();
-    assert_eq!(phone_sweep.input_count, 1);
-    rpc.mine(1, &destination).unwrap();
-
+    // The phone has no path of its own: with the phone gone, only the signer's time lock is left.
     fs::remove_file(hww_dir.path().join(PHONE_DEVICE_FILE)).unwrap();
     fs::remove_file(hww_dir.path().join(PHONE_BACKUP_FILE)).unwrap();
     let early_hww = hww_recover(&hww_vault, &rpc, &destination).unwrap_err();
     assert!(
-        format!("{early_hww:#}").contains("blocks remaining"),
+        format!("{early_hww:#}").contains("not mature"),
         "{early_hww:#}"
     );
 
-    mine_until_next_height(
-        &rpc,
-        hww_confirmation + u64::from(HWW_RECOVERY_BLOCKS),
-        &destination,
+    // BIP68 counts from the median time past of the block before the coin's.
+    let coin_hash = rpc.client.get_block_hash(hww_confirmation - 1).unwrap();
+    let coin_time = rpc
+        .client
+        .get_block_header_info(&coin_hash)
+        .unwrap()
+        .median_time
+        .unwrap() as u64;
+    let opens_at = coin_time + u64::from(HWW_RECOVERY_SECONDS);
+    let config = hww_vault.signer.export_recovery_bundle().unwrap().config;
+    let request = offline_action::request(
+        &config,
+        OfflineAction::HwwRecovery,
+        &rpc.scan_vault(&config).unwrap(),
+        &destination.to_string(),
+    )
+    .unwrap();
+
+    // Seconds short of ~388 days: the wallet refuses, and so does consensus.
+    assert!(advance_median_time(&rpc, opens_at - 2, &destination) < opens_at);
+    let early_hww = hww_recover(&hww_vault, &rpc, &destination).unwrap_err();
+    assert!(
+        format!("{early_hww:#}").contains("not mature"),
+        "{early_hww:#}"
     );
+    let early_consensus = sign_and_broadcast(&hww_vault, &rpc, &config, &request).unwrap_err();
+    assert!(
+        format!("{early_consensus:#}").contains("non-BIP68-final"),
+        "{early_consensus:#}"
+    );
+
+    advance_median_time(&rpc, opens_at, &destination);
     let hww_sweep = hww_recover(&hww_vault, &rpc, &destination).unwrap();
     rpc.mine(1, &destination).unwrap();
     assert_eq!(
@@ -247,15 +236,12 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
     assert_ne!(new_phone_mnemonic, rotation_vault.phone_mnemonic);
     let rotated_backup: CloudRecoveryBackup =
         read_json(&rotation_dir.path().join(PHONE_BACKUP_FILE)).unwrap();
-    let friend_payload = social::decrypt_with_friend(
-        &rotated_backup,
-        recovery_friend.private_key_armored.as_bytes(),
-    )
-    .unwrap();
-    friend_payload
+    let hww_keys = load_device_keys(rotation_dir.path(), HWW_DEVICE_FILE).unwrap();
+    let payload = cloud_backup::decrypt_with_hww(&rotated_backup, &hww_keys.seed).unwrap();
+    payload
         .validate_against(&load_config(rotation_dir.path()).unwrap())
         .unwrap();
-    assert_eq!(friend_payload.phone_mnemonic, new_phone_mnemonic);
+    assert_eq!(payload.phone_mnemonic, new_phone_mnemonic);
     assert!(rotation_dir.path().join(HWW_DEVICE_FILE).exists());
     let renewed_schedule = rotation.renewed_schedule.as_ref().unwrap();
     assert_eq!(renewed_schedule.monthly_limit_sats, 10_000_000);
@@ -340,18 +326,4 @@ fn real_regtest_enforces_both_recovery_delays_and_rotates_the_phone_epoch() {
             .vault_address,
         rotation.new_vault_address
     );
-}
-
-fn mine_until_next_height(rpc: &BitcoinCoreBackend, target_next_height: u64, address: &Address) {
-    let tip = rpc.chain_info().unwrap().blocks;
-    let mut remaining = target_next_height.saturating_sub(tip + 1);
-    while remaining > 0 {
-        let batch = remaining.min(5_000);
-        let median_time = rpc.chain_info().unwrap().median_time;
-        rpc.set_mock_time(median_time + batch + 60).unwrap();
-        let mined = rpc.mine(batch, address).unwrap();
-        assert_eq!(mined.len() as u64, batch);
-        remaining -= batch;
-    }
-    assert_eq!(rpc.chain_info().unwrap().blocks + 1, target_next_height);
 }

@@ -4,9 +4,7 @@ set -euo pipefail
 readonly DEMO_ROOT=/demo
 readonly DEFAULT_MONTHLY_LIMIT_SATS=10000000
 readonly DEFAULT_FUNDING_SATS=200000000
-readonly PHONE_RECOVERY_BLOCKS=61200
-readonly HWW_RECOVERY_BLOCKS=65535
-readonly BLOCKS_PER_YEAR=52560
+readonly HWW_RECOVERY_SECONDS=33553920
 readonly MONTHLY_ALLOWANCE_DELAY_SECONDS=2592256
 readonly EMERGENCY_ACCESS_DELAY_SECONDS=605184
 
@@ -33,7 +31,6 @@ readonly TESTS=(
     lost-phone-no-cloud
     both-lost
     cloud-compromise
-    social-recovery
     both-compromised
     rollover-on-time
     rollover-forgotten
@@ -75,6 +72,8 @@ MAIN="$DEMO_ROOT/$E2E_TEST"
 MINING_ADDRESS=
 NOW=
 FUNDING_HEIGHT=
+# BIP68 counts a coin's time lock from the median time past of the block before its own.
+FUNDING_START=
 
 step() {
     printf '\n--- %s ---\n' "$1"
@@ -281,29 +280,6 @@ mine_blocks() {
     printf '\nReached block height %s.\n' "$(node_height)"
 }
 
-mine_to_next_height() {
-    local target=$1
-    local label=$2
-    local current
-    local remaining
-    current=$(node_height)
-    remaining=$((target - (current + 1)))
-    if (( remaining < 0 )); then
-        printf 'ERROR: next-block target %s is behind current next-block height %s\n' \
-            "$target" "$((current + 1))" >&2
-        exit 1
-    fi
-    if (( remaining == 0 )); then
-        printf 'Recovery path is already valid at next-block height %s.\n' "$target"
-        return
-    fi
-    mine_blocks "$remaining" "$label"
-    if (( $(node_height) + 1 != target )); then
-        printf 'ERROR: height advancement did not stop at next-block height %s\n' "$target" >&2
-        exit 1
-    fi
-}
-
 advance_mtp_to() {
     local target=$1
     local label=$2
@@ -322,6 +298,13 @@ advance_mtp_to() {
     success "$label complete."
 }
 
+# Days until the HWW-alone path opens, as `anzen status` reports it; 0 once it is active.
+hww_days_remaining() {
+    command anzen --data-dir "$MAIN" status | sed -n \
+        -e 's/^HWW recovery: ACTIVE.*/0/p' \
+        -e 's/^HWW recovery: opens at .*(\([0-9]*\) days remaining)$/\1/p'
+}
+
 init_vault() {
     anzen_filtered '
         /^(Simulated phone initialized|Phone mnemonic:|Phone vault key:)/ { print }
@@ -330,15 +313,14 @@ init_vault() {
         /^(Simulated HWW initialized|HWW mnemonic:|HWW vault key:|HWW ready)/ { print }
     ' "$MAIN" hww init
     anzen_filtered '
-        /^(Vault initialized|Cold storage descriptor:|Vault address:|Phone recovery:|HWW recovery:|Monthly spending:|Emergency access:|Cloud recovery backup:)/ { print }
+        /^(Vault initialized|Cold storage descriptor:|Vault address:|HWW alone:|Monthly spending:|Emergency access:|Cloud recovery backup:)/ { print }
     ' "$MAIN" init
 }
 
 show_backup_metadata() {
-    printf 'Encrypted cloud payload: random symmetric key, %s-byte nonce, %s-byte ciphertext; key wrapped for HWW and %s friend(s).\n' \
+    printf 'Encrypted cloud payload: random symmetric key, %s-byte nonce, %s-byte ciphertext; key wrapped for the HWW only.\n' \
         "$(jq -r '.encrypted_payload.nonce | length' "$MAIN/cloud/phone-seed-backup.json")" \
-        "$(jq -r '.encrypted_payload.ciphertext | length' "$MAIN/cloud/phone-seed-backup.json")" \
-        "$(jq -r '.friends | length' "$MAIN/cloud/phone-seed-backup.json")"
+        "$(jq -r '.encrypted_payload.ciphertext | length' "$MAIN/cloud/phone-seed-backup.json")"
 }
 
 ceremony() {
@@ -384,6 +366,7 @@ setup_vault() {
     mine_blocks 101 "Creating spendable regtest coins"
     vault_address=$(jq -r .vault_address "$MAIN/anzen.json")
     anzen "$MAIN" phone send "$vault_address" "$funding_sats"
+    FUNDING_START=$(node_mtp)
     mine_blocks 1 "Confirming the vault funding transaction"
     FUNDING_HEIGHT=$(node_height)
     status_compact
@@ -728,8 +711,7 @@ test_stolen_phone() {
     expect_failure "the stolen phone lacks H for an immediate cold-vault sweep" \
         "$attacker_dir" hww confirm-sweep "${E2E_TEST}-attacker-sweep.json" \
         --output "${E2E_TEST}-attacker-approved-sweep.json" --yes
-    expect_failure "the stolen phone recovery path is not mature" \
-        "$attacker_dir" phone recover "$attacker_address"
+    printf 'The phone key has no path of its own to the vault.\n'
     success "Hot funds exposed; cold vault remained protected."
 
     step "The owner restores the phone key through the HWW and rotates immediately"
@@ -743,14 +725,16 @@ test_stolen_phone() {
 }
 
 test_lost_hww() {
-    local delay_base unlock latest_height recovery_address target
+    local delay_base unlock recovery_address
     setup_vault
 
-    step "Presign the annual schedule before the HWW is lost"
+    step "Presign the annual schedule, then lose the HWW (its maker's seed backup survives)"
     ceremony "$NOW"
     delay_base=$(node_mtp)
     confirm_transaction "Confirming the annual rollover"
     unlock=$((delay_base + MONTHLY_ALLOWANCE_DELAY_SECONDS))
+    show_file_command cp -- "$MAIN/hww/device.json" "$DEMO_ROOT/hww-seed-backup.json"
+    cp -- "$MAIN/hww/device.json" "$DEMO_ROOT/hww-seed-backup.json"
     show_file_command rm -- "$MAIN/hww/device.json"
     rm -- "$MAIN/hww/device.json"
     success "Annual schedule presigned before HWW loss."
@@ -762,56 +746,56 @@ test_lost_hww() {
     confirm_transaction "Confirming the phone-held monthly authorization"
     anzen_capture recovery_address "$MAIN" phone receive-address
     recovery_address=$(printf '%s\n' "$recovery_address" | awk '/^Hot receive address:/ {print $4}')
-    latest_height=$(node_height)
-    target=$((latest_height + PHONE_RECOVERY_BLOCKS))
-    expect_failure "phone-only recovery is not mature yet" \
-        "$MAIN" phone recover "$recovery_address"
-    success "Monthly spend worked; early recovery stayed locked."
+    anzen "$MAIN" phone create-sweep "$recovery_address" --output "${E2E_TEST}-sweep.json"
+    expect_failure "the phone alone cannot move the savings" \
+        "$MAIN" hww confirm-sweep "${E2E_TEST}-sweep.json" \
+        --output "${E2E_TEST}-approved-sweep.json" --yes
+    success "Monthly spend worked; the savings stayed in the vault."
 
-    step "Wait for phone-only recovery"
-    mine_to_next_height "$target" "Mining the real 61,200-block phone recovery delay"
-    anzen "$MAIN" phone recover "$recovery_address"
-    confirm_transaction "Confirming the phone-only recovery sweep"
+    step "Restore the HWW from its seed backup: the same key, so the vault is unchanged"
+    show_file_command cp -- "$DEMO_ROOT/hww-seed-backup.json" "$MAIN/hww/device.json"
+    cp -- "$DEMO_ROOT/hww-seed-backup.json" "$MAIN/hww/device.json"
+    cooperative_sweep "$MAIN" "$recovery_address"
+    confirm_transaction "Confirming the cooperative sweep with the restored HWW"
     status_compact
-    success "Phone recovered the full remaining vault balance."
+    success "Restored HWW and phone moved the vault together."
 }
 
 test_stolen_hww() {
     local attacker_dir="$DEMO_ROOT/stolen-hww-attacker"
-    local owner_address attacker_address phone_target hww_target
+    local fresh_dir="$DEMO_ROOT/stolen-hww-fresh-vault"
+    local attacker_address fresh_vault
     setup_vault
     make_receiver attacker_address "Attacker"
-    anzen_capture owner_address "$MAIN" phone receive-address
-    owner_address=$(printf '%s\n' "$owner_address" | awk '/^Hot receive address:/ {print $4}')
 
-    step "Simulate HWW theft: the attacker has H and the owner retains M"
+    step "Simulate HWW theft: the attacker has H; the owner keeps M and the HWW's seed backup"
     show_file_command cp -a "$MAIN" "$attacker_dir"
     cp -a "$MAIN" "$attacker_dir"
     show_file_command rm -- "$attacker_dir/phone/device.json"
     rm -- "$attacker_dir/phone/device.json"
-    show_file_command rm -- "$MAIN/hww/device.json"
-    rm -- "$MAIN/hww/device.json"
-    expect_failure "HWW recovery is still inside the phone-priority window" \
+    expect_failure "the stolen HWW must wait out the ~388-day time lock" \
         "$attacker_dir" hww recover "$attacker_address"
-    success "Stolen HWW blocked during phone-priority window."
+    success "Stolen HWW blocked by the time lock."
 
-    phone_target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
-    step "The legitimate phone reaches its earlier recovery window"
-    mine_to_next_height "$phone_target" "Mining the real 61,200-block phone recovery delay"
-    anzen "$MAIN" phone recover "$owner_address"
-    confirm_transaction "Confirming the legitimate phone recovery sweep"
-    success "Legitimate phone recovered funds first."
+    step "The owner retires the stolen key: a new vault with a fresh signer"
+    command anzen --data-dir "$fresh_dir" phone init >/dev/null
+    command anzen --data-dir "$fresh_dir" hww init >/dev/null
+    command anzen --data-dir "$fresh_dir" init >/dev/null
+    fresh_vault=$(jq -r .vault_address "$fresh_dir/anzen.json")
+    printf 'Fresh vault: %s\n' "$fresh_vault"
+    cooperative_sweep "$MAIN" "$fresh_vault"
+    confirm_transaction "Confirming the move to the fresh vault"
+    success "Savings moved before the stolen HWW's time lock opened."
 
-    hww_target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
-    step "The stolen HWW eventually reaches its later recovery window"
-    mine_to_next_height "$hww_target" "Mining the remaining blocks to HWW recovery"
-    expect_failure "the legitimate phone already spent the old vault output" \
+    advance_mtp_to "$((FUNDING_START + HWW_RECOVERY_SECONDS))" \
+        "Fast-forward past the stolen HWW's ~388-day time lock"
+    expect_failure "the old vault is already empty" \
         "$attacker_dir" hww recover "$attacker_address"
-    success "Stolen HWW reached maturity too late."
+    success "Stolen HWW reached its time lock too late."
 }
 
 test_lost_phone_no_cloud() {
-    local recovery_address target
+    local recovery_address
     setup_vault
     make_receiver recovery_address "Recovered owner"
 
@@ -830,21 +814,21 @@ test_lost_phone_no_cloud() {
         "$MAIN" hww recover "$recovery_address"
     success "Missing backup confirmed; early HWW recovery blocked."
 
-    target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
-    step "Wait for HWW-only recovery"
-    mine_to_next_height "$target" "Mining the real 65,535-block HWW recovery delay"
+    advance_mtp_to "$((FUNDING_START + HWW_RECOVERY_SECONDS))" \
+        "Fast-forward past the HWW's ~388-day time lock"
+    step "Recover with the HWW alone"
     anzen "$MAIN" hww recover "$recovery_address"
     confirm_transaction "Confirming the HWW-only recovery sweep"
     status_compact
-    success "Surviving HWW recovered the vault after maturity."
+    success "Surviving HWW recovered the vault after its time lock."
 }
 
 test_both_lost() {
-    local recovery_address target
+    local recovery_address
     setup_vault
     make_receiver recovery_address "Replacement owner"
 
-    step "Simulate losing both devices while encrypted cloud data survives"
+    step "Simulate losing both devices and the HWW's seed backup; encrypted cloud data survives"
     show_file_command rm -rf -- "$MAIN/phone" "$MAIN/anzen.json" "$MAIN/hww/device.json"
     rm -rf -- "$MAIN/phone" "$MAIN/anzen.json" "$MAIN/hww/device.json"
     anzen_filtered '
@@ -858,13 +842,12 @@ test_both_lost() {
         --output "${E2E_TEST}-restore-response.json" --yes
     success "Both device keys lost; backup cannot be decrypted."
 
-    target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
-    step "Wait until every consensus recovery path is mature"
-    mine_to_next_height "$target" "Mining the real 65,535-block HWW recovery delay"
-    expect_failure "no surviving key can sign either mature recovery path" \
+    advance_mtp_to "$((FUNDING_START + HWW_RECOVERY_SECONDS))" \
+        "Fast-forward past the HWW's ~388-day time lock"
+    expect_failure "no surviving key can sign the open HWW path" \
         "$MAIN" hww recover "$recovery_address"
-    printf 'No recovery friend was configured for this vault, so no surviving key exists.\n'
-    success "Mature funds remain unrecoverable without a key."
+    printf 'Neither device nor the HWW seed backup survives, so no key exists.\n'
+    success "Funds remain unrecoverable without a key."
 }
 
 test_cloud_compromise() {
@@ -896,46 +879,6 @@ test_cloud_compromise() {
     success "Cloud ciphertext revealed no spending capability."
 }
 
-test_social_recovery() {
-    local friend_public="$DEMO_ROOT/alice-recovery.pub.asc"
-    local friend_private="$DEMO_ROOT/alice-recovery.sec.asc"
-    local recovery_package="$DEMO_ROOT/alice-phone-recovery.json"
-    local recovery_address target
-    setup_vault
-    make_receiver recovery_address "Replacement owner"
-
-    step "Create a recovery friend's OpenPGP key and add it with the HWW"
-    anzen "$MAIN" social generate-friend-key --name "Alice <alice@example.test>" \
-        --public-key "$friend_public" --private-key "$friend_private"
-    anzen "$MAIN" phone add-recovery-friend "$friend_public" \
-        --output "${E2E_TEST}-backup-request.json"
-    anzen "$MAIN" hww confirm-backup "${E2E_TEST}-backup-request.json" \
-        --output "${E2E_TEST}-backup-response.json" --yes
-    anzen "$MAIN" phone store-backup "${E2E_TEST}-backup-response.json"
-    printf 'Cloud backup contains one encrypted payload, one HWW key wrapper, and %s OpenPGP friend wrapper.\n' \
-        "$(jq '.friends | length' "$MAIN/cloud/phone-seed-backup.json")"
-    success "Phone key and descriptor protected for HWW and recovery friend."
-
-    step "Lose both devices and decrypt the cloud backup with the friend key"
-    show_file_command rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
-    rm -- "$MAIN/phone/device.json" "$MAIN/hww/device.json"
-    anzen "$MAIN" social decrypt-backup "$MAIN/cloud/phone-seed-backup.json" \
-        --private-key "$friend_private" --output "$recovery_package"
-    expect_failure "social recovery reconstructs M but cannot bypass its on-chain delay" \
-        "$MAIN" social emergency-access "$MAIN/cloud/phone-seed-backup.json" \
-        --private-key "$friend_private" "$recovery_address"
-    success "Friend decrypted the backup; early emergency access stayed locked."
-
-    target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
-    step "Wait for delayed social emergency access"
-    mine_to_next_height "$target" "Mining the real 61,200-block phone recovery delay"
-    anzen "$MAIN" social emergency-access "$MAIN/cloud/phone-seed-backup.json" \
-        --private-key "$friend_private" "$recovery_address"
-    confirm_transaction "Confirming the social emergency-access sweep"
-    status_compact
-    success "Recovery friend swept the vault after the phone delay matured."
-}
-
 test_both_compromised() {
     local attacker_dir="$DEMO_ROOT/both-keys-attacker"
     local attacker_address
@@ -952,90 +895,77 @@ test_both_compromised() {
 }
 
 test_rollover_on_time() {
-    local initial_rollover_height annual_next_height pre_calendar_target anniversary
-    local old_phone_target old_schedule current_mtp
-    local renewed_rollover_height renewed_oldest renewed_phone_target
+    local initial_start old_schedule anniversary current_mtp days
     setup_vault
 
     step "Create the first annual schedule"
+    initial_start=$(node_mtp)
     ceremony "$NOW"
     confirm_transaction "Confirming the first annual rollover"
     require_live_controllers 1
-    initial_rollover_height=$(node_height)
-    old_phone_target=$((initial_rollover_height + PHONE_RECOVERY_BLOCKS))
     old_schedule="$DEMO_ROOT/rollover-on-time-old-schedule"
     cp -a "$MAIN" "$old_schedule"
     anzen "$MAIN" status
     success "Initial annual rollover confirmed with twelve allowance hops."
 
-    annual_next_height=$((initial_rollover_height + BLOCKS_PER_YEAR))
-    pre_calendar_target=$((annual_next_height - 11))
     anniversary=$((NOW + 365 * 24 * 60 * 60))
-    step "Wait one year without crossing either recovery deadline"
-    mine_to_next_height "$pre_calendar_target" \
-        "Mining one year of real block height for the scheduled rollover"
     advance_mtp_to "$anniversary" "Advance the calendar to the annual rollover date"
     anzen "$MAIN" status
-    expect_failure "phone recovery is still locked at the scheduled rollover" \
-        "$MAIN" phone recover "$MINING_ADDRESS"
-    expect_failure "HWW recovery is still locked at the scheduled rollover" \
+    expect_failure "the HWW's time lock is still closed at the scheduled rollover" \
         "$MAIN" hww recover "$MINING_ADDRESS"
-    success "Annual rollover date reached before either recovery path activated."
+    success "Annual rollover date reached about three weeks before the HWW's time lock."
 
     step "Perform the scheduled cooperative rollover"
     current_mtp=$(node_mtp)
     ceremony "$current_mtp"
     confirm_transaction "Confirming the on-time annual rollover"
     require_live_controllers 1
-    renewed_rollover_height=$(node_height)
     anzen "$MAIN" status
-    renewed_oldest=$(command anzen --data-dir "$MAIN" status | \
-        awk '/^Oldest confirmation height:/ {print $4}')
-    renewed_phone_target=$(command anzen --data-dir "$MAIN" status | \
-        awk '/^Phone recovery: valid next-block height/ {print $6}')
-    if [[ $renewed_oldest != "$renewed_rollover_height" || \
-        $renewed_phone_target != "$((renewed_rollover_height + PHONE_RECOVERY_BLOCKS))" ]]; then
-        printf 'ERROR: on-time rollover did not reset the recovery timers\n' >&2
+    days=$(hww_days_remaining)
+    if (( days < 388 )); then
+        printf 'ERROR: on-time rollover did not restart the HWW time lock (%s days left)\n' "$days" >&2
         exit 1
     fi
-    success "All funds rolled over and both recovery timers reset."
+    success "All funds rolled over and the HWW's time lock restarted."
 
     step "Try a retained authorization from the previous annual schedule"
     expect_failure "the confirmed rollover spent the old allowance-chain output" \
         "$old_schedule" phone authorize 1
     success "Old allowance authorizations were invalidated by the rollover."
 
-    step "Reach the old phone-recovery deadline"
-    mine_to_next_height "$old_phone_target" \
-        "Mining until the previous schedule's phone-recovery deadline"
+    advance_mtp_to "$((initial_start + HWW_RECOVERY_SECONDS))" \
+        "Pass the previous schedule's HWW deadline"
     anzen "$MAIN" status
-    expect_failure "the renewed outputs have a fresh phone-recovery delay" \
-        "$MAIN" phone recover "$MINING_ADDRESS"
-    success "Old recovery deadline passed while renewed funds stayed locked."
+    expect_failure "the renewed outputs have a fresh time lock" \
+        "$MAIN" hww recover "$MINING_ADDRESS"
+    success "Old deadline passed while renewed funds stayed locked."
 }
 
 test_rollover_forgotten() {
-    local phone_target hww_target current_mtp
+    local current_mtp
     setup_vault
 
     step "Forget the annual rollover and inspect the original vault output"
     anzen "$MAIN" status
-
-    phone_target=$((FUNDING_HEIGHT + PHONE_RECOVERY_BLOCKS))
-    mine_to_next_height "$phone_target" "Mining until phone-only recovery activates"
+    advance_mtp_to "$((FUNDING_START + HWW_RECOVERY_SECONDS))" \
+        "Fast-forward until the HWW-alone path opens"
     anzen "$MAIN" status
+    if [[ $(hww_days_remaining) != 0 ]]; then
+        printf 'ERROR: the HWW-alone path did not open\n' >&2
+        exit 1
+    fi
+    success "Forgotten rollover opened only the HWW's path; the phone still has none."
 
-    hww_target=$((FUNDING_HEIGHT + HWW_RECOVERY_BLOCKS))
-    mine_to_next_height "$hww_target" "Mining until HWW-only recovery also activates"
-    anzen "$MAIN" status
-    success "Forgotten rollover exposed both recovery paths."
-
-    step "Perform a late cooperative rollover to renew both timers"
+    step "Perform a late cooperative rollover to restart the time lock"
     current_mtp=$(node_mtp)
     ceremony "$current_mtp"
     confirm_transaction "Confirming the late annual rollover"
     anzen "$MAIN" status
-    success "Late rollover renewed both recovery timers."
+    if (( $(hww_days_remaining) < 388 )); then
+        printf 'ERROR: the late rollover did not restart the HWW time lock\n' >&2
+        exit 1
+    fi
+    success "Late rollover restarted the HWW's time lock."
 }
 
 if (( $(node_height) != 0 )); then
@@ -1062,7 +992,6 @@ case "$E2E_TEST" in
     lost-phone-no-cloud) test_lost_phone_no_cloud ;;
     both-lost) test_both_lost ;;
     cloud-compromise) test_cloud_compromise ;;
-    social-recovery) test_social_recovery ;;
     both-compromised) test_both_compromised ;;
     rollover-on-time) test_rollover_on_time ;;
     rollover-forgotten) test_rollover_forgotten ;;

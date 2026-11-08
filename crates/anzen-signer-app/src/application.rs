@@ -8,7 +8,6 @@ mod backup;
 mod offline_action;
 mod restore;
 mod rotation;
-mod signer_replacement;
 use anyhow::{Context, Result, bail};
 use anzen_common::{
     keys::DeviceKeys,
@@ -24,7 +23,6 @@ pub use offline_action::OfflineActionReview;
 pub use restore::RestoreReview;
 pub use rotation::PhoneRotationReview;
 use serde::{Deserialize, Serialize};
-pub use signer_replacement::SignerReplacementReview;
 use std::{path::PathBuf, str::FromStr};
 
 /// The public vault this signer accepted. Separate from the phone's configuration file so a
@@ -50,19 +48,6 @@ pub enum SignerRequest {
     Identity,
     ExportVault,
     ExportRecoveryBundle,
-    ReviewSignerReplacement {
-        request: Box<DeviceSignerReplacement>,
-    },
-    ApproveSignerReplacement {
-        review_id: String,
-        request: Box<DeviceSignerReplacement>,
-    },
-    RejectSignerReplacement {
-        review_id: String,
-    },
-    AdoptSignerReplacement {
-        request_id: String,
-    },
     ReviewPhoneRotation {
         request: Box<DevicePhoneRotation>,
     },
@@ -211,9 +196,6 @@ impl SignerApplication {
             SignerRequest::ApprovePhoneRotation { .. } => {
                 Some(OutgoingMessageKind::PhoneRotationApproved)
             }
-            SignerRequest::ApproveSignerReplacement { .. } => {
-                Some(OutgoingMessageKind::SignerReplacementApproved)
-            }
             _ => None,
         };
         let result = match request {
@@ -223,19 +205,6 @@ impl SignerApplication {
                 serde_json::to_value(self.initialize(network)?)?
             }
             SignerRequest::Identity => serde_json::to_value(self.public_identity()?)?,
-            SignerRequest::ReviewSignerReplacement { request } => {
-                serde_json::to_value(self.review_signer_replacement(&request)?)?
-            }
-            SignerRequest::ApproveSignerReplacement { review_id, request } => {
-                serde_json::to_value(self.approve_signer_replacement(&review_id, &request)?)?
-            }
-            SignerRequest::RejectSignerReplacement { review_id } => {
-                self.reject_signer_replacement(&review_id)?;
-                serde_json::json!({"rejected": true})
-            }
-            SignerRequest::AdoptSignerReplacement { request_id } => {
-                serde_json::to_value(self.adopt_signer_replacement(&request_id)?)?
-            }
             SignerRequest::ReviewPhoneRotation { request } => {
                 serde_json::to_value(self.review_phone_rotation(&request)?)?
             }

@@ -11,7 +11,7 @@ Most self-custody designs force a compromise: singlesig is simple but makes one 
 
 **The experience of a hot wallet, backed by cold storage.** Think checking and savings: the phone is your checking account and the vault is your savings account. Once a year, the hardware wallet approves a human-readable policy covering monthly transfers, immediate revocations, and a larger emergency transfer with a one-week cancellation window. It validates and presigns the complete transaction graph in one ceremony; the phone stores it encrypted and can execute the policy for the rest of the year.
 
-Immediate vault access requires both independent device keys. If either key is lost or compromised, the honest holder of the other key retains a Bitcoin-enforced route to safety. No company, server, custodian, or online cosigner can change those paths, and losing the presigned policy transactions cannot lose the underlying bitcoin.
+Immediate vault access requires both independent device keys. The phone acts as a second factor: on its own it can only use the bounded allowance and emergency access the hardware wallet approved for the year, never the savings. The hardware wallet can move the savings alone only after a year without renewal, so a lost phone can never lock the bitcoin away. No company, server, custodian, or online cosigner can change those paths, and losing the presigned policy transactions cannot lose the underlying bitcoin.
 
 Anzen is designed to be difficult to operate incorrectly. It guides complete policy, renewal, revocation, rotation, and recovery operations rather than exposing raw transaction machinery and leaving the user to assemble a safe procedure.
 
@@ -21,15 +21,16 @@ The [protocol design](anzen-design.md) specifies the exact wallet properties, tr
 
 ## How the vault is constructed
 
-Anzen's cold storage is a Taproot address controlled by two keys: the mobile key (`phone`) and the hardware-wallet key (`hww`). Every cold output uses the same vault script. Bitcoin accepts a spend through any one of these paths:
+Anzen's cold storage is a Taproot address controlled by two keys: the mobile key (`phone`) and the hardware-wallet key (`hww`). Every cold output uses the same vault script. Bitcoin accepts a spend through either of these paths:
 
 ```text
 phone + hww immediately
-phone only after 14 months
-hww only after 15 months
+hww only after ~388 days
 ```
 
-The delays belong to each individual UTXO and begin when that output confirms. They are not controlled by Anzen, a server, or a calendar. The earlier phone path gives an honest phone holder a priority window to rotate the vault if the HWW key is stolen.
+The delay is the longest relative timelock Bitcoin supports: 65,535 units of 512 seconds, 33,553,920 seconds. It belongs to each individual UTXO and counts from the median time past of the block before the one that confirmed it, so it lasts the same on every network. It is not controlled by Anzen, a server, or a calendar. The annual renewal moves every vault output, which restarts the delay; the hardware wallet's solo path only opens if a year's renewal is missed.
+
+There is deliberately no phone-only path. Without the hardware wallet the phone holds a bounded allowance, not the savings: a lost signer is restored from its own maker's backup as the same key, and a stolen phone cannot outlast the signer.
 
 ### Miniscript policy
 
@@ -40,15 +41,12 @@ tr(
   NUMS,
   {
     multi_a(2,phone,hww),
-    {
-      and_v(v:older(61200),pk(phone)),
-      and_v(v:older(65535),pk(hww))
-    }
+    and_v(v:older(4259839),pk(hww))
   }
 )
 ```
 
-This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
+`older(4259839)` is BIP68's time-based flag (`0x400000`) plus 65,535. This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
 
 Revocable authorization state lives in separate 1,000-sat connector outputs. They reuse the same device keys under a fixed 1-of-2 Taproot policy:
 
@@ -78,9 +76,9 @@ Each monthly transaction has exactly two inputs: the current allowance vault UTX
 
 The immediate trigger spends the vault remainder and emergency connector, then creates a staged 0.5 BTC vault output, cold change, and the withdrawal connector. After one week, the staged output and connector can be spent together to the hot wallet. Before then, either device can cancel by spending only the withdrawal connector; both principal outputs remain under the vault script and the delayed withdrawal becomes permanently invalid.
 
-Connector change never returns to the controller address: phone revocation sends it to a fresh hot-wallet change address, while HWW revocation requires an explicitly displayed destination. A later annual rollover spends every live vault and connector output, resets recovery delays, creates only the renewed policy's connectors, and invalidates the old epoch.
+Connector change never returns to the controller address: phone revocation sends it to a fresh hot-wallet change address, while HWW revocation requires an explicitly displayed destination. A later annual rollover spends every live vault and connector output, restarts the hardware wallet's delay, creates only the renewed policy's connectors, and invalidates the old epoch.
 
-Presigned transactions are convenience permissions, not custody. Losing them cannot lose the bitcoin because every principal output still has the three vault-script paths above.
+Presigned transactions are convenience permissions, not custody. Losing them cannot lose the bitcoin because every principal output still has both vault-script paths above.
 
 For a concrete byte-level example of this graph—including txids, outpoints, locktimes, sequences, values, addresses, and scripts—see the checked-in [vault output test vector](test-vectors/vault-output-graph.json).
 
@@ -122,26 +120,24 @@ HWW ready to pair with the phone and wrap its cloud backup key at anzen init
 
 $ anzen init
 Vault initialized (REGTEST ONLY)
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9,1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c),{and_v(v:older(61200),pk(88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9)),and_v(v:older(65535),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))}})#j5r7gp0v
-Vault address: bcrt1pfh6f4e6clj79g0qahzl7g9jv5e7rhgl7keq0k2939hk86rj7jzkszwz5hl
-Phone recovery: 61,200 blocks (~14 months)
-HWW recovery:   65,535 blocks (~15 months)
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9,1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c),and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))})#keecfqyl
+Vault address: bcrt1plmultppav8uaq9slr25gcmhs0ydaf7da3qcpprquwczz757n0sqqfacrvq
+HWW alone:      after 33,553,920 seconds (~388 days); renewing the vault restarts it
 Monthly spending: disabled
 Emergency access: disabled
-Cloud recovery backup: phone key + descriptor encrypted; 0 recovery friends
+Cloud recovery backup: phone key + descriptor encrypted to the HWW
 
 $ anzen policy
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9,1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c),{and_v(v:older(61200),pk(88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9)),and_v(v:older(65535),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))}})#j5r7gp0v
-Vault address: bcrt1pfh6f4e6clj79g0qahzl7g9jv5e7rhgl7keq0k2939hk86rj7jzkszwz5hl
+Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,88fcdf6472fdce18d671d72e3cd3262e38275b15d356482001049b5a57c351b9,1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c),and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))})#keecfqyl
+Vault address: bcrt1plmultppav8uaq9slr25gcmhs0ydaf7da3qcpprquwczz757n0sqqfacrvq
 Policy controller address: bcrt1pxu6dxg6pmryuqtuu39ukf56d5ydqa72gv05z23cyyxc65q9cdn3sxe46p7
 Policy controller reserve: 1000 sats per active chain
-Phone recovery: 61,200 blocks (~14 months)
-HWW recovery:   65,535 blocks (~15 months)
+HWW alone:      after 33,553,920 seconds (~388 days); renewing the vault restarts it
 Monthly spending: disabled
 Emergency access: disabled
 ```
 
-The new vault starts with monthly spending and emergency access disabled. `anzen init` prints the static cold-storage descriptor, vault address, and recovery delays, and encrypts the phone key and descriptor into the cloud backup with its key wrapped for the HWW. It does not create or sign a spending policy.
+The new vault starts with monthly spending and emergency access disabled. `anzen init` prints the static cold-storage descriptor, vault address, and the hardware wallet's delay, and encrypts the phone key and descriptor into the cloud backup with its key wrapped for the HWW. It does not create or sign a spending policy.
 
 ### Set or replace the vault policy
 
@@ -325,8 +321,8 @@ Rotate the vault to the replacement key before using it
 $ anzen phone rotate-key --output phone-rotation.json
 PHONE-KEY ROTATION
 New phone vault key: 04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794,39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df),{and_v(v:older(61200),pk(04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794)),and_v(v:older(65535),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))}})#xl7wedk6
-New vault address: bcrt1pe64zjpdwaepe53jht2vs2c9ux0k7yen6tfhwv07ce598qw0w3urs446krl
+New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794,39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df),and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))})#k7x0dk2z
+New vault address: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
 Inputs: 2
 Sent: 199997439 sats
 Fee: 270 sats (1 sat/vB)
@@ -340,8 +336,8 @@ Phone-key rotation proposal: phone-rotation.json
 $ anzen hww confirm-rotation phone-rotation.json --output approved-phone-rotation.json --yes
 PHONE-KEY ROTATION
 New phone vault key: 04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794
-New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794,39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df),{and_v(v:older(61200),pk(04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794)),and_v(v:older(65535),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))}})#xl7wedk6
-New vault address: bcrt1pe64zjpdwaepe53jht2vs2c9ux0k7yen6tfhwv07ce598qw0w3urs446krl
+New cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794,39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df),and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))})#k7x0dk2z
+New vault address: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
 Inputs: 2
 Sent: 199997439 sats
 Fee: 270 sats (1 sat/vB)
@@ -357,7 +353,7 @@ $ anzen phone activate-rotation approved-phone-rotation.json
 Phone-key rotation sweep broadcast: af1dfdf75928664ae14064089f8a6f30ce14efc8dbee3b88e98162e2229a5ec1
 Old policy controllers revoked: 87645cff157e4c8d0cce75d82829a5ac13e6b5167741d96ea194e6b2ec277a00
 Old vault address: bcrt1pptj7234wglqrzd6s27q9vquney29cpjavlsqau7eu7a7ukpqt0sqv297vl
-New vault address: bcrt1pe64zjpdwaepe53jht2vs2c9ux0k7yen6tfhwv07ce598qw0w3urs446krl
+New vault address: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
 Phone mnemonic: room absurd inject pole depth exit tenant wisdom cook predict net practice dry clarify panther album gossip million else maximum aim use they buyer
 Monthly policy preserved: 10000000 sats
 Policy rollover broadcast: 996bef84a3d995d2f791764f7f6d88987d4f86e8fe371c33996639e3b33cb7ad
@@ -365,67 +361,16 @@ Encrypted allowance authorizations: 12
 Emergency access preserved: 50000000 sats
 
 $ anzen hww adopt-rotation approved-phone-rotation.json
-HWW paired with the rotated vault: bcrt1pe64zjpdwaepe53jht2vs2c9ux0k7yen6tfhwv07ce598qw0w3urs446krl
+HWW paired with the rotated vault: bcrt1pxcsxt855mdk3ayrz3j7fpwnfvxwyydsvyan873dygem7hvy9px0shfhng8
 ```
 
-The rotation preserves the HWW key, every configured recovery friend, and the active monthly and emergency-access limits. Before installing the new phone key it spends every old controller to replacement-phone change, so no old-key policy authority survives. It then sweeps the old vault cooperatively to a descriptor built from the replacement phone key and writes a new descriptor-bound cloud backup. The same proposal chains a fresh annual policy to that sweep; one HWW prompt approves both, and all replacement artifacts and connectors use the new phone key. A disabled feature remains disabled after rotation.
+The rotation preserves the HWW key and the active monthly and emergency-access limits. Before installing the new phone key it spends every old controller to replacement-phone change, so no old-key policy authority survives. It then sweeps the old vault cooperatively to a descriptor built from the replacement phone key and writes a new descriptor-bound cloud backup. The same proposal chains a fresh annual policy to that sweep; one HWW prompt approves both, and all replacement artifacts and connectors use the new phone key. A disabled feature remains disabled after rotation.
 
-### Configure social recovery
+### Lose the phone and its backup
 
-The backup payload contains the phone mnemonic and cold-storage descriptor, authenticated-encrypted under one random symmetric key. The HWW holds one encrypted copy of that key. Each recovery friend can hold another copy encrypted to their OpenPGP public key; the complete friend list is also authenticated by the symmetric key so cloud tampering cannot silently change who survives a later rotation. Friends are independent 1-of-N recipients, not threshold shares.
+The cloud backup payload contains the phone mnemonic and cold-storage descriptor, authenticated-encrypted under one random symmetric key that only the HWW can unwrap. There is no other recipient: losing both devices is final, even if the encrypted cloud backup survives, because only the HWW can release it and only the HWW's key can sign the delayed path.
 
-The key generator is a simulation convenience. In a real integration, import a public key whose private half stays under the friend's control. The phone proposes a new cloud backup that also wraps its key for the friend, the HWW shows the friend's fingerprint and wraps the key for itself, and the phone stores the approved backup. These outputs are from the social-recovery test's own vault:
-
-```console
-$ anzen social generate-friend-key --name "Alice <alice@example.test>" --public-key alice.pub.asc --private-key alice.sec.asc
-Recovery friend OpenPGP key generated: bd4c176d8c2a7affd3270bc5f400724413ad6d52
-Public key: alice.pub.asc
-Private key: alice.sec.asc (give only to the recovery friend)
-
-$ anzen phone add-recovery-friend alice.pub.asc --output backup-request.json
-Recovery friend proposed: bd4c176d8c2a7affd3270bc5f400724413ad6d52
-Cloud backup request: backup-request.json
-
-$ anzen hww confirm-backup backup-request.json --output backup-response.json --yes
-SIMULATED HWW — CLOUD BACKUP
-Vault address: bcrt1puc46hha0ppy8h9ztz5v9c7kz60lkjr0k4d8dqdpet7p55sh6jqrqu6nep2
-Recovery friend OpenPGP fingerprint: bd4c176d8c2a7affd3270bc5f400724413ad6d52
-Each friend gains the phone key and descriptor if they obtain the cloud backup
-The 61,200-block phone recovery delay still applies to vault funds
-HWW wrapped the cloud backup key for 1 recovery friends
-HWW-approved cloud backup: backup-response.json
-
-$ anzen phone store-backup backup-response.json
-Cloud recovery backup stored; 1 recovery friends
-```
-
-If both devices are lost, the friend can authenticate and decrypt the portable recovery package. The command displays the recovered public binding but writes the mnemonic only inside the private JSON output:
-
-```console
-$ anzen social decrypt-backup .anzen-data/cloud/phone-seed-backup.json --private-key alice.sec.asc --output friend-recovery.json
-Social recovery decrypted and authenticated
-Phone vault key: 8176ca6abcb671f0ed6287fe31a0e4616a2d71d439944a06cd582f9d2a7c0b75
-Cold storage descriptor: tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,{multi_a(2,8176ca6abcb671f0ed6287fe31a0e4616a2d71d439944a06cd582f9d2a7c0b75,4198d7b1b65b81961896fc11bdf606bf0a0cf1ed1dc78084743b389102581184),{and_v(v:older(61200),pk(8176ca6abcb671f0ed6287fe31a0e4616a2d71d439944a06cd582f9d2a7c0b75)),and_v(v:older(65535),pk(4198d7b1b65b81961896fc11bdf606bf0a0cf1ed1dc78084743b389102581184))}})#rzggszg2
-Vault address: bcrt1puc46hha0ppy8h9ztz5v9c7kz60lkjr0k4d8dqdpet7p55sh6jqrqu6nep2
-Friend-decrypted phone recovery package: friend-recovery.json
-```
-
-Social recovery reconstructs `M`, not `H`, so it cannot bypass the vault script. After the real 61,200-block phone delay matures, the friend can sweep directly to a replacement wallet's address without installing either lost device:
-
-```console
-$ anzen social emergency-access .anzen-data/cloud/phone-seed-backup.json --private-key alice.sec.asc bcrt1p9gjlh9c6l9a3cglxkv7px5qkx4ge482qh0qce33dkqg8a28tn2ps2f62df
-Social emergency-access sweep broadcast: c50ff399b4fd2eece258e9c716a5dade99f201b145bf43cc62af85ea5687bdee
-Inputs: 1
-Sent: 199999854 sats
-Fee: 146 sats (1 sat/vB)
-On-chain phone recovery delay was enforced
-```
-
-Possession of a configured friend's private key is eventual phone-key capability. The HWW must therefore show that trust expansion clearly before adding a friend. The MVP-generated private key is unencrypted on disk; production friend-key UX and threshold recovery remain future work.
-
-Without a configured friend, losing both devices is final even if the encrypted cloud backup survives: a replacement phone can import the public vault configuration and build a restore request, but only the lost HWW can approve it, and no surviving key can sign either mature recovery path.
-
-If the phone and its backup are permanently unavailable, initialize a replacement vault in a separate data directory (`phone init`, `hww init`, and `init` with `--data-dir .replacement-vault`), take a receive address from its phone, wait the real 65,535-block HWW delay, and recover directly to that address. These outputs are from the lost-phone-no-cloud test's own vault:
+If the phone and its backup are permanently unavailable, the HWW alone recovers the savings once a year has passed since the last renewal. Initialize a replacement vault in a separate data directory (`phone init`, `hww init`, and `init` with `--data-dir .replacement-vault`) and take a receive address from its phone. Before the delay, the HWW refuses to sign a sweep Bitcoin would reject; once the chain's median time past reaches the delay, the same command recovers directly to that address. These outputs are from the lost-phone-no-cloud test's own vault:
 
 ```console
 $ anzen --data-dir .replacement-vault phone receive-address
@@ -438,34 +383,11 @@ Sent: 199999854 sats
 Fee: 146 sats (1 sat/vB)
 ```
 
-This delayed recovery moves the funds to the replacement wallet, whose phone and HWW keys are both new.
+This delayed recovery moves the funds to the replacement wallet, whose phone and HWW keys are both new. `anzen status` shows when the HWW's path opens for the oldest vault output.
 
-### Replace a lost HWW
+### Lose the HWW
 
-The phone can continue using existing monthly artifacts while the recovery delay runs. Phone-only recovery stays locked until the real 61,200-block phone delay matures. These outputs are from the lost-hww test's own vault:
-
-```console
-$ anzen phone authorize 1
-Broadcast Authorization for allowance step 1: 40c23fca2847a3266fad13cbf024f13b9b3e427d8f8ed5e08d16a88e48934e79
-
-$ anzen phone receive-address
-Hot receive address: bcrt1pmrf6lgkw87mvgdt6de8cwfhszljswh27fa7jxn25lhv5tasd5ndsav0l5z
-
-$ anzen phone recover bcrt1pmrf6lgkw87mvgdt6de8cwfhszljswh27fa7jxn25lhv5tasd5ndsav0l5z
-Error: no vault UTXOs are mature for PhoneRecovery; earliest next-block validity height is 61303 (61187 blocks remaining)
-```
-
-Once the delay matures, the same command sweeps every remaining vault output, including the unused allowance chain, to the phone's hot wallet:
-
-```console
-$ anzen phone recover bcrt1pmrf6lgkw87mvgdt6de8cwfhszljswh27fa7jxn25lhv5tasd5ndsav0l5z
-Phone recovery sweep broadcast: 617ee633ebd340bfc42e5613f035a1bfea5024c6c6a299a0971321c1f690097c
-Inputs: 2
-Sent: 189998183 sats
-Fee: 238 sats (1 sat/vB)
-```
-
-After the sweep the old vault is empty, so the missing HWW can no longer participate. Create a new vault with a replacement HWW before returning the funds to cold storage, then approve a new monthly policy.
+Restore the HWW from the backup its maker provides. It comes back as the same key, so the vault, policy, and phone are unchanged and nothing needs to move. Until then, the phone keeps using the year's monthly allowances and emergency access; it can never move the savings alone, so a stolen phone gains no more than that bounded budget. If the HWW and its maker's backup are both gone for good, nothing can move the savings; the phone keeps only the allowances already approved. Keep the HWW backup as carefully as the device.
 
 ### Other cooperative sweeps
 
@@ -494,11 +416,11 @@ Docker is the only host dependency:
 ./scripts/run-e2e.sh all
 ```
 
-With no arguments, the runner behaves like `all`. Selected tests run serially, and each gets a fresh regtest chain and vault state so it can be read and reproduced independently. Separate runner invocations also use isolated Compose projects, so concurrent local tests cannot stop or erase one another. Output is limited to user actions, the corresponding CLI commands, essential policy/transaction results, expected safety rejections, and compact mining progress. Displayed commands omit the internal `--data-dir` argument, retain the terminal's default color, and show their results in muted grey. Every completed step starts a new paragraph with a short `✅` outcome so the test can be understood by skimming those lines.
+With no arguments, the runner behaves like `all`. Selected tests run serially, and each gets a fresh regtest chain and vault state so it can be read and reproduced independently. Separate runner invocations also use isolated Compose projects, so concurrent local tests cannot stop or erase one another. Output is limited to user actions, the corresponding CLI commands, essential policy/transaction results, expected safety rejections, and compact chain progress. Displayed commands omit the internal `--data-dir` argument, retain the terminal's default color, and show their results in muted grey. Every completed step starts a new paragraph with a short `✅` outcome so the test can be understood by skimming those lines.
 
-The named tests cover setup/policy, sequential monthly spend, whole-chain monthly revoke, successful and cancelled one-week emergency access, partial funding, lost or stolen phone, lost or stolen HWW, missing cloud backup, both devices lost, OpenPGP social recovery, cloud compromise, both keys compromised, and both on-time and forgotten annual rollover. The spend demonstrations fund exactly 2 BTC and create one chain funding up to twelve 0.1 BTC allowance releases.
+The named tests cover setup/policy, sequential monthly spend, whole-chain monthly revoke, successful and cancelled one-week emergency access, partial funding, lost or stolen phone, lost or stolen HWW, missing cloud backup, both devices lost, cloud compromise, both keys compromised, and both on-time and forgotten annual rollover. The spend demonstrations fund exactly 2 BTC and create one chain funding up to twelve 0.1 BTC allowance releases.
 
-Recovery tests mine the real 61,200/65,535-block CSV delays, and the on-time rollover test mines a 52,560-block year before continuing to the old recovery deadline. Running one is intentionally slow; running `all` is substantially slower because every long-delay test proves its behavior on an independent chain.
+Recovery tests advance the node's mock time past the real ~388-day HWW delay instead of mining it: eleven blocks stamped with a later time move the median time past that BIP68 checks. Every long-delay test still proves its behavior on an independent chain.
 
 ## Run all tests
 
@@ -506,7 +428,7 @@ Recovery tests mine the real 61,200/65,535-block CSV delays, and the on-time rol
 ./scripts/run-tests.sh
 ```
 
-This runs unit and CLI tests, focused real-node integration tests, and the slow recovery integration test. For fast local development without Docker:
+This runs unit and CLI tests and the real-node integration tests, including the recovery test that checks Bitcoin Core rejects the HWW's sweep one second before its delay and accepts it on time. For fast local development without Docker:
 
 ```bash
 cargo test --workspace --all-targets --locked

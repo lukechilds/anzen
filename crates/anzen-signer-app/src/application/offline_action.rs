@@ -16,8 +16,8 @@ pub struct OfflineActionReview {
     pub amount_sats: u64,
     pub fee_sats: u64,
     pub input_count: usize,
-    /// Required by script, not a claim that the offline signer knows the current chain height.
-    pub recovery_delay_blocks: Option<u16>,
+    /// Required by script, not a claim that the offline signer knows the current time.
+    pub recovery_delay_seconds: Option<u32>,
 }
 
 impl SignerApplication {
@@ -46,7 +46,7 @@ impl SignerApplication {
             amount_sats: review.amount_sats,
             fee_sats: review.fee_sats,
             input_count: review.input_count,
-            recovery_delay_blocks: review.recovery_delay_blocks,
+            recovery_delay_seconds: review.recovery_delay_seconds,
         })
     }
 

@@ -356,9 +356,7 @@ pub fn finalize_vault_psbt(mut psbt: Psbt) -> Result<Transaction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anzen_common::{
-        CONNECTOR_VALUE_SATS, HWW_RECOVERY_BLOCKS, PHONE_RECOVERY_BLOCKS, keys::DeviceKeys,
-    };
+    use anzen_common::{CONNECTOR_VALUE_SATS, HWW_RECOVERY_SEQUENCE, keys::DeviceKeys};
     use anzen_protocol::{policy::Input, script::Scripts, spend};
     use bitcoin::{
         Amount, OutPoint, ScriptBuf, Sequence, TxIn, Witness, absolute, transaction::Version,
@@ -604,23 +602,17 @@ mod tests {
     }
 
     #[test]
-    fn phone_recovery_finalizes_with_only_phone_signature() {
-        let (policy, phone, _hww, mut psbt) = fixture(Sequence(PHONE_RECOVERY_BLOCKS.into()));
-        sign_vault_psbt(
-            &mut psbt,
-            &policy,
-            SpendPath::PhoneRecovery,
-            &phone.vault_keypair,
-        )
-        .unwrap();
-        let tx = finalize_vault_psbt(psbt).unwrap();
-        assert_eq!(tx.input[0].sequence, Sequence(PHONE_RECOVERY_BLOCKS.into()));
-        assert_eq!(tx.input[0].witness.len(), 3);
+    fn the_phone_alone_can_never_finalize_a_vault_spend() {
+        for path in [SpendPath::Cooperative, SpendPath::HwwRecovery] {
+            let (policy, phone, _hww, mut psbt) = fixture(Sequence(HWW_RECOVERY_SEQUENCE));
+            let signed = sign_vault_psbt(&mut psbt, &policy, path, &phone.vault_keypair);
+            assert!(signed.is_err() || finalize_vault_psbt(psbt).is_err());
+        }
     }
 
     #[test]
     fn hww_recovery_finalizes_with_only_hww_signature() {
-        let (policy, _phone, hww, mut psbt) = fixture(Sequence(HWW_RECOVERY_BLOCKS.into()));
+        let (policy, _phone, hww, mut psbt) = fixture(Sequence(HWW_RECOVERY_SEQUENCE));
         sign_vault_psbt(
             &mut psbt,
             &policy,
@@ -629,7 +621,7 @@ mod tests {
         )
         .unwrap();
         let tx = finalize_vault_psbt(psbt).unwrap();
-        assert_eq!(tx.input[0].sequence, Sequence(HWW_RECOVERY_BLOCKS.into()));
+        assert_eq!(tx.input[0].sequence, Sequence(HWW_RECOVERY_SEQUENCE));
         assert_eq!(tx.input[0].witness.len(), 3);
     }
 
