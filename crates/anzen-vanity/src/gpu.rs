@@ -55,9 +55,24 @@ pub struct SearchResult {
     pub attempts: u64,
 }
 
+/// A search's parameter block and point tables, built once and reused for every batch.
+#[doc(hidden)]
+pub struct Prepared {
+    nonce: bool,
+    params: Vec<u32>,
+    /// The key kernel's own tables; the nonce kernel uses the shared G table.
+    tables: Option<wgpu::Buffer>,
+}
+
 impl GpuSearch {
-    /// Open the default high-performance adapter and compile the shader.
+    /// Open the default high-performance adapter and compile the shaders.
     pub async fn new() -> Result<Self> {
+        Self::with_sources(KEY_SHADER, NONCE_SHADER).await
+    }
+
+    /// Open the GPU with other shader sources, for benchmarking shader changes side by side.
+    #[doc(hidden)]
+    pub async fn with_sources(key_shader: &str, nonce_shader: &str) -> Result<Self> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
@@ -140,8 +155,8 @@ impl GpuSearch {
                 debug: pipeline("debug"),
             }
         };
-        let key = kernel("key", KEY_SHADER);
-        let nonce = kernel("nonce", NONCE_SHADER);
+        let key = kernel("key", key_shader);
+        let nonce = kernel("nonce", nonce_shader);
         let mut generator = [0x02_u8; 33];
         generator[1..].copy_from_slice(&secp256k1::constants::GENERATOR_X);
         let generator = point_table(PublicKey::from_slice(&generator)?)?;
@@ -183,10 +198,8 @@ impl GpuSearch {
             range.end <= MAX_INDEX + 1,
             "vault key indexes must be below 2^31"
         );
-        let params = encode_params(inputs)?;
-        let tables = self.tables(inputs)?;
-        self.search_kernel(&self.key, params, &tables, range, progress)
-            .await
+        let prepared = self.prepare_key(inputs)?;
+        self.search_prepared(&prepared, range, progress).await
     }
 
     /// Search recovery locktimes in `range` in order until a match, like [`Self::search`].
@@ -200,16 +213,60 @@ impl GpuSearch {
             NONCE_LOCKTIMES.start <= range.start && range.end <= NONCE_LOCKTIMES.end,
             "recovery locktimes must be past Unix times"
         );
-        let params = encode_nonce_params(inputs)?;
-        self.search_kernel(&self.nonce, params, &self.generator_buffer, range, progress)
-            .await
+        let prepared = self.prepare_nonce(inputs)?;
+        self.search_prepared(&prepared, range, progress).await
     }
 
-    async fn search_kernel(
+    #[doc(hidden)]
+    pub fn prepare_key(&self, inputs: &SearchInputs) -> Result<Prepared> {
+        Ok(Prepared {
+            nonce: false,
+            params: encode_params(inputs)?,
+            tables: Some(self.tables(inputs)?),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn prepare_nonce(&self, inputs: &NonceInputs) -> Result<Prepared> {
+        Ok(Prepared {
+            nonce: true,
+            params: encode_nonce_params(inputs)?,
+            tables: None,
+        })
+    }
+
+    /// Run one dispatch over `start..start + count`, returning the lowest match in it.
+    #[doc(hidden)]
+    pub async fn run_batch(
         &self,
-        kernel: &Kernel,
-        mut params: Vec<u32>,
-        tables: &wgpu::Buffer,
+        prepared: &Prepared,
+        start: u32,
+        count: u32,
+    ) -> Result<Option<u32>> {
+        let mut params = prepared.params.clone();
+        params[0] = start;
+        params[1] = count;
+        let (kernel, tables) = self.kernel(prepared);
+        let found = self
+            .run(&kernel.search, &params, tables, count, None)
+            .await?;
+        Ok((found[0] != u32::MAX).then_some(found[0]))
+    }
+
+    fn kernel<'a>(&'a self, prepared: &'a Prepared) -> (&'a Kernel, &'a wgpu::Buffer) {
+        if prepared.nonce {
+            (&self.nonce, &self.generator_buffer)
+        } else {
+            (
+                &self.key,
+                prepared.tables.as_ref().expect("key searches have tables"),
+            )
+        }
+    }
+
+    async fn search_prepared(
+        &self,
+        prepared: &Prepared,
         range: std::ops::Range<u32>,
         mut progress: impl FnMut(u64) -> bool,
     ) -> Result<SearchResult> {
@@ -218,15 +275,10 @@ impl GpuSearch {
         let mut attempts = 0_u64;
         while next < range.end {
             let count = batch.min(range.end - next);
-            params[0] = next;
-            params[1] = count;
             let started = now();
-            let found = self
-                .run(&kernel.search, &params, tables, count, None)
-                .await?;
+            let found = self.run_batch(prepared, next, count).await?;
             attempts += u64::from(count);
-            let index = found[0];
-            if index != u32::MAX {
+            if let Some(index) = found {
                 return Ok(SearchResult {
                     index: Some(index),
                     attempts,
@@ -263,9 +315,8 @@ impl GpuSearch {
         start: u32,
         count: u32,
     ) -> Result<Vec<Option<[u8; 32]>>> {
-        let tables = self.tables(inputs)?;
-        self.debug_keys(&self.key, encode_params(inputs)?, &tables, start, count)
-            .await
+        let prepared = self.prepare_key(inputs)?;
+        self.debug_keys(&prepared, start, count).await
     }
 
     /// The output key the nonce shader computes for each locktime in `start..start + count`.
@@ -275,21 +326,20 @@ impl GpuSearch {
         start: u32,
         count: u32,
     ) -> Result<Vec<Option<[u8; 32]>>> {
-        let params = encode_nonce_params(inputs)?;
-        self.debug_keys(&self.nonce, params, &self.generator_buffer, start, count)
-            .await
+        let prepared = self.prepare_nonce(inputs)?;
+        self.debug_keys(&prepared, start, count).await
     }
 
     async fn debug_keys(
         &self,
-        kernel: &Kernel,
-        mut params: Vec<u32>,
-        tables: &wgpu::Buffer,
+        prepared: &Prepared,
         start: u32,
         count: u32,
     ) -> Result<Vec<Option<[u8; 32]>>> {
+        let mut params = prepared.params.clone();
         params[0] = start;
         params[1] = count;
+        let (kernel, tables) = self.kernel(prepared);
         let words = self
             .run(
                 &kernel.debug,
@@ -452,6 +502,21 @@ fn now() -> Option<std::time::Instant> {
 impl GpuSearch {
     pub fn open() -> Result<Self> {
         pollster::block_on(Self::new())
+    }
+
+    #[doc(hidden)]
+    pub fn open_with_sources(key_shader: &str, nonce_shader: &str) -> Result<Self> {
+        pollster::block_on(Self::with_sources(key_shader, nonce_shader))
+    }
+
+    #[doc(hidden)]
+    pub fn run_batch_blocking(
+        &self,
+        prepared: &Prepared,
+        start: u32,
+        count: u32,
+    ) -> Result<Option<u32>> {
+        pollster::block_on(self.run_batch(prepared, start, count))
     }
 
     pub fn search_blocking(

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """A/B benchmark: a baseline commit against the working tree.
 
-The GPU clocks down under sustained load, so back-to-back runs of one build are not comparable
-with runs of another taken minutes apart. This builds the benchmark at BASE (default HEAD) in a
-scratch worktree and from the working tree, then alternates them in ABBA order and compares
-medians.
+The GPU's clocks drift by tens of percent within seconds, so separate runs barely compare.
 
-    crates/anzen-vanity/bench/ab.py nonce --rounds 4 --seconds 3
-    crates/anzen-vanity/bench/ab.py both --base HEAD~1
+- Shader changes (the default): the working tree's benchmark compiles BASE's shaders next to its
+  own and alternates single dispatches between them, reporting the median paired ratio.
+- Host changes (--binaries): BASE is built in a scratch worktree and whole runs alternate in
+  ABBA order. Much noisier; use more rounds.
+
+    crates/anzen-vanity/bench/ab.py nonce
+    crates/anzen-vanity/bench/ab.py both --base HEAD~1 --pairs 60
+    crates/anzen-vanity/bench/ab.py key --binaries --rounds 8
 """
 
 import argparse
@@ -38,6 +41,18 @@ def build_candidate() -> Path:
     return REPO / "target" / "bench-candidate" / "release" / "examples" / "benchmark"
 
 
+def base_shaders(rev: str) -> Path:
+    directory = REPO / "target" / "bench-base-shaders"
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ["constants.wgsl", "common.wgsl", "key.wgsl", "nonce.wgsl"]:
+        source = subprocess.run(
+            ["git", "show", f"{rev}:crates/anzen-vanity/src/{name}"],
+            cwd=REPO, capture_output=True, text=True, check=True,
+        ).stdout
+        (directory / name).write_text(source)
+    return directory
+
+
 def run(binary: Path, kernel: str, seconds: float, warmup: float) -> float:
     output = subprocess.run(
         [str(binary), kernel, "--seconds", str(seconds), "--warmup", str(warmup)],
@@ -53,10 +68,23 @@ def main() -> None:
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--seconds", type=float, default=3.0)
     parser.add_argument("--warmup", type=float, default=1.0)
+    parser.add_argument("--binaries", action="store_true")
+    parser.add_argument("--pairs", type=int, default=40)
     args = parser.parse_args()
+    kernels = ["key", "nonce"] if args.kernel == "both" else [args.kernel]
+
+    if not args.binaries:
+        candidate, shaders = build_candidate(), base_shaders(args.base)
+        for kernel in kernels:
+            output = subprocess.run(
+                [str(candidate), "pair", kernel, "--base-shaders", str(shaders), "--pairs", str(args.pairs)],
+                capture_output=True, text=True, check=True,
+            ).stdout
+            print(output.strip().splitlines()[-1])
+            sys.stdout.flush()
+        return
 
     base, candidate = build_base(args.base), build_candidate()
-    kernels = ["key", "nonce"] if args.kernel == "both" else [args.kernel]
     for kernel in kernels:
         rates = {"base": [], "candidate": []}
         for round_index in range(args.rounds):

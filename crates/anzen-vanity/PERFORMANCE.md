@@ -10,10 +10,15 @@ A 5-character `vault` prefix needs about 33.5M candidates on average.
 
 ## Method
 
-`bench/ab.py` builds the benchmark at a baseline commit and from the working tree and alternates
-them (ABBA), because the GPU clocks down under sustained load: runs minutes apart are not
-comparable, adjacent runs are. A change is kept when its median beats the baseline's beyond the
-noise measured by an A/A run, and the GPU tests still match the library code.
+The GPU's clocks drift by tens of percent within seconds (a run can read 1.1M or 2.3M/s), so
+separate runs barely compare: an A/A test of two whole-run builds differed by 17%. `bench/ab.py`
+instead compiles the baseline commit's shaders next to the working tree's in one process and
+alternates single dispatches between them, over the same candidate ranges, then takes the median
+of the paired ratios. A/A noise this way: key 0.995, nonce 1.016 (40 pairs).
+
+A change is kept when its paired ratio is at least 1.03 and it wins most pairs (marginal results
+are re-run), and the GPU tests still match the library code. Host-side changes, which the
+baseline shaders cannot run with, use `--binaries` with more rounds.
 
 ## Current speed
 

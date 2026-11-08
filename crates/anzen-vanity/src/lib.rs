@@ -48,4 +48,4 @@ pub const MAX_INDEX: u32 = (1 << 31) - 1;
 #[cfg(feature = "gpu")]
 mod gpu;
 #[cfg(feature = "gpu")]
-pub use gpu::{GpuSearch, SearchResult};
+pub use gpu::{GpuSearch, Prepared, SearchResult};
