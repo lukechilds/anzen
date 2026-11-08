@@ -79,20 +79,19 @@ fn put_key(data: ptr<function, array<u32, 128>>, offset: u32, x: Fe) {
     }
 }
 
-fn candidate(index: u32) -> Candidate {
-    var result: Candidate;
-    // 1. The child vault key.
-    let tweak = bip32_tweak(index);
-    if gte(tweak, ORDER_N) || is_zero(tweak) {
-        return result;
-    }
+const PER_INVOCATION: u32 = 4u;
+
+// Stage 1: the child vault key parent + I_L·G, in Jacobian coordinates.
+fn child_key(index: u32, tweak: Fe) -> Jacobian {
     var parent: Affine;
     parent.x = read_fe(P_PARENT_X);
     parent.y = read_fe(P_PARENT_Y);
-    let child = to_affine(add_mul_g(from_affine(parent), tweak));
-    if child.infinity {
-        return result;
-    }
+    return add_mul_g(from_affine(parent), tweak);
+}
+
+// Stage 2: KeySort and KeyAgg of the child with the signer key, Q = a·first + second, in Jacobian
+// coordinates. `valid` is cleared when the keys coincide.
+fn aggregate_key(child: Affine, tweak: Fe, valid: ptr<function, bool>) -> Jacobian {
     // Aggregation uses the even-y point of each x-only key.
     var phone = child;
     let child_odd = (child.y[0] & 1u) != 0u;
@@ -103,11 +102,9 @@ fn candidate(index: u32) -> Candidate {
     signer.x = read_fe(P_HWW_X);
     signer.y = read_fe(P_HWW_Y);
     if equal(phone.x, signer.x) {
-        return result;
+        *valid = false;
     }
-
-    // 2. KeySort, then KeyAgg: the first key is hashed with the list, the second has
-    //    coefficient 1.
+    // The first key is hashed with the list, the second has coefficient 1.
     let phone_first = gte(signer.x, phone.x);
     var first = signer;
     var second = phone;
@@ -143,12 +140,13 @@ fn candidate(index: u32) -> Candidate {
         g_scalar = scalar_mul(scalar, tweak);
     }
     let scaled = add_mul_g(add_mul_key(infinity(), table, scalar), g_scalar);
-    let aggregate = to_affine(point_add_affine(scaled, second));
-    if aggregate.infinity {
-        return result;
-    }
+    return point_add_affine(scaled, second);
+}
 
-    // 3. The Taproot tweak over the x-only internal key and the signer's leaf.
+// Stage 3: the Taproot tweak over the x-only internal key and the signer's leaf,
+// output = Q_even + t·G in Jacobian coordinates.
+fn output_key(aggregate: Affine, valid: ptr<function, bool>) -> Jacobian {
+    var data: array<u32, 128>;
     for (var i = 0u; i < 32u; i++) {
         data[i] = fe_byte(aggregate.x, i);
     }
@@ -159,26 +157,43 @@ fn candidate(index: u32) -> Candidate {
     }
     let taproot = digest_to_fe(sha256_tagged(read_state256(P_TWEAK_MID), &data, 64u));
     if gte(taproot, ORDER_N) {
-        return result;
+        *valid = false;
     }
     var internal = aggregate;
     if (internal.y[0] & 1u) != 0u {
         internal.y = fe_neg(internal.y);
     }
-    let output = to_affine(add_mul_g(from_affine(internal), taproot));
-    if output.infinity {
-        return result;
-    }
-    result.valid = true;
-    result.output_x = output.x;
-    return result;
+    return add_mul_g(from_affine(internal), taproot);
 }
 
-
-const PER_INVOCATION: u32 = 1u;
-
+// Each stage runs for the whole batch, then one shared inversion takes every point to affine.
 fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
+    var tweaks: array<Fe, PER_INVOCATION>;
+    var valid: array<bool, PER_INVOCATION>;
+    var points: array<Jacobian, PER_INVOCATION>;
+    var affine: array<Affine, PER_INVOCATION>;
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        tweaks[j] = bip32_tweak(first + j);
+        valid[j] = !gte(tweaks[j], ORDER_N) && !is_zero(tweaks[j]);
+        points[j] = child_key(first + j, tweaks[j]);
+    }
+    batch_affine(&points, &valid, &affine);
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        var ok = valid[j];
+        points[j] = aggregate_key(affine[j], tweaks[j], &ok);
+        valid[j] = ok;
+    }
+    batch_affine(&points, &valid, &affine);
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        var ok = valid[j];
+        points[j] = output_key(affine[j], &ok);
+        valid[j] = ok;
+    }
+    batch_affine(&points, &valid, &affine);
     var batch: array<Candidate, PER_INVOCATION>;
-    batch[0] = candidate(first);
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        batch[j].valid = valid[j];
+        batch[j].output_x = affine[j].x;
+    }
     return batch;
 }

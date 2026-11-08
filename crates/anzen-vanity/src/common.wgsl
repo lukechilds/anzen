@@ -421,6 +421,44 @@ fn to_affine(p: Jacobian) -> Affine {
     return Affine(fe_mul(p.x, zi2), fe_mul(p.y, fe_mul(zi2, zi)), false);
 }
 
+// Takes a batch of Jacobian points to affine with one field inversion (Montgomery's trick):
+// invert the product of every Z, then peel each Z's inverse off it. Points marked invalid, or at
+// infinity, are skipped and come back invalid.
+fn batch_affine(
+    points: ptr<function, array<Jacobian, PER_INVOCATION>>,
+    valid: ptr<function, array<bool, PER_INVOCATION>>,
+    out: ptr<function, array<Affine, PER_INVOCATION>>,
+) {
+    var products: array<Fe, PER_INVOCATION>;
+    var zs: array<Fe, PER_INVOCATION>;
+    var one: Fe;
+    one[0] = 1u;
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        (*valid)[j] = (*valid)[j] && !(*points)[j].infinity;
+        zs[j] = one;
+        if (*valid)[j] {
+            zs[j] = (*points)[j].z;
+        }
+        if j == 0u {
+            products[j] = zs[j];
+        } else {
+            products[j] = fe_mul(products[j - 1u], zs[j]);
+        }
+    }
+    var inverse = fe_inv(products[PER_INVOCATION - 1u]);
+    for (var j = PER_INVOCATION - 1u; j < PER_INVOCATION; j--) {
+        var z_inverse = inverse;
+        if j > 0u {
+            z_inverse = fe_mul(inverse, products[j - 1u]);
+            inverse = fe_mul(inverse, zs[j]);
+        }
+        let zi2 = fe_sqr(z_inverse);
+        (*out)[j].x = fe_mul((*points)[j].x, zi2);
+        (*out)[j].y = fe_mul((*points)[j].y, fe_mul(zi2, z_inverse));
+        (*out)[j].infinity = !(*valid)[j];
+    }
+}
+
 fn g_point(window: u32, digit: u32) -> Affine {
     let base = (window * G_DIGITS + digit - 1u) * 16u;
     var q: Affine;
