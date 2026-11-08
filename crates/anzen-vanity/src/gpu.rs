@@ -185,7 +185,21 @@ impl GpuSearch {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let kernel = |label, source: &str, tuning: Tuning| -> Result<Kernel> {
+        let key_table = upload(
+            &device,
+            "generator table",
+            &point_table(generator(), tunings[0].g_window_bits)?,
+        );
+        let nonce_table = if tunings[1].g_window_bits == tunings[0].g_window_bits {
+            key_table.clone()
+        } else {
+            upload(
+                &device,
+                "generator table",
+                &point_table(generator(), tunings[1].g_window_bits)?,
+            )
+        };
+        let kernel = |label, source: &str, tuning: Tuning, g_table| -> Result<Kernel> {
             // SAFETY: every array index in the shaders is in bounds by construction (fixed loop
             // bounds, table digits within their windows) and every loop has a constant trip
             // count. Runtime bounds checks and loop counters would otherwise stop the compiler
@@ -209,11 +223,6 @@ impl GpuSearch {
                     cache: None,
                 })
             };
-            let g_table = upload(
-                &device,
-                "generator table",
-                &point_table(generator(), tuning.g_window_bits)?,
-            );
             Ok(Kernel {
                 search: pipeline("search"),
                 debug: pipeline("debug"),
@@ -221,8 +230,8 @@ impl GpuSearch {
                 g_table,
             })
         };
-        let key = kernel("key", key_shader, tunings[0])?;
-        let nonce = kernel("nonce", nonce_shader, tunings[1])?;
+        let key = kernel("key", key_shader, tunings[0], key_table)?;
+        let nonce = kernel("nonce", nonce_shader, tunings[1], nonce_table)?;
         let empty = upload(&device, "no key tables", &[0; 4]);
         Ok(Self {
             device,
@@ -721,25 +730,44 @@ fn generator() -> PublicKey {
 }
 
 /// `d·2^(bits·w)·point` for every window `w` and digit `d` in `1..2^bits`, as affine limbs.
+/// Windows are independent, so wide tables are built on every core.
 fn point_table(point: PublicKey, bits: u32) -> Result<Vec<u32>> {
     let secp = Secp256k1::new();
-    let mut base = point;
-    let mut table = Vec::with_capacity(table_words(bits));
     let mut shift = [0_u8; 32];
     shift[31 - bits as usize / 8] = 1 << (bits % 8);
     let shift = Scalar::from_be_bytes(shift)?;
-    for _ in 0..256_u32.div_ceil(bits) {
-        let mut multiple = base;
+    let mut bases = vec![point];
+    for _ in 1..256_u32.div_ceil(bits) {
+        let next = bases.last().expect("one base").mul_tweak(&secp, &shift)?;
+        bases.push(next);
+    }
+    let window = |base: &PublicKey| -> Result<Vec<u32>> {
+        let mut words = Vec::with_capacity(((1 << bits) - 1) * 16);
+        let mut multiple = *base;
         for digit in 1..(1_u32 << bits) {
             if digit > 1 {
-                multiple = multiple.combine(&base)?;
+                multiple = multiple.combine(base)?;
             }
             let (x, y) = affine(&multiple);
-            table.extend(x);
-            table.extend(y);
+            words.extend(x);
+            words.extend(y);
         }
-        base = base.mul_tweak(&secp, &shift)?;
-    }
+        Ok(words)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let windows = std::thread::scope(|scope| {
+        let handles = bases
+            .iter()
+            .map(|base| scope.spawn(move || window(base)))
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("table thread panicked"))
+            .collect::<Result<Vec<_>>>()
+    })?;
+    #[cfg(target_arch = "wasm32")]
+    let windows = bases.iter().map(window).collect::<Result<Vec<_>>>()?;
+    let table = windows.concat();
     if table.len() != table_words(bits) {
         bail!("point table size changed");
     }

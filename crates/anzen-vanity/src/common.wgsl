@@ -37,7 +37,7 @@ const P_TARGET_BITS: u32 = 3u;
 
 // Tuning. The host reads these constants from the shader source to build tables and size
 // dispatches to match, so a shader change can vary them on its own.
-const G_WINDOW_BITS: u32 = 8u;
+const G_WINDOW_BITS: u32 = 16u;
 const WORKGROUP_SIZE: u32 = 64u;
 const G_DIGITS: u32 = (1u << G_WINDOW_BITS) - 1u;
 const G_WINDOWS: u32 = (256u + G_WINDOW_BITS - 1u) / G_WINDOW_BITS;

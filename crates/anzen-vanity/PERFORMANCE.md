@@ -27,10 +27,16 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 | key | 710k (cool) | 47 s |
 | nonce | 2.64M (cool) | 13 s |
 
+## Where the time goes
+
+Ablating the nonce kernel at the start (8-bit windows): the 32 table additions for `t·G` were
+~67% of its time, the final inversion ~32%, and its three SHA-256 compressions under 1%.
+
 ## Kept
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| G table windows 8 → 16 bits: 16 mixed additions per `k·G` instead of 32, 67 MB table built on every core (12 bits gave +21%/+27%) | key / nonce | 1.38× / 1.52× |
 
 ## Tried and rejected
 
