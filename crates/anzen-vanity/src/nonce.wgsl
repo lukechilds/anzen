@@ -47,7 +47,7 @@ fn candidate(locktime: u32) -> Candidate {
     var internal: Affine;
     internal.x = read_fe(P_INTERNAL_X);
     internal.y = read_fe(P_INTERNAL_Y);
-    let output = to_affine(add_mul_table(from_affine(internal), G_TABLE, tweak));
+    let output = to_affine(add_mul_g(from_affine(internal), tweak));
     if output.infinity {
         return result;
     }

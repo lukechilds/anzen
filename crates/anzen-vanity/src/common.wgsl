@@ -28,15 +28,19 @@ const P_TARGET_VALUE: u32 = 2u;
 const P_TARGET_BITS: u32 = 3u;
 
 @group(0) @binding(0) var<storage, read> params: array<u32>;
-// Affine multiples of points, G first: entry (window w, digit d) of a point's table is
-// d·2^(8w)·point, for d in 1..=255. The key kernel appends the signer's and the parent's.
-@group(0) @binding(1) var<storage, read> tables: array<u32>;
+// Affine multiples of G: entry (window w, digit d) is d·2^(G_WINDOW_BITS·w)·G, for d in
+// 1..2^G_WINDOW_BITS.
+@group(0) @binding(1) var<storage, read> g_table: array<u32>;
 @group(0) @binding(2) var<storage, read_write> found: array<atomic<u32>, 1>;
 // Debug only: per candidate, a validity word then the output key's x limbs.
 @group(0) @binding(3) var<storage, read_write> debug_out: array<u32>;
 
-const TABLE_WORDS: u32 = 130560u;
-const G_TABLE: u32 = 0u;
+// Tuning. The host reads these constants from the shader source to build tables and size
+// dispatches to match, so a shader change can vary them on its own.
+const G_WINDOW_BITS: u32 = 8u;
+const WORKGROUP_SIZE: u32 = 64u;
+const G_DIGITS: u32 = (1u << G_WINDOW_BITS) - 1u;
+const G_WINDOWS: u32 = (256u + G_WINDOW_BITS - 1u) / G_WINDOW_BITS;
 
 const FIELD_P = Fe(0xFFFFFC2Fu, 0xFFFFFFFEu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu);
 const ORDER_N = Fe(0xD0364141u, 0xBFD25E8Cu, 0xAF48A03Bu, 0xBAAEDCE6u, 0xFFFFFFFEu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu);
@@ -417,23 +421,34 @@ fn to_affine(p: Jacobian) -> Affine {
     return Affine(fe_mul(p.x, zi2), fe_mul(p.y, fe_mul(zi2, zi)), false);
 }
 
-fn table_point(table: u32, window: u32, digit: u32) -> Affine {
-    let base = table + (window * 255u + digit - 1u) * 16u;
+fn g_point(window: u32, digit: u32) -> Affine {
+    let base = (window * G_DIGITS + digit - 1u) * 16u;
     var q: Affine;
     for (var i = 0u; i < 8u; i++) {
-        q.x[i] = tables[base + i];
-        q.y[i] = tables[base + 8u + i];
+        q.x[i] = g_table[base + i];
+        q.y[i] = g_table[base + 8u + i];
     }
     return q;
 }
 
-// acc + k·point for a point with a table: one mixed addition per nonzero byte of k, no doublings.
-fn add_mul_table(start: Jacobian, table: u32, k: Fe) -> Jacobian {
+// Bits `bit..bit + width` of k, for width < 32.
+fn window_digit(k: Fe, bit: u32, width: u32) -> u32 {
+    let limb = bit / 32u;
+    let shift = bit % 32u;
+    var digit = k[limb] >> shift;
+    if shift + width > 32u && limb < 7u {
+        digit |= k[limb + 1u] << (32u - shift);
+    }
+    return digit & ((1u << width) - 1u);
+}
+
+// acc + k·G from the table: one mixed addition per nonzero window of k, no doublings.
+fn add_mul_g(start: Jacobian, k: Fe) -> Jacobian {
     var acc = start;
-    for (var w = 0u; w < 32u; w++) {
-        let digit = (k[w / 4u] >> (8u * (w % 4u))) & 0xffu;
+    for (var w = 0u; w < G_WINDOWS; w++) {
+        let digit = window_digit(k, w * G_WINDOW_BITS, G_WINDOW_BITS);
         if digit != 0u {
-            acc = point_add_affine(acc, table_point(table, w, digit));
+            acc = point_add_affine(acc, g_point(w, digit));
         }
     }
     return acc;
@@ -620,7 +635,7 @@ struct Candidate {
     output_x: Fe,
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params[P_COUNT] {
         return;
@@ -633,7 +648,7 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn debug(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params[P_COUNT] {
         return;
