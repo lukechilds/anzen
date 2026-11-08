@@ -285,7 +285,8 @@ where
     let gpu = anzen_vanity::GpuSearch::open()?;
     let last_report = AtomicU64::new(0);
     let result = gpu.search_blocking(&inputs, 0..anzen_vanity::MAX_INDEX + 1, |attempts| {
-        maybe_report_progress(attempts, &last_report, &report_progress)
+        maybe_report_progress(attempts, &last_report, &report_progress);
+        true
     })?;
     let index = result
         .index

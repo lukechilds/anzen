@@ -272,6 +272,7 @@ dependencies = [
  "bitcoin",
  "bytemuck",
  "futures-channel",
+ "miniscript",
  "pollster",
  "secp256k1",
  "sha2",
