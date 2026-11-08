@@ -16,6 +16,7 @@ anzen-protocol = { path = "crates/anzen-protocol" }
 anzen-signer = { path = "crates/anzen-signer" }
 anzen-signer-app = { path = "crates/anzen-signer-app" }
 anzen-storage = { path = "crates/anzen-storage" }
+anzen-vanity = { path = "crates/anzen-vanity", default-features = false }
 anzen-wallet = { path = "crates/anzen-wallet", default-features = false }
 anyhow = "1.0"
 axum = "0.8"

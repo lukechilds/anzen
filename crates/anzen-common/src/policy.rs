@@ -98,6 +98,16 @@ impl VaultAddressTemplate {
         })
     }
 
+    /// The signer key every candidate vault shares.
+    pub fn hww_pubkey(&self) -> [u8; 32] {
+        self.hww_pubkey.0
+    }
+
+    /// The script tree root every candidate vault shares.
+    pub fn merkle_root(&self, crypto: &mut SoftwareCrypto) -> [u8; 32] {
+        anzen_protocol::script::hww_recovery_leaf(crypto, &self.hww_pubkey)
+    }
+
     pub fn output_key(
         &self,
         crypto: &mut SoftwareCrypto,

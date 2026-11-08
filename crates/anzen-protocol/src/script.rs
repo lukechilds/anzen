@@ -133,6 +133,12 @@ fn validate_keys<C: Crypto + ?Sized>(crypto: &mut C, keys: &VaultKeys) -> Result
     Ok(())
 }
 
+/// The hash of the vault's only leaf, the signer's time-locked recovery path. It depends only on
+/// the signer key, so vanity searches over phone keys compute it once.
+pub fn hww_recovery_leaf<C: Crypto + ?Sized>(crypto: &mut C, hww: &XOnlyKey) -> [u8; 32] {
+    tapleaf_hash(crypto, &recovery_script(hww, HWW_RECOVERY_SEQUENCE))
+}
+
 /// Internal key, leaf, output key and scriptPubKey of the principal-holding vault policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultScript {
@@ -151,8 +157,7 @@ impl VaultScript {
     pub fn new<C: Crypto + ?Sized>(crypto: &mut C, keys: &VaultKeys) -> Result<Self> {
         validate_keys(crypto, keys)?;
         let internal_key = crate::musig::aggregate_key(crypto, keys)?;
-        let hww_recovery_leaf =
-            tapleaf_hash(crypto, &recovery_script(&keys.hww, HWW_RECOVERY_SEQUENCE));
+        let hww_recovery_leaf = hww_recovery_leaf(crypto, &keys.hww);
         let output = output_key(crypto, &internal_key, hww_recovery_leaf)?;
         Ok(Self {
             keys: *keys,

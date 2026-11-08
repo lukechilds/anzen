@@ -1,0 +1,35 @@
+[package]
+name = "anzen-vanity"
+description = "GPU search for vanity Anzen vault addresses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["gpu"]
+# The wgpu search itself; without it only the search inputs are available.
+gpu = ["dep:bytemuck", "dep:futures-channel", "dep:secp256k1", "dep:sha2", "dep:wgpu", "dep:pollster"]
+
+[dependencies]
+anyhow.workspace = true
+bytemuck = { version = "1", optional = true }
+futures-channel = { version = "0.3", optional = true }
+secp256k1 = { version = "0.29", optional = true }
+sha2 = { workspace = true, features = ["compress"], optional = true }
+wgpu = { version = "30", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { version = "0.4", optional = true }
+
+[dev-dependencies]
+anzen-common.workspace = true
+bitcoin.workspace = true
+
+[[test]]
+name = "gpu"
+required-features = ["gpu"]
+
+[[example]]
+name = "benchmark"
+required-features = ["gpu"]
