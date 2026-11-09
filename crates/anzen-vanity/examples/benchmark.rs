@@ -11,7 +11,8 @@
 //! ratios. The GPU's clocks drift by tens of percent within seconds, so only dispatches
 //! milliseconds apart compare fairly. `bench/ab.py` sets this up from a git revision.
 
-use anzen_vanity::{GpuSearch, MAX_INDEX, NONCE_LOCKTIMES, NonceInputs, SearchInputs};
+use anzen_vanity::bench::{key_inputs, nonce_inputs};
+use anzen_vanity::{GpuSearch, MAX_INDEX, NONCE_LOCKTIMES};
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
@@ -19,6 +20,21 @@ fn main() -> anyhow::Result<()> {
     if args.peek().map(String::as_str) == Some("pair") {
         args.next();
         return pair(args.collect());
+    }
+    // `run <wgpu|metal> <key|nonce> [seconds]`: the app's benchmark, ramp guard included.
+    if args.peek().map(String::as_str) == Some("run") {
+        args.next();
+        let backend = args.next().unwrap_or_else(|| "wgpu".into());
+        let kernel = anzen_vanity::bench::Kernel::parse(&args.next().unwrap_or_default())?;
+        let seconds = args.next().map_or(Ok(5.0), |value| value.parse())?;
+        let report = match backend.as_str() {
+            "wgpu" => anzen_vanity::bench::run_wgpu_blocking(kernel, seconds)?,
+            #[cfg(feature = "metal")]
+            "metal" => anzen_vanity::bench::run_metal(kernel, seconds)?,
+            other => anyhow::bail!("unknown backend {other}"),
+        };
+        println!("{report:?}");
+        return Ok(());
     }
     // `probe-metal [count]`: compile the Metal kernels and report their thread limits, then, if
     // given a count, time one key-kernel dispatch of that many candidates. For checking a risky
@@ -337,36 +353,3 @@ fn median(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     values[values.len() / 2]
 }
-
-/// A fixed, valid key search. 32 bits of target match about once in four billion candidates.
-fn key_inputs() -> SearchInputs {
-    let mut parent_public_key = [0x02_u8; 33];
-    parent_public_key[1..].copy_from_slice(&GENERATOR_X);
-    SearchInputs {
-        parent_public_key,
-        chain_code: [7; 32],
-        signer_key: SIGNER,
-        merkle_root: [9; 32],
-        target_value: 0xffff_ffff,
-        target_bits: 32,
-    }
-}
-
-fn nonce_inputs() -> NonceInputs {
-    NonceInputs {
-        internal_key: GENERATOR_X,
-        signer_key: SIGNER,
-        target_value: 0xffff_ffff,
-        target_bits: 32,
-    }
-}
-
-/// G's x coordinate and 2G's: any valid x-only keys will do.
-const GENERATOR_X: [u8; 32] = [
-    0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87, 0x0b, 0x07,
-    0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98,
-];
-const SIGNER: [u8; 32] = [
-    0xc6, 0x04, 0x7f, 0x94, 0x41, 0xed, 0x7d, 0x6d, 0x30, 0x45, 0x40, 0x6e, 0x95, 0xc0, 0x7c, 0xd8,
-    0x5c, 0x77, 0x8e, 0x4b, 0x8c, 0xef, 0x3c, 0xa7, 0xab, 0xac, 0x09, 0xb9, 0x5c, 0x70, 0x9e, 0xe5,
-];

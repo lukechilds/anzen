@@ -46,6 +46,8 @@ pub const NONCE_LOCKTIMES: std::ops::Range<u32> = 500_000_000..1_700_000_000;
 pub const MAX_INDEX: u32 = (1 << 31) - 1;
 
 #[cfg(feature = "gpu")]
+pub mod bench;
+#[cfg(feature = "gpu")]
 mod gpu;
 #[cfg(feature = "gpu")]
 pub use gpu::{GpuSearch, Prepared, SearchResult};
