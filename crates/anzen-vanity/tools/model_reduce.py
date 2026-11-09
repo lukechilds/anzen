@@ -91,4 +91,9 @@ for n in range(300000):
     else:
         a = [M - random.randrange(3) for _ in range(20)]; b = [M - random.randrange(3) for _ in range(20)]
     check(a, b)
-print("ok: 300k random and edge products reduce to normalized, congruent elements")
+for n in range(50000):
+    a = [random.choice([M + 1, M, random.randrange(M + 2)]) for _ in range(20)]
+    b = [random.choice([M + 1, random.randrange(M + 2)]) for _ in range(20)]
+    check(a, b)
+check([M + 1] * 20, [M + 1] * 20)
+print("ok: 350k random and edge products (limbs up to 2^13) reduce to normalized, congruent elements")

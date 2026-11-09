@@ -72,8 +72,11 @@ Chrome's WebGPU compiled the key kernel better than naga did natively (4.53M/s a
 Ablating the nonce kernel at the start (8-bit windows): the 32 table additions for `t·G` were
 ~67% of its time, the final inversion ~32%, and its three SHA-256 compressions under 1%.
 
-With 16-bit windows and 8 candidates per inversion (third loop, paired against the kernel
-itself): the 16 table additions are **~85%** of the time (removing them runs 6.6× faster), about
+After the third loop's field changes (18-bit signed windows, Q folded in): the 13 additions are
+~82% of the time (6.3% each) and the inversion ~9%.
+
+With 16-bit windows and 8 candidates per inversion (early in the third loop, paired against the
+kernel itself): the 16 table additions are **~85%** of the time (removing them runs 6.6× faster), about
 5.3% each, and the batched inversion **~8%** (skipping it runs 1.087× faster). Removing an
 addition is worth more than anything else, and sharing the inversion further cannot gain much.
 
@@ -103,6 +106,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Fused add/subtract forms in the mixed addition (4·HH, 2(S2 − Y1), R² − J − 2V and M − 2·Y1J each with one light normalization instead of two or three): five fewer normalizations per addition. `tools/model_light.py` checks every light-normalized form; it also showed the existing ones can leave one limb at exactly 2^13, which every bound allows, so the documented invariant is now limbs at most 2^13 | nonce | 1.0486 (60/60) |
 | A second Karatsuba level on the low and high 5-limb halves (their sums stay below 2^14; the middle product's would not, so it stays schoolbook): 250 limb products per multiply instead of 300 | nonce | 1.0235 (60/60), 1.0229 (79/80) |
 | `f_reduce` carries only the 19 high columns before folding; the low columns stay sums below 2^30.4, below 2^31 with the folded terms, and the next chain carries them (20 carry steps fewer per product, checked by the same model) | nonce | 1.0473 (60/60) |
 | `f_reduce` ends with one carry chain, a fold and a tail to limb 5 instead of the full two-chain normalization: after the last small fold only limbs 0..4 exceed 13 bits and the value is below 2^260 + 2^63, so the chain carries out at most 1 and its fold cannot pass limb 5. `tools/model_reduce.py` checks the exact u32 operations over 300k random and extreme products | nonce | 1.0605 (60/60) |
@@ -148,6 +152,7 @@ limits by patching `G_WINDOW_BITS` before compiling.
 
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
+| Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
 | `f_reduce`'s last chain replaced by a tail to limb 6 plus a rarely taken branch (limb 6 overflows about once in 10^4 products) that finishes the chain; the model passes | nonce | Did not compile | Apple's compiler service crashes (XPC_ERROR_CONNECTION_INTERRUPTED) with the branch inlined into every product. A branch-free version runs the full chain anyway |
 | Schoolbook squaring (doubled cross products) instead of Karatsuba squaring, after the reduction changes | nonce | 0.981 (0/60) | Karatsuba squaring stays |
 | Candidates per thread 16 / 4 after the field changes | nonce | 0.993 / 0.957 | 8 stays best |

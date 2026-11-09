@@ -2,8 +2,9 @@
 // in 26 bits, so a column of 20 of them sums in a u32 without carry handling: about two ops per
 // limb product, against about twenty for 32-bit limbs built from 16-bit halves.
 //
-// Every function returns a normalized element: limbs below 2^13 and a value below 2^260, not
-// necessarily below p. `f_canonical` reduces fully, for comparisons and output.
+// Every function returns a normalized element: limbs at most 2^13 and a value below 2^260, not
+// necessarily below p (the light normalization can leave one limb at exactly 2^13, which every
+// bound here allows). `f_canonical` reduces fully, for comparisons and output.
 
 alias F = array<u32, 20>;
 
@@ -199,6 +200,110 @@ fn f_neg(a: F) -> F {
     r[17] = P13_TIMES_32[17] - a[17];
     r[18] = P13_TIMES_32[18] - a[18];
     r[19] = P13_TIMES_32[19] - a[19];
+    return f_normalize_light(r);
+}
+
+// 4a.
+fn f_times4(a: F) -> F {
+    var r: F;
+    r[0] = a[0] * 4u;
+    r[1] = a[1] * 4u;
+    r[2] = a[2] * 4u;
+    r[3] = a[3] * 4u;
+    r[4] = a[4] * 4u;
+    r[5] = a[5] * 4u;
+    r[6] = a[6] * 4u;
+    r[7] = a[7] * 4u;
+    r[8] = a[8] * 4u;
+    r[9] = a[9] * 4u;
+    r[10] = a[10] * 4u;
+    r[11] = a[11] * 4u;
+    r[12] = a[12] * 4u;
+    r[13] = a[13] * 4u;
+    r[14] = a[14] * 4u;
+    r[15] = a[15] * 4u;
+    r[16] = a[16] * 4u;
+    r[17] = a[17] * 4u;
+    r[18] = a[18] * 4u;
+    r[19] = a[19] * 4u;
+    return f_normalize_light(r);
+}
+
+// 2(a − b), as 2(a + 32p − b).
+fn f_double_sub(a: F, b: F) -> F {
+    var r: F;
+    r[0] = (a[0] + P13_TIMES_32[0] - b[0]) * 2u;
+    r[1] = (a[1] + P13_TIMES_32[1] - b[1]) * 2u;
+    r[2] = (a[2] + P13_TIMES_32[2] - b[2]) * 2u;
+    r[3] = (a[3] + P13_TIMES_32[3] - b[3]) * 2u;
+    r[4] = (a[4] + P13_TIMES_32[4] - b[4]) * 2u;
+    r[5] = (a[5] + P13_TIMES_32[5] - b[5]) * 2u;
+    r[6] = (a[6] + P13_TIMES_32[6] - b[6]) * 2u;
+    r[7] = (a[7] + P13_TIMES_32[7] - b[7]) * 2u;
+    r[8] = (a[8] + P13_TIMES_32[8] - b[8]) * 2u;
+    r[9] = (a[9] + P13_TIMES_32[9] - b[9]) * 2u;
+    r[10] = (a[10] + P13_TIMES_32[10] - b[10]) * 2u;
+    r[11] = (a[11] + P13_TIMES_32[11] - b[11]) * 2u;
+    r[12] = (a[12] + P13_TIMES_32[12] - b[12]) * 2u;
+    r[13] = (a[13] + P13_TIMES_32[13] - b[13]) * 2u;
+    r[14] = (a[14] + P13_TIMES_32[14] - b[14]) * 2u;
+    r[15] = (a[15] + P13_TIMES_32[15] - b[15]) * 2u;
+    r[16] = (a[16] + P13_TIMES_32[16] - b[16]) * 2u;
+    r[17] = (a[17] + P13_TIMES_32[17] - b[17]) * 2u;
+    r[18] = (a[18] + P13_TIMES_32[18] - b[18]) * 2u;
+    r[19] = (a[19] + P13_TIMES_32[19] - b[19]) * 2u;
+    return f_normalize_light(r);
+}
+
+// a − 2b, as a + 64p − 2b.
+fn f_sub_double(a: F, b: F) -> F {
+    var r: F;
+    r[0] = a[0] + P13_TIMES_32[0] * 2u - b[0] * 2u;
+    r[1] = a[1] + P13_TIMES_32[1] * 2u - b[1] * 2u;
+    r[2] = a[2] + P13_TIMES_32[2] * 2u - b[2] * 2u;
+    r[3] = a[3] + P13_TIMES_32[3] * 2u - b[3] * 2u;
+    r[4] = a[4] + P13_TIMES_32[4] * 2u - b[4] * 2u;
+    r[5] = a[5] + P13_TIMES_32[5] * 2u - b[5] * 2u;
+    r[6] = a[6] + P13_TIMES_32[6] * 2u - b[6] * 2u;
+    r[7] = a[7] + P13_TIMES_32[7] * 2u - b[7] * 2u;
+    r[8] = a[8] + P13_TIMES_32[8] * 2u - b[8] * 2u;
+    r[9] = a[9] + P13_TIMES_32[9] * 2u - b[9] * 2u;
+    r[10] = a[10] + P13_TIMES_32[10] * 2u - b[10] * 2u;
+    r[11] = a[11] + P13_TIMES_32[11] * 2u - b[11] * 2u;
+    r[12] = a[12] + P13_TIMES_32[12] * 2u - b[12] * 2u;
+    r[13] = a[13] + P13_TIMES_32[13] * 2u - b[13] * 2u;
+    r[14] = a[14] + P13_TIMES_32[14] * 2u - b[14] * 2u;
+    r[15] = a[15] + P13_TIMES_32[15] * 2u - b[15] * 2u;
+    r[16] = a[16] + P13_TIMES_32[16] * 2u - b[16] * 2u;
+    r[17] = a[17] + P13_TIMES_32[17] * 2u - b[17] * 2u;
+    r[18] = a[18] + P13_TIMES_32[18] * 2u - b[18] * 2u;
+    r[19] = a[19] + P13_TIMES_32[19] * 2u - b[19] * 2u;
+    return f_normalize_light(r);
+}
+
+// a − b − 2c, as a + 64p − b − 2c.
+fn f_sub_sub_double(a: F, b: F, c: F) -> F {
+    var r: F;
+    r[0] = a[0] + P13_TIMES_32[0] * 2u - b[0] - c[0] * 2u;
+    r[1] = a[1] + P13_TIMES_32[1] * 2u - b[1] - c[1] * 2u;
+    r[2] = a[2] + P13_TIMES_32[2] * 2u - b[2] - c[2] * 2u;
+    r[3] = a[3] + P13_TIMES_32[3] * 2u - b[3] - c[3] * 2u;
+    r[4] = a[4] + P13_TIMES_32[4] * 2u - b[4] - c[4] * 2u;
+    r[5] = a[5] + P13_TIMES_32[5] * 2u - b[5] - c[5] * 2u;
+    r[6] = a[6] + P13_TIMES_32[6] * 2u - b[6] - c[6] * 2u;
+    r[7] = a[7] + P13_TIMES_32[7] * 2u - b[7] - c[7] * 2u;
+    r[8] = a[8] + P13_TIMES_32[8] * 2u - b[8] - c[8] * 2u;
+    r[9] = a[9] + P13_TIMES_32[9] * 2u - b[9] - c[9] * 2u;
+    r[10] = a[10] + P13_TIMES_32[10] * 2u - b[10] - c[10] * 2u;
+    r[11] = a[11] + P13_TIMES_32[11] * 2u - b[11] - c[11] * 2u;
+    r[12] = a[12] + P13_TIMES_32[12] * 2u - b[12] - c[12] * 2u;
+    r[13] = a[13] + P13_TIMES_32[13] * 2u - b[13] - c[13] * 2u;
+    r[14] = a[14] + P13_TIMES_32[14] * 2u - b[14] - c[14] * 2u;
+    r[15] = a[15] + P13_TIMES_32[15] * 2u - b[15] - c[15] * 2u;
+    r[16] = a[16] + P13_TIMES_32[16] * 2u - b[16] - c[16] * 2u;
+    r[17] = a[17] + P13_TIMES_32[17] * 2u - b[17] - c[17] * 2u;
+    r[18] = a[18] + P13_TIMES_32[18] * 2u - b[18] - c[18] * 2u;
+    r[19] = a[19] + P13_TIMES_32[19] * 2u - b[19] - c[19] * 2u;
     return f_normalize_light(r);
 }
 
@@ -838,15 +943,13 @@ fn jac_add_affine(p: JacF, q: AffF) -> JacF {
     let z1h = f_mul(p.z, h);
     let z3 = f_add(z1h, z1h);
     let hh = f_sqr(h);
-    let s_diff = f_sub(s2, p.y);
-    var i = f_add(hh, hh);
-    i = f_add(i, i);
+    let i = f_times4(hh);
     let j = f_mul(h, i);
-    let r = f_add(s_diff, s_diff);
+    let r = f_double_sub(s2, p.y);
     let v = f_mul(p.x, i);
-    let x3 = f_sub(f_sub(f_sqr(r), j), f_add(v, v));
+    let x3 = f_sub_sub_double(f_sqr(r), j, v);
     let y1j = f_mul(p.y, j);
-    let y3 = f_sub(f_mul(r, f_sub(v, x3)), f_add(y1j, y1j));
+    let y3 = f_sub_double(f_mul(r, f_sub(v, x3)), y1j);
     return JacF(x3, y3, z3, false);
 }
 

@@ -266,6 +266,25 @@ def main() -> None:
     block += limbwise("f_add", "a: F, b: F", "a[{i}] + b[{i}]", "// a + b.")
     block += limbwise("f_sub", "a: F, b: F", "a[{i}] + P13_TIMES_32[{i}] - b[{i}]", "// a − b, as a + 32p − b.")
     block += limbwise("f_neg", "a: F", "P13_TIMES_32[{i}] - a[{i}]", "// −a, as 32p − a.")
+    # Fused forms for the mixed addition: one normalization where chained adds and subtracts
+    # would take two or three. Limbs stay below 2^17, and tools/model_light.py checks the light
+    # normalization keeps them at or below 2^13.
+    block += limbwise("f_times4", "a: F", "a[{i}] * 4u", "// 4a.")
+    block += limbwise(
+        "f_double_sub", "a: F, b: F", "(a[{i}] + P13_TIMES_32[{i}] - b[{i}]) * 2u", "// 2(a − b), as 2(a + 32p − b)."
+    )
+    block += limbwise(
+        "f_sub_double",
+        "a: F, b: F",
+        "a[{i}] + P13_TIMES_32[{i}] * 2u - b[{i}] * 2u",
+        "// a − 2b, as a + 64p − 2b.",
+    )
+    block += limbwise(
+        "f_sub_sub_double",
+        "a: F, b: F, c: F",
+        "a[{i}] + P13_TIMES_32[{i}] * 2u - b[{i}] - c[{i}] * 2u",
+        "// a − b − 2c, as a + 64p − b − 2c.",
+    )
     block += reduce()
     block += multiply()
     block += square()
