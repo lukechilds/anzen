@@ -146,6 +146,8 @@ limits by patching `G_WINDOW_BITS` before compiling.
 
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
+| `f_reduce`'s last chain replaced by a tail to limb 6 plus a rarely taken branch (limb 6 overflows about once in 10^4 products) that finishes the chain; the model passes | nonce | Did not compile | Apple's compiler service crashes (XPC_ERROR_CONNECTION_INTERRUPTED) with the branch inlined into every product. A branch-free version runs the full chain anyway |
+| Only X and Z kept per candidate until the batch inversion (Y dropped from the stored point) | nonce | 0.999 (21/60) | The compiler already drops the dead Y |
 | First addition affine plus affine (mmadd-2007-bl, 4M + 2S), window 1 peeled out of the loop; compiled this time | nonce | 0.979 (1/60) | Keeping the affine start alive for it costs more than the multiplies it saves |
 | `f_sqr` as `f_mul(a, a)` (smaller code, more products) | nonce | 0.937 (0/40) | The specialized square pays; code size is not the limit |
 | Table points read as four `vec4<u32>` loads instead of sixteen `u32` | nonce | 0.999 (18/60) | The compiler already merges them |
