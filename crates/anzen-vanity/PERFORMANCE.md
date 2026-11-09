@@ -27,15 +27,16 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 ## Current speed
 
 M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benchmark.rs run`):
-**~35M/s**, so `vault` takes ~1.0 s on average, after ~0.15 s of setup (compiling the kernel and
+**~37.6M/s**, so `vault` takes ~0.9 s on average, after ~0.15 s of setup (compiling the kernel and
 building the 128 MiB generator table on the GPU); `anzen phone init --vanity` on regtest finds one
 in ~1.4 s end to end. Sustained load throttles by up to ~25% within a minute, and much further
-after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~33M/s**.
+after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~36M/s** (measured before the last
+safegcd change).
 
-The third loop took the kernel from ~19.5M/s to ~35M/s (1.79×): Q folded into window 0, signed
+The third loop took the kernel from ~19.5M/s to ~37.6M/s (1.93×): Q folded into window 0, signed
 and then varying window widths (16 additions to 13), the generator table built on the GPU, a
 reordered mixed addition, Karatsuba products, shorter reductions, fused normalizations, XYZZ
-coordinates and an affine first addition. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
+coordinates, an affine first addition and safegcd inversion. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
 generator table of about 2^22.2 points.
 
 Phones, from the app's settings benchmark (5 s, cool; measured while the key kernel still existed,
@@ -177,6 +178,8 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Candidates per thread 16 / 10 / 6 with the first addition peeled; 4 / 6 after safegcd made the inversion cheap | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40); 0.984 / 0.995 | 8 stays |
 | Fermat inversion with x2 and x3 recomputed late rather than held through the long squaring runs | nonce | 1.001 (31/60) | No spill to relieve; superseded by safegcd |
 | Negative digits negated on the canonical words (p − y with an 8-word borrow chain) instead of `f_neg` | nonce | 1.004 (43/60) | Too small |
+| safegcd's 13 divsteps per batch written out instead of looped | nonce | 0.991 (3/60) | The loop stays |
+| safegcd stopping once g reaches 0 (a per-batch check; later batches only keep d congruent) | nonce | 0.991 (1/60) | The slowest of a SIMD group's lanes runs close to the bound, so the check costs more than it saves |
 | One inversion shared by partner invocations in the two halves of a workgroup (separate SIMD groups on Apple GPUs; products exchanged through workgroup memory, so the second group skips the inversion) | nonce | 0.972 (0/60) | The idle group waits at the barrier, and at this kernel's register-limited occupancy nothing fills it |
 | Subtractive two-level Karatsuba for squares only ((low − high)² takes a second level: 135 limb products instead of 145) | nonce | 1.002 (45/60) | Too small to matter |
 | Table loads pointed at a few cached entries (ablation, not a change) | nonce | 1.015 (30/30) | Load latency is only ~1.5% of the time even at low occupancy, so prefetching cannot gain much |
