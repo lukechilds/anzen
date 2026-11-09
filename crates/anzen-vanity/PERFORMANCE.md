@@ -119,6 +119,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Inversion by Bernstein–Yang safegcd instead of Fermat's 255 squares: libsecp256k1's modinv32 in batches of 13 divsteps over 20 signed 13-bit limbs, so every matrix product stays within an i32 (no 64-bit emulation); 46 batches make 598 divsteps. `tools/model_safegcd.py` checks the exact i32 operations and their bounds over 20,000 inversions; the field test checks it against bignum, including 0 | nonce | 1.0403, 1.0401 (60/60 both) |
 | The first addition peeled out of the loop as affine plus affine into XYZZ (both ZZ = 1, 4M + 2S: U2, S2, ZZ3 and ZZZ3 become copies), unlike the Jacobian attempt that lost | nonce | 1.0238 (60/60), 1.0238 (78/80) |
 | XYZZ coordinates (x = X/ZZ, y = Y/ZZZ) for the search's accumulator: the mixed addition is madd-2008-s, 8M + 2S instead of 8M + 3S, and the output key is X·ZZ⁻¹, so the batch inversion drops a square per candidate. The extra coordinate costs less than the square | nonce | 1.1044, 1.1014 (60/60 both) |
 | 13 additions instead of 14 with varying window widths that fill both per-binding limits: window 0 is 20 bits (its Q table is 2^20 + 1 points, 64 MB), and the generator table's 13 windows of 19, 19, 19 and ten 18 bits hold exactly 2^21 points (128 MiB), covering 257 bits. Setup builds the same number of points, plus a million-point Q fold per search. Measured in alternating whole runs (the host changed): 1.0738 over 10 rounds. While building it, a version computing a split multiple with point arithmetic in several branches came out of Apple's compiler wrong; the arithmetic now appears once and new tests check every table entry | nonce | 1.0738 |
@@ -173,6 +174,8 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
 | The last addition peeled out of the loop computing only X3 and ZZ3 (6M + 2S) | nonce | 1.0055 (56/60) | Too small for the extra code |
 | Candidates per thread 16 / 10 / 6 with the first addition peeled | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40) | 8 stays |
+| Fermat inversion with x2 and x3 recomputed late rather than held through the long squaring runs | nonce | 1.001 (31/60) | No spill to relieve; superseded by safegcd |
+| Negative digits negated on the canonical words (p − y with an 8-word borrow chain) instead of `f_neg` | nonce | 1.004 (43/60) | Too small |
 | One inversion shared by partner invocations in the two halves of a workgroup (separate SIMD groups on Apple GPUs; products exchanged through workgroup memory, so the second group skips the inversion) | nonce | 0.972 (0/60) | The idle group waits at the barrier, and at this kernel's register-limited occupancy nothing fills it |
 | Subtractive two-level Karatsuba for squares only ((low − high)² takes a second level: 135 limb products instead of 145) | nonce | 1.002 (45/60) | Too small to matter |
 | Table loads pointed at a few cached entries (ablation, not a change) | nonce | 1.015 (30/30) | Load latency is only ~1.5% of the time even at low occupancy, so prefetching cannot gain much |

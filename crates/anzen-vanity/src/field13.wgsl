@@ -741,31 +741,123 @@ fn f_sqr(a: F) -> F {
 }
 // END GENERATED
 
-fn f_sqr_n(a: F, n: u32) -> F {
-    var r = a;
-    for (var i = 0u; i < n; i++) {
-        r = f_sqr(r);
-    }
-    return r;
+// 1/a by Bernstein–Yang safegcd, as libsecp256k1's modinv32 but in batches of 13 divsteps over
+// 20 signed 13-bit limbs: a batch's transition matrix has entries within 2^13, so applying it
+// to a limb stays within an i32 and no 64-bit arithmetic is needed. 46 batches make 598
+// divsteps, past the 590 that 256-bit inputs need. f and g run from p and a towards ±1 and 0;
+// d and e track the coefficients of a, staying within (−2p, p). Limbs 0..18 lie in 0..2^13 and
+// limb 19 holds the signed rest.
+alias S = array<i32, 20>;
+const S_MASK: i32 = 0x1fff;
+// p^-1 mod 2^13.
+const P_INV13: u32 = 2767u;
+
+struct Transition {
+    zeta: i32,
+    u: i32,
+    v: i32,
+    q: i32,
+    r: i32,
 }
 
-// a^(p-2) with libsecp256k1's addition chain.
+// 13 divsteps on the low bits of f and g (libsecp256k1's branch-free form).
+fn divsteps13(zeta_in: i32, f0: u32, g0: u32) -> Transition {
+    var zeta = zeta_in;
+    var f = f0;
+    var g = g0;
+    var u = 1u;
+    var v = 0u;
+    var q = 0u;
+    var r = 1u;
+    for (var i = 0u; i < 13u; i++) {
+        var c1 = bitcast<u32>(zeta >> 31u);
+        let c2 = 0u - (g & 1u);
+        let x = (f ^ c1) - c1;
+        let y = (u ^ c1) - c1;
+        let z = (v ^ c1) - c1;
+        g += x & c2;
+        q += y & c2;
+        r += z & c2;
+        c1 &= c2;
+        zeta = (zeta ^ bitcast<i32>(c1)) - 1;
+        f += g & c1;
+        u += q & c1;
+        v += r & c1;
+        g >>= 1u;
+        u <<= 1u;
+        v <<= 1u;
+    }
+    return Transition(zeta, bitcast<i32>(u), bitcast<i32>(v), bitcast<i32>(q), bitcast<i32>(r));
+}
+
 fn f_inv(a: F) -> F {
-    let x2 = f_mul(f_sqr(a), a);
-    let x3 = f_mul(f_sqr(x2), a);
-    let x6 = f_mul(f_sqr_n(x3, 3u), x3);
-    let x9 = f_mul(f_sqr_n(x6, 3u), x3);
-    let x11 = f_mul(f_sqr_n(x9, 2u), x2);
-    let x22 = f_mul(f_sqr_n(x11, 11u), x11);
-    let x44 = f_mul(f_sqr_n(x22, 22u), x22);
-    let x88 = f_mul(f_sqr_n(x44, 44u), x44);
-    let x176 = f_mul(f_sqr_n(x88, 88u), x88);
-    let x220 = f_mul(f_sqr_n(x176, 44u), x44);
-    let x223 = f_mul(f_sqr_n(x220, 3u), x3);
-    var t = f_mul(f_sqr_n(x223, 23u), x22);
-    t = f_mul(f_sqr_n(t, 5u), a);
-    t = f_mul(f_sqr_n(t, 3u), x2);
-    return f_mul(f_sqr_n(t, 2u), a);
+    let reduced = f_canonical(a);
+    var f: S;
+    var g: S;
+    var d: S;
+    var e: S;
+    for (var i = 0u; i < 20u; i++) {
+        f[i] = i32(P13[i]);
+        g[i] = i32(reduced[i]);
+    }
+    e[0] = 1;
+    var zeta = -1;
+    for (var batch = 0u; batch < 46u; batch++) {
+        let t = divsteps13(zeta, u32(f[0]), u32(g[0]));
+        zeta = t.zeta;
+        // [d, e] = (t·[d, e] + p·[md, me]) / 2^13, with md and me making the division exact and
+        // keeping the results within (−2p, p).
+        let sd = d[19] >> 31u;
+        let se = e[19] >> 31u;
+        var md = (t.u & sd) + (t.v & se);
+        var me = (t.q & sd) + (t.r & se);
+        var cd = t.u * d[0] + t.v * e[0];
+        var ce = t.q * d[0] + t.r * e[0];
+        md -= bitcast<i32>((P_INV13 * bitcast<u32>(cd) + bitcast<u32>(md)) & 0x1fffu);
+        me -= bitcast<i32>((P_INV13 * bitcast<u32>(ce) + bitcast<u32>(me)) & 0x1fffu);
+        cd = (cd + i32(P13[0]) * md) >> 13u;
+        ce = (ce + i32(P13[0]) * me) >> 13u;
+        for (var i = 1u; i < 20u; i++) {
+            cd += t.u * d[i] + t.v * e[i] + i32(P13[i]) * md;
+            ce += t.q * d[i] + t.r * e[i] + i32(P13[i]) * me;
+            d[i - 1u] = cd & S_MASK;
+            cd >>= 13u;
+            e[i - 1u] = ce & S_MASK;
+            ce >>= 13u;
+        }
+        d[19] = cd;
+        e[19] = ce;
+        // [f, g] = t·[f, g] / 2^13, exactly.
+        var cf = (t.u * f[0] + t.v * g[0]) >> 13u;
+        var cg = (t.q * f[0] + t.r * g[0]) >> 13u;
+        for (var i = 1u; i < 20u; i++) {
+            cf += t.u * f[i] + t.v * g[i];
+            cg += t.q * f[i] + t.r * g[i];
+            f[i - 1u] = cf & S_MASK;
+            cf >>= 13u;
+            g[i - 1u] = cg & S_MASK;
+            cg >>= 13u;
+        }
+        f[19] = cf;
+        g[19] = cg;
+    }
+    // f = ±1, and the inverse is d·f: negate d when f is −1, then add 2p if it is negative.
+    let negative = f[19] < 0;
+    var carry = 0;
+    for (var i = 0u; i < 20u; i++) {
+        let value = select(d[i], -d[i], negative) + carry;
+        d[i] = select(value & S_MASK, value, i == 19u);
+        carry = value >> 13u;
+    }
+    let add = select(0, 2, d[19] < 0);
+    carry = 0;
+    var out: F;
+    for (var i = 0u; i < 20u; i++) {
+        let value = d[i] + add * i32(P13[i]) + carry;
+        out[i] = u32(select(value & S_MASK, value, i == 19u));
+        carry = value >> 13u;
+    }
+    return out;
 }
 
 // The unique representative below p.
