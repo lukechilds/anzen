@@ -71,7 +71,7 @@ impl Tuning {
             per_invocation: constant("PER_INVOCATION", Some(1))?,
         };
         ensure!(
-            (1..=20).contains(&tuning.g_window_bits)
+            (1..=24).contains(&tuning.g_window_bits)
                 && tuning.workgroup_size > 0
                 && tuning.per_invocation > 0,
             "shader tuning out of range: {tuning:?}"

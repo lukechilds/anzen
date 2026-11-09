@@ -119,6 +119,25 @@ What other secp256k1 GPU engines do, and whether it applies here:
 | Nonce: 8 candidates per invocation share one field inversion (Montgomery's trick); 4 gave 1.49×, 16 gave 1.56× | nonce | 1.55× |
 | G table windows 8 → 16 bits: 16 mixed additions per `k·G` instead of 32, 67 MB table built on every core (12 bits gave +21%/+27%) | key / nonce | 1.38× / 1.52× |
 
+## Window size against setup
+
+With the table built on the GPU, wider signed windows cost setup time rather than CPU time.
+On the M4 Max, against 18-bit (14 additions):
+
+| Window | Additions | Table | Throughput | Setup (warm) | `vault` incl. setup |
+|---|---|---|---|---|---|
+| 18-bit | 14 | 126 MB | 1× (~21M/s) | 0.14 s | ~1.74 s |
+| 19-bit | 13 | 235 MB | 1.062 (60/60) | — | — |
+| 20-bit | 12 | 436 MB | 1.129 (60/60), ~24.7M/s | 0.40 s | ~1.76 s |
+| 22-bit | 11 | 1.6 GB | ~26.5M/s | 2.45 s | ~3.7 s |
+
+A table entry costs about 1.4 candidates (one addition and one inversion), so for a single
+`vault` search (2^25 candidates) the extra setup cancels the faster search on the M4 Max and
+loses on slower GPUs, while browsers default to a 128 MiB storage limit. 18-bit stays the
+default. Longer searches (a `vault` prefix plus suffix characters, 2^30 and up) would gain from
+the wider windows; the host could choose the width from the expected work and the device's
+limits by patching `G_WINDOW_BITS` before compiling.
+
 ## Tried and rejected
 
 | Idea | Kernel | Result | Why |
