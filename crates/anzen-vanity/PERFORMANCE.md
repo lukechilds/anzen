@@ -102,6 +102,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| One level of Karatsuba in `f_mul` and `f_sqr` (300 limb products instead of 400, 165 instead of 210), with Z3 = 2·Z1·H in the mixed addition (a multiply instead of a square and two subtractions, freeing Z1 and Z1Z1 at once). Each alone was ~1% before the addition was reordered; together after it, far more | nonce | 1.0619, 1.0713 (60/60 both) |
 | Mixed addition reordered to end values' lives early (Z3 right after HH frees Z1 and Z1Z1): the same operations, but each field element held is 20 registers and the addition spilled. Register pressure, not arithmetic, is what limits the kernel now | nonce | 1.0345 (56/60), 1.0489 (60/60) |
 | Signed 18-bit windows: digits from −2^17 to 2^17 (negative ones negate y), 15 windows instead of 16, so 14 additions with Q folded in; the table is 15 × 2^17 points, 126 MB, under browsers' 128 MiB default. Built on the GPU (next row) so setup does not double | nonce | 1.0458 (60/60) |
 | Generator table built on the GPU: the CPU computes lo·B and (hi·512)·B per window (~11,000 points) and each GPU thread adds one pair and inverts it, in 32,768-thread submissions. Setup on the M4 Max 0.45 → 0.14 s warm; in Chrome the single-thread WASM table build of ~4 s is gone. A test compares all 2M entries with the CPU's table | nonce | setup only |
@@ -147,7 +148,10 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | `f_sqr` as `f_mul(a, a)` (smaller code, more products) | nonce | 0.937 (0/40) | The specialized square pays; code size is not the limit |
 | Table points read as four `vec4<u32>` loads instead of sixteen `u32` | nonce | 0.999 (18/60) | The compiler already merges them |
 | Candidates per thread 16 / 4, workgroup size 32 / 128, after the signed windows | nonce | 0.988 / 0.965; 0.996 / 0.993 | 8 per thread and 64 per group stay best |
-| One level of Karatsuba in `f_mul` and `f_sqr` (300 limb products instead of 400, 165 instead of 210; the 13-bit limbs leave room for the half sums) | nonce | 1.011 / 1.013 (59/60, 60/60); multiply only 1.009 | Consistent but small: integer multiplies are not the bottleneck. Worth stacking later if the bar drops |
+| One level of Karatsuba in `f_mul` and `f_sqr`, alone, before the addition was reordered | nonce | 1.011 / 1.013 (59/60, 60/60); multiply only 1.009 | Small alone; kept later together with Z3 = 2·Z1·H (see Kept) |
+| Table coordinates read lazily inside the addition (x just before H, y after Z3) | nonce | 1.005 (38/60) | The compiler already schedules the loads |
+| Z3 = 2·Z1·H alone | nonce | 1.008 (58/60) | Small alone; kept with Karatsuba |
+| Y1·J computed right after J | nonce | 0.992 (3/60) on top of Z3 = 2·Z1·H | Holds J's product longer |
 | Candidates per thread 4 / 16 (from 8) on the 13-bit nonce kernels | nonce / metal nonce | 0.98 / 0.95 at 4; 0.99 / 0.99 at 16 | 8 stays best after the field change |
 | wgpu nonce on the unrolled 32-bit field instead of 13-bit | nonce | 0.89 | Without mulhi the 13-bit field still wins on wgpu |
 | Metal kernels: candidates per thread 4 / 16 after the field change (from 8) | metal key / metal nonce | 0.93 / 0.90 at 4; 0.65 / 0.99 at 16 | 8 stays best |

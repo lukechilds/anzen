@@ -138,29 +138,72 @@ def reduce() -> list[str]:
     return lines
 
 
-def multiply() -> list[str]:
-    lines = ["fn f_mul(a: F, b: F) -> F {", "    var c: array<u32, 39>;"]
+HALF = LIMBS // 2
+
+
+def columns(prefix: str, a: str, b: str, square: bool) -> list[str]:
+    """`let` bindings for the 19 column sums of a 10-limb product (or square) of expressions."""
+    lines = []
+    for k in range(2 * HALF - 1):
+        if square:
+            cross = [f"{a(i)} * {a(k - i)}" for i in range(HALF) if i < k - i < HALF]
+            parts = ["(" + " + ".join(cross) + ") * 2u"] if cross else []
+            if k % 2 == 0:
+                parts.append(f"{a(k // 2)} * {a(k // 2)}")
+        else:
+            parts = [f"{a(i)} * {b(k - i)}" for i in range(HALF) if 0 <= k - i < HALF]
+        lines.append(f"    let {prefix}{k} = " + " + ".join(parts) + ";")
+    return lines
+
+
+def karatsuba(square: bool) -> list[str]:
+    """One level of Karatsuba on the two 10-limb halves: low·low, high·high and
+    (low + high)·(low + high), whose middle columns less the other two are the cross terms.
+    Half sums are below 2^14, so their products are below 2^28 and a 10-term column below 2^32;
+    every column difference is exact because the cross terms are non-negative."""
+    lines = []
+    if square:
+        lines += [f"    let s{i} = a[{i}] + a[{i + HALF}];" for i in range(HALF)]
+        lines += columns("lo", lambda i: f"a[{i}]", None, True)
+        lines += columns("hi", lambda i: f"a[{i + HALF}]", None, True)
+        lines += columns("mid", lambda i: f"s{i}", None, True)
+    else:
+        lines += [f"    let s{i} = a[{i}] + a[{i + HALF}];" for i in range(HALF)]
+        lines += [f"    let t{i} = b[{i}] + b[{i + HALF}];" for i in range(HALF)]
+        lines += columns("lo", lambda i: f"a[{i}]", lambda i: f"b[{i}]", False)
+        lines += columns("hi", lambda i: f"a[{i + HALF}]", lambda i: f"b[{i + HALF}]", False)
+        lines += columns("mid", lambda i: f"s{i}", lambda i: f"t{i}", False)
     for k in range(2 * LIMBS - 1):
-        terms = [f"a[{i}] * b[{k - i}]" for i in range(LIMBS) if 0 <= k - i < LIMBS]
+        terms = []
+        if k <= 2 * HALF - 2:
+            terms.append(f"lo{k}")
+        if HALF <= k <= 3 * HALF - 2:
+            m = k - HALF
+            terms.append(f"(mid{m} - lo{m} - hi{m})")
+        if 2 * HALF <= k:
+            terms.append(f"hi{k - 2 * HALF}")
         lines.append(f"    c[{k}] = " + " + ".join(terms) + ";")
+    return lines
+
+
+def multiply() -> list[str]:
+    lines = [
+        "// 300 limb products instead of 400 (one level of Karatsuba).",
+        "fn f_mul(a: F, b: F) -> F {",
+        "    var c: array<u32, 39>;",
+    ]
+    lines += karatsuba(square=False)
     lines += ["    return f_reduce(c);", "}", ""]
     return lines
 
 
 def square() -> list[str]:
     lines = [
-        "// Each cross product once, doubled: 210 limb products instead of 400.",
+        "// 165 limb products instead of 210 (one level of Karatsuba on top of doubled cross products).",
         "fn f_sqr(a: F) -> F {",
         "    var c: array<u32, 39>;",
     ]
-    for k in range(2 * LIMBS - 1):
-        cross = [f"a[{i}] * a[{k - i}]" for i in range(LIMBS) if i < k - i < LIMBS]
-        parts = []
-        if cross:
-            parts.append("(" + " + ".join(cross) + ") * 2u")
-        if k % 2 == 0:
-            parts.append(f"a[{k // 2}] * a[{k // 2}]")
-        lines.append(f"    c[{k}] = " + " + ".join(parts) + ";")
+    lines += karatsuba(square=True)
     lines += ["    return f_reduce(c);", "}", ""]
     return lines
 
