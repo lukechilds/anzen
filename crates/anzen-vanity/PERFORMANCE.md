@@ -169,6 +169,8 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
+| One inversion shared by partner invocations in the two halves of a workgroup (separate SIMD groups on Apple GPUs; products exchanged through workgroup memory, so the second group skips the inversion) | nonce | 0.972 (0/60) | The idle group waits at the barrier, and at this kernel's register-limited occupancy nothing fills it |
+| Subtractive two-level Karatsuba for squares only ((low − high)² takes a second level: 135 limb products instead of 145) | nonce | 1.002 (45/60) | Too small to matter |
 | Table loads pointed at a few cached entries (ablation, not a change) | nonce | 1.015 (30/30) | Load latency is only ~1.5% of the time even at low occupancy, so prefetching cannot gain much |
 | XYZZ addition reordered: Y1·PPP right after PPP (V2), R computed after ZZ3 (V3), or Q = X1·PP before ZZ3 | nonce | 0.986 (0/60) / 0.999 (29/60) / 0.990 (1/60) | The madd-2008-s order as written stays best |
 | A negative digit's sign folded into the XYZZ addition (R from y2·ZZZ ± Y1 and the direction of Q − X3, chosen limb by limb with `select`) instead of negating the table point's y | nonce | 0.926 (0/60) | The per-limb selects cost far more than the branch and negation |
