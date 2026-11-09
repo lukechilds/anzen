@@ -102,19 +102,33 @@ fn words_to_affine(words: array<u32, 16>) -> AffF {
     return AffF(fe_to_f(x), fe_to_f(y), false);
 }
 
+// Each setup thread makes SETUP_PER points and turns them affine with one inversion
+// (Montgomery's trick); the inversion costs far more than a point's additions.
+const SETUP_PER: u32 = 8u;
 
-// The affine x and y limbs of a Jacobian point, with its own inversion.
-fn affine_words(point: JacF) -> array<u32, 16> {
-    let z_inverse = f_inv(point.z);
-    let z_inverse2 = f_sqr(z_inverse);
-    let x = f_to_fe(f_canonical(f_mul(point.x, z_inverse2)));
-    let y = f_to_fe(f_canonical(f_mul(point.y, f_mul(z_inverse2, z_inverse))));
-    var words: array<u32, 16>;
-    for (var i = 0u; i < 8u; i++) {
-        words[i] = x[i];
-        words[8u + i] = y[i];
+fn affine_batch(points: array<JacF, SETUP_PER>) -> array<array<u32, 16>, SETUP_PER> {
+    var products: array<F, SETUP_PER>;
+    products[0] = points[0].z;
+    for (var j = 1u; j < SETUP_PER; j++) {
+        products[j] = f_mul(products[j - 1u], points[j].z);
     }
-    return words;
+    var inverse = f_inv(products[SETUP_PER - 1u]);
+    var out: array<array<u32, 16>, SETUP_PER>;
+    for (var j = SETUP_PER - 1u; j < SETUP_PER; j--) {
+        var z_inverse = inverse;
+        if j > 0u {
+            z_inverse = f_mul(inverse, products[j - 1u]);
+            inverse = f_mul(inverse, points[j].z);
+        }
+        let z_inverse2 = f_sqr(z_inverse);
+        let x = f_to_fe(f_canonical(f_mul(points[j].x, z_inverse2)));
+        let y = f_to_fe(f_canonical(f_mul(points[j].y, f_mul(z_inverse2, z_inverse))));
+        for (var i = 0u; i < 8u; i++) {
+            out[j][i] = x[i];
+            out[j][8u + i] = y[i];
+        }
+    }
+    return out;
 }
 
 // Window 0's small tables for G follow the search parameters.
@@ -125,48 +139,50 @@ const P_FOLD_POINTS: u32 = 64u;
 // probability about 2^-235; the host re-derives any match.
 @compute @workgroup_size(64)
 fn fold_q(@builtin(global_invocation_id) id: vec3<u32>) {
-    let index = params[0] + id.x;
-    if index > 2u * Q_DIGITS {
+    let start = params[0] + id.x * SETUP_PER;
+    if start > 2u * Q_DIGITS {
         return;
     }
     let q = AffF(fe_to_f(read_fe(P_INTERNAL_X)), fe_to_f(read_fe(P_INTERNAL_Y)), false);
-    let negative = index < Q_DIGITS;
-    let digit = select(index - Q_DIGITS, Q_DIGITS - index, negative);
-    let hi = digit >> SPLIT_BITS;
-    let lo = digit & LO_POINTS;
-    // The branches only choose which small-table points to load; the point arithmetic appears
-    // once. With it repeated in several branches, Apple's compiler produced wrong results. A
-    // digit with one term marks the second point as infinity, which the addition skips.
-    let first = select(LO_POINTS + hi - 1u, lo - 1u, hi == 0u);
-    let second = select(0u, lo - 1u, hi != 0u && lo != 0u);
-    var low = words_to_affine(small_point(P_FOLD_POINTS, second));
-    low.infinity = hi == 0u || lo == 0u;
-    var multiple = jac_add_affine(jac_from_affine(words_to_affine(small_point(P_FOLD_POINTS, first))), low);
-    let negated = f_neg(multiple.y);
-    for (var i = 0u; i < 20u; i++) {
-        multiple.y[i] = select(multiple.y[i], negated[i], negative);
+    var points: array<JacF, SETUP_PER>;
+    for (var j = 0u; j < SETUP_PER; j++) {
+        // Past the end, repeat the last index: a valid point, not written.
+        let index = min(start + j, 2u * Q_DIGITS);
+        let negative = index < Q_DIGITS;
+        let digit = select(index - Q_DIGITS, Q_DIGITS - index, negative);
+        let hi = digit >> SPLIT_BITS;
+        let lo = digit & LO_POINTS;
+        // The branches only choose which small-table points to load; the point arithmetic
+        // appears once. With it repeated in several branches, Apple's compiler produced wrong
+        // results. A digit with one term marks the second point as infinity, which the addition
+        // skips; digit 0 computes Q + G and is replaced by Q below.
+        let first = select(select(LO_POINTS + hi - 1u, lo - 1u, hi == 0u), 0u, digit == 0u);
+        let second = select(0u, lo - 1u, hi != 0u && lo != 0u);
+        var low = words_to_affine(small_point(P_FOLD_POINTS, second));
+        low.infinity = hi == 0u || lo == 0u;
+        var multiple = jac_add_affine(jac_from_affine(words_to_affine(small_point(P_FOLD_POINTS, first))), low);
+        let negated = f_neg(multiple.y);
+        for (var i = 0u; i < 20u; i++) {
+            multiple.y[i] = select(multiple.y[i], negated[i], negative);
+        }
+        points[j] = jac_add_affine(multiple, q);
     }
-    var words = affine_words(jac_add_affine(multiple, q));
-    if digit == 0u {
-        // Q itself, straight from the parameters.
-        for (var i = 0u; i < 8u; i++) {
-            words[i] = params[P_INTERNAL_X + i];
-            words[8u + i] = params[P_INTERNAL_Y + i];
+    let words = affine_batch(points);
+    for (var j = 0u; j < SETUP_PER; j++) {
+        let index = start + j;
+        if index <= 2u * Q_DIGITS {
+            for (var i = 0u; i < 16u; i++) {
+                q_table[index * 16u + i] = words[j][i];
+            }
+            if index == Q_DIGITS {
+                // Q itself, straight from the parameters.
+                for (var i = 0u; i < 8u; i++) {
+                    q_table[index * 16u + i] = params[P_INTERNAL_X + i];
+                    q_table[index * 16u + 8u + i] = params[P_INTERNAL_Y + i];
+                }
+            }
         }
     }
-    for (var i = 0u; i < 16u; i++) {
-        q_table[index * 16u + i] = words[i];
-    }
-}
-
-
-// (hi·2^SPLIT_BITS)·B + lo·B from a window's small tables at `start`; hi and lo both nonzero.
-// Callers handle a zero hi or lo themselves: a version branching on them inside, assigning the
-// point on each path, came out of Apple's compiler computing wrong sums.
-fn split_sum(start: u32, hi: u32, lo: u32) -> JacF {
-    let low = words_to_affine(small_point(start, lo - 1u));
-    let high = words_to_affine(small_point(start, LO_POINTS + hi - 1u));
-    return jac_add_affine(jac_from_affine(high), low);
 }
 
 // The generator table's setup pass: one entry per thread.
@@ -174,30 +190,40 @@ const SMALL_BASES = array<u32, 13>(0u, 1023u, 2046u, 3069u, 3836u, 4603u, 5370u,
 
 @compute @workgroup_size(64)
 fn build_table(@builtin(global_invocation_id) id: vec3<u32>) {
-    let entry = params[0] + id.x;
-    if entry >= G_ENTRIES {
+    let start = params[0] + id.x * SETUP_PER;
+    if start >= G_ENTRIES {
         return;
     }
-    var window = 0u;
-    for (var w = 1u; w < G_WINDOWS; w++) {
-        if entry >= G_BASES[w] {
-            window = w;
+    var points: array<JacF, SETUP_PER>;
+    for (var j = 0u; j < SETUP_PER; j++) {
+        // Past the end, repeat the last entry: a valid point, not written.
+        let entry = min(start + j, G_ENTRIES - 1u);
+        var window = 0u;
+        for (var w = 1u; w < G_WINDOWS; w++) {
+            if entry >= G_BASES[w] {
+                window = w;
+            }
         }
+        let digit = entry - G_BASES[window] + 1u;
+        let offset = 4u + SMALL_BASES[window] * 16u;
+        let hi = digit >> SPLIT_BITS;
+        let lo = digit & LO_POINTS;
+        // As in fold_q: the branches only choose points, and a one-term digit marks the second
+        // as infinity.
+        let first = select(LO_POINTS + hi - 1u, lo - 1u, hi == 0u);
+        let second = select(0u, lo - 1u, hi != 0u && lo != 0u);
+        var low = words_to_affine(small_point(offset, second));
+        low.infinity = hi == 0u || lo == 0u;
+        points[j] = jac_add_affine(jac_from_affine(words_to_affine(small_point(offset, first))), low);
     }
-    let digit = entry - G_BASES[window] + 1u;
-    let offset = 4u + SMALL_BASES[window] * 16u;
-    let hi = digit >> SPLIT_BITS;
-    let lo = digit & LO_POINTS;
-    var words: array<u32, 16>;
-    if hi == 0u {
-        words = small_point(offset, lo - 1u);
-    } else if lo == 0u {
-        words = small_point(offset, LO_POINTS + hi - 1u);
-    } else {
-        words = affine_words(split_sum(offset, hi, lo));
-    }
-    for (var i = 0u; i < 16u; i++) {
-        table_out[entry * 16u + i] = words[i];
+    let words = affine_batch(points);
+    for (var j = 0u; j < SETUP_PER; j++) {
+        let entry = start + j;
+        if entry < G_ENTRIES {
+            for (var i = 0u; i < 16u; i++) {
+                table_out[entry * 16u + i] = words[j][i];
+            }
+        }
     }
 }
 

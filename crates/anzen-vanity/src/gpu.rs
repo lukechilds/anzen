@@ -13,10 +13,10 @@ const NONCE_SHADER: &str = concat!(
     include_str!("nonce.wgsl")
 );
 const NONCE_PARAM_WORDS: usize = 60;
-/// Threads per submission in the setup passes. Each thread makes one inversion, so a chunk takes
-/// a few milliseconds on a desktop and tens on an old phone, well inside the watchdog that ends
-/// long GPU work when the display needs the GPU.
-const SETUP_CHUNK: u32 = 1 << 15;
+/// Points per submission in the setup passes. A thread makes SETUP_PER points with one
+/// inversion, so a chunk takes a few milliseconds on a desktop and tens on an old phone, well
+/// inside the watchdog that ends long GPU work when the display needs the GPU.
+const SETUP_CHUNK: u32 = 1 << 17;
 /// The table build's split of each digit into hi·2^SPLIT_BITS + lo, as in the shader.
 const SPLIT_BITS: u32 = 9;
 /// Candidates per dispatch to start with; the search adapts it towards `TARGET_BATCH_TIME`.
@@ -48,6 +48,8 @@ struct Tuning {
     widths: Vec<u32>,
     workgroup_size: u32,
     per_invocation: u32,
+    /// Points each setup thread makes.
+    setup_per: u32,
 }
 
 impl Tuning {
@@ -87,13 +89,15 @@ impl Tuning {
             widths: array("G_WIDTHS")?,
             workgroup_size: constant("WORKGROUP_SIZE")?,
             per_invocation: constant("PER_INVOCATION")?,
+            setup_per: constant("SETUP_PER")?,
         };
         let width_ok = |width: &u32| (SPLIT_BITS + 1..=24).contains(width);
         ensure!(
             width_ok(&tuning.q_bits)
                 && tuning.widths.iter().all(width_ok)
                 && tuning.workgroup_size > 0
-                && tuning.per_invocation > 0,
+                && tuning.per_invocation > 0
+                && tuning.setup_per > 0,
             "shader tuning out of range: {tuning:?}"
         );
         // Signed digits need one bit past the scalar's top for the last window's carry.
@@ -367,8 +371,8 @@ impl GpuSearch {
         Ok(())
     }
 
-    /// Run `pipeline` over `total` threads, SETUP_CHUNK per submission, writing each chunk's
-    /// first thread index to word 0 of `params` before it.
+    /// Run `pipeline` over `total` points, SETUP_CHUNK per submission and `setup_per` per thread,
+    /// writing each chunk's first point to word 0 of `params` before it.
     fn dispatch_chunks(
         &self,
         pipeline: &wgpu::ComputePipeline,
@@ -386,7 +390,10 @@ impl GpuSearch {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, bind_group, &[]);
-                pass.dispatch_workgroups(SETUP_CHUNK.min(total - first).div_ceil(64), 1, 1);
+                let threads = SETUP_CHUNK
+                    .min(total - first)
+                    .div_ceil(self.tuning.setup_per);
+                pass.dispatch_workgroups(threads.div_ceil(64), 1, 1);
             }
             self.queue.submit([encoder.finish()]);
         }
