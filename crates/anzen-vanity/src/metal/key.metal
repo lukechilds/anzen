@@ -4,7 +4,7 @@
 // and then shares one inversion to reach affine form. Large stages are `noinline`: one fully
 // inlined kernel this size stalls Apple's pipeline compiler.
 
-#define PER_INVOCATION 4
+#define PER_INVOCATION 8
 #define THREADS_PER_GROUP 64
 
 // Parameter offsets: the same block as the wgpu key kernel.
