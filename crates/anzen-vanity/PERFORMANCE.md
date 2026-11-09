@@ -27,10 +27,14 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 ## Current speed
 
 M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benchmark.rs run`):
-**~19.5M/s**, so `vault` takes ~1.7 s on average, after 0.45 s of setup (compiling the kernel and
-building the 67 MB generator table on every core). Sustained load throttles by up to ~25% within
-a minute, and by up to ~2× after long runs. Chrome's WebGPU on the same Mac runs the same kernel
-at **19.2M/s**; building the table in single-thread WASM takes ~4 s before the first dispatch.
+**~32.8M/s**, so `vault` takes ~1.0 s on average, after ~0.15 s of setup (compiling the kernel and
+building the 128 MiB generator table on the GPU). Sustained load throttles by up to ~25% within
+a minute, and much further after hours of benchmarking. Chrome's WebGPU on the same Mac runs the
+same kernel at **~28–31M/s** (runs vary).
+
+The third loop took the kernel from ~19.5M/s to ~32.8M/s (1.68×): Q folded into window 0,
+signed and then varying window widths (16 additions to 13), the generator table built on the GPU,
+a reordered mixed addition, Karatsuba products, shorter reductions and fused normalizations.
 
 Phones, from the app's settings benchmark (5 s, cool; measured while the key kernel still existed,
 so setup then also compiled it):
