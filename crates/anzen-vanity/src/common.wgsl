@@ -33,6 +33,9 @@ const P_TARGET_BITS: u32 = 3u;
 @group(0) @binding(2) var<storage, read_write> found: array<atomic<u32>, 1>;
 // Debug only: per candidate, a validity word then the output key's x limbs.
 @group(0) @binding(3) var<storage, read_write> debug_out: array<u32>;
+// Q + d·G for every digit d of window 0 (Q itself at d = 0), as affine 8-limb x then y. One
+// search's setup pass writes it, so candidates start from it and skip one addition.
+@group(0) @binding(4) var<storage, read_write> q_table: array<u32>;
 
 // Tuning. The host reads these constants from the shader source to build tables and size
 // dispatches to match, so a shader change can vary them on its own. The kernel file defines

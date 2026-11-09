@@ -25,6 +25,9 @@ pub struct GpuSearch {
     layout: wgpu::BindGroupLayout,
     search: wgpu::ComputePipeline,
     debug: wgpu::ComputePipeline,
+    /// Each search's setup pass, which writes its window-0 table with Q added. Shaders without
+    /// one (older baselines in A/B runs) start from Q instead.
+    fold_q: Option<wgpu::ComputePipeline>,
     tuning: Tuning,
     g_table: wgpu::Buffer,
     adapter: String,
@@ -84,10 +87,12 @@ pub struct SearchResult {
     pub attempts: u64,
 }
 
-/// A search's parameter block, built once and reused for every batch.
+/// A search's parameter block and its window-0 table with Q added, built once and reused for
+/// every batch.
 #[doc(hidden)]
 pub struct Prepared {
     params: Vec<u32>,
+    q_table: wgpu::Buffer,
 }
 
 impl GpuSearch {
@@ -125,6 +130,7 @@ impl GpuSearch {
                 required_limits: wgpu::Limits {
                     max_storage_buffer_binding_size: table_bytes,
                     max_buffer_size: table_bytes,
+                    max_storage_buffers_per_shader_stage: 5,
                     ..wgpu::Limits::downlevel_defaults()
                 }
                 .using_resolution(limits),
@@ -158,6 +164,7 @@ impl GpuSearch {
                 entry(1, true),
                 entry(2, false),
                 entry(3, false),
+                entry(4, false),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -195,6 +202,7 @@ impl GpuSearch {
         };
         let search = pipeline("search");
         let debug = pipeline("debug");
+        let fold_q = source.contains("fn fold_q(").then(|| pipeline("fold_q"));
         #[cfg(not(target_arch = "wasm32"))]
         for scope in scopes.into_iter().rev() {
             if let Some(error) = scope.pop().await {
@@ -207,6 +215,7 @@ impl GpuSearch {
             layout,
             search,
             debug,
+            fold_q,
             tuning,
             g_table,
             // Browsers do not name the GPU.
@@ -242,8 +251,65 @@ impl GpuSearch {
 
     #[doc(hidden)]
     pub fn prepare_nonce(&self, inputs: &NonceInputs) -> Result<Prepared> {
-        Ok(Prepared {
-            params: encode_nonce_params(inputs)?,
+        let params = encode_nonce_params(inputs)?;
+        // Q + d·G for every window-0 digit d, built on the GPU: 2^G_WINDOW_BITS threads, each
+        // with one addition and one inversion, so it takes milliseconds. Batches queued after it
+        // see its writes.
+        let Some(fold_q) = &self.fold_q else {
+            return Ok(Prepared {
+                params,
+                q_table: self.scratch("no window 0"),
+            });
+        };
+        let digits = 1_u32 << self.tuning.g_window_bits;
+        let q_table = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("window 0 with Q"),
+            size: u64::from(digits) * 16 * 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        // WebGPU rejects one writable buffer bound twice, so each unused binding gets its own.
+        let bind_group = self.bind_group(&[
+            (0, &upload(&self.device, "params", &params)),
+            (1, &self.g_table),
+            (2, &self.scratch("unused found")),
+            (3, &self.scratch("unused debug")),
+            (4, &q_table),
+        ]);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(fold_q);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(digits.div_ceil(64), 1, 1);
+        }
+        self.queue.submit([encoder.finish()]);
+        Ok(Prepared { params, q_table })
+    }
+
+    /// A small storage buffer for bindings a pass does not use.
+    fn scratch(&self, label: &str) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        })
+    }
+
+    fn bind_group(&self, entries: &[(u32, &wgpu::Buffer)]) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vanity"),
+            layout: &self.layout,
+            entries: &entries
+                .iter()
+                .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: buffer.as_entire_binding(),
+                })
+                .collect::<Vec<_>>(),
         })
     }
 
@@ -372,20 +438,13 @@ impl GpuSearch {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("vanity"),
-            layout: &self.layout,
-            entries: &[
-                (0, &params),
-                (1, &self.g_table),
-                (2, &found),
-                (3, &debug_out),
-            ]
-            .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                binding,
-                resource: buffer.as_entire_binding(),
-            }),
-        });
+        let bind_group = self.bind_group(&[
+            (0, &params),
+            (1, &self.g_table),
+            (2, &found),
+            (3, &debug_out),
+            (4, &prepared.q_table),
+        ]);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -507,16 +566,14 @@ impl GpuSearch {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("field test"),
-            layout: &self.layout,
-            entries: &[(0, &params), (1, &self.g_table), (2, &unused), (3, &out)].map(
-                |(binding, buffer)| wgpu::BindGroupEntry {
-                    binding,
-                    resource: buffer.as_entire_binding(),
-                },
-            ),
-        });
+        let no_q_table = self.scratch("field test window 0");
+        let bind_group = self.bind_group(&[
+            (0, &params),
+            (1, &self.g_table),
+            (2, &unused),
+            (3, &out),
+            (4, &no_q_table),
+        ]);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

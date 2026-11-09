@@ -87,3 +87,45 @@ fn nonce_search_finds_the_first_match_miniscript_agrees_with() {
         );
     }
 }
+
+/// A locktime whose tweak has a zero window-0 digit starts from Q itself, not a table entry with
+/// a multiple of G added: about one candidate in 65,536, so find one on the CPU and check it.
+#[test]
+fn a_zero_first_window_digit_starts_from_q() {
+    use bitcoin::{
+        ScriptBuf,
+        hashes::Hash,
+        taproot::{LeafVersion, TapLeafHash, TapNodeHash, TapTweakHash},
+    };
+    let Some((gpu, internal, signer, inputs)) = nonce_setup() else {
+        return;
+    };
+    let leaf = |locktime: u32| {
+        let script = bitcoin::script::Builder::new()
+            .push_int(i64::from(locktime))
+            .push_opcode(bitcoin::opcodes::all::OP_CLTV)
+            .push_opcode(bitcoin::opcodes::all::OP_VERIFY)
+            .push_int(4_259_839)
+            .push_opcode(bitcoin::opcodes::all::OP_CSV)
+            .push_opcode(bitcoin::opcodes::all::OP_VERIFY)
+            .push_x_only_key(&signer)
+            .push_opcode(bitcoin::opcodes::all::OP_CHECKSIG)
+            .into_script();
+        TapLeafHash::from_script(&ScriptBuf::from(script), LeafVersion::TapScript)
+    };
+    // The tweak is a big-endian scalar, so window 0 is its last two bytes.
+    let locktime = (anzen_vanity::NONCE_LOCKTIMES.start..)
+        .find(|&locktime| {
+            let root = TapNodeHash::from(leaf(locktime));
+            let tweak = TapTweakHash::from_key_and_tweak(internal, Some(root)).to_byte_array();
+            tweak[30] == 0 && tweak[31] == 0
+        })
+        .unwrap();
+    let keys = gpu
+        .nonce_output_keys_blocking(&inputs, locktime, 1)
+        .unwrap();
+    assert_eq!(
+        keys[0],
+        Some(library_nonce_output_key(&internal, &signer, locktime))
+    );
+}

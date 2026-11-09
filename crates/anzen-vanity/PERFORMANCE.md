@@ -71,6 +71,11 @@ Chrome's WebGPU compiled the key kernel better than naga did natively (4.53M/s a
 Ablating the nonce kernel at the start (8-bit windows): the 32 table additions for `t·G` were
 ~67% of its time, the final inversion ~32%, and its three SHA-256 compressions under 1%.
 
+With 16-bit windows and 8 candidates per inversion (third loop, paired against the kernel
+itself): the 16 table additions are **~85%** of the time (removing them runs 6.6× faster), about
+5.3% each, and the batched inversion **~8%** (skipping it runs 1.087× faster). Removing an
+addition is worth more than anything else, and sharing the inversion further cannot gain much.
+
 ## Research
 
 What other secp256k1 GPU engines do, and whether it applies here:
@@ -97,6 +102,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Q folded into window 0: each search's setup pass writes Q + d·G for every window-0 digit (Q at d = 0) on the GPU, one addition and inversion per thread, in milliseconds; candidates start from that entry and make 15 additions instead of 16 | nonce | 1.0575 (60/60) |
 | Metal: point addition and field inversion `noinline` (smaller code, better instruction cache; matches the research) | metal key / metal nonce | 1.039 / 1.108 |
 | Metal nonce: back to the 32-bit field now that it uses mulhi and 32-bit carries (from the 13-bit field) | metal nonce | 1.143 |
 | Metal key: the 32-bit field with 32-bit carries and native `mulhi` for products (it used 64-bit accumulators, which Apple GPUs emulate) | metal key | 2.48 |
@@ -115,6 +121,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
+| One level of Karatsuba in `f_mul` and `f_sqr` (300 limb products instead of 400, 165 instead of 210; the 13-bit limbs leave room for the half sums) | nonce | 1.011 / 1.013 (59/60, 60/60); multiply only 1.009 | Consistent but small: integer multiplies are not the bottleneck. Worth stacking later if the bar drops |
 | Candidates per thread 4 / 16 (from 8) on the 13-bit nonce kernels | nonce / metal nonce | 0.98 / 0.95 at 4; 0.99 / 0.99 at 16 | 8 stays best after the field change |
 | wgpu nonce on the unrolled 32-bit field instead of 13-bit | nonce | 0.89 | Without mulhi the 13-bit field still wins on wgpu |
 | Metal kernels: candidates per thread 4 / 16 after the field change (from 8) | metal key / metal nonce | 0.93 / 0.90 at 4; 0.65 / 0.99 at 16 | 8 stays best |

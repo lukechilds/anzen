@@ -26,9 +26,14 @@ BUILD = ["cargo", "build", "-q", "--release", "-p", "anzen-vanity", "--example",
 
 def build_base(rev: str) -> Path:
     tree = REPO / "target" / "bench-base-tree"
+    # Resolve in the main checkout: inside the worktree, HEAD would mean the worktree's own.
+    commit = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{rev}^{{commit}}"],
+        cwd=REPO, capture_output=True, text=True, check=True,
+    ).stdout.strip()
     if not tree.exists():
-        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(tree), rev], cwd=REPO, check=True)
-    subprocess.run(["git", "checkout", "-q", "--detach", rev], cwd=tree, check=True)
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(tree), commit], cwd=REPO, check=True)
+    subprocess.run(["git", "checkout", "-q", "--detach", commit], cwd=tree, check=True)
     env = dict(os.environ, CARGO_TARGET_DIR=str(REPO / "target" / "bench-base"))
     subprocess.run(BUILD, cwd=tree, env=env, check=True)
     return REPO / "target" / "bench-base" / "release" / "examples" / "benchmark"

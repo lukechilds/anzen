@@ -53,13 +53,46 @@ fn projective(locktime: u32) -> Projective {
         return result;
     }
 
-    // 3. output = Q_even + t·G.
-    var internal: AffF;
-    internal.x = fe_to_f(read_fe(P_INTERNAL_X));
-    internal.y = fe_to_f(read_fe(P_INTERNAL_Y));
-    result.point = jac_add_mul_g(jac_from_affine(internal), tweak);
+    // 3. output = Q_even + t·G: window 0 with Q already added, then the other windows.
+    let start = q_point(window_digit(tweak, 0u, G_WINDOW_BITS));
+    result.point = jac_add_mul_g(jac_from_affine(start), tweak, 1u);
     result.valid = !result.point.infinity;
     return result;
+}
+
+fn q_point(digit: u32) -> AffF {
+    let base = digit * 16u;
+    var x: Fe;
+    var y: Fe;
+    for (var i = 0u; i < 8u; i++) {
+        x[i] = q_table[base + i];
+        y[i] = q_table[base + 8u + i];
+    }
+    return AffF(fe_to_f(x), fe_to_f(y), false);
+}
+
+// The setup pass: q_table[d] = Q + d·G for d in 0..2^G_WINDOW_BITS, each made affine with its
+// own inversion. Q = ±d·G happens with probability about 2^-240; the host re-derives any match.
+@compute @workgroup_size(64)
+fn fold_q(@builtin(global_invocation_id) id: vec3<u32>) {
+    let digit = id.x;
+    if digit > G_DIGITS {
+        return;
+    }
+    var x = read_fe(P_INTERNAL_X);
+    var y = read_fe(P_INTERNAL_Y);
+    if digit != 0u {
+        let q = AffF(fe_to_f(x), fe_to_f(y), false);
+        let sum = jac_add_affine(jac_from_affine(q), g_point_f(0u, digit));
+        let z_inverse = f_inv(sum.z);
+        let z_inverse2 = f_sqr(z_inverse);
+        x = f_to_fe(f_canonical(f_mul(sum.x, z_inverse2)));
+        y = f_to_fe(f_canonical(f_mul(sum.y, f_mul(z_inverse2, z_inverse))));
+    }
+    for (var i = 0u; i < 8u; i++) {
+        q_table[digit * 16u + i] = x[i];
+        q_table[digit * 16u + 8u + i] = y[i];
+    }
 }
 
 // The batch's output keys with one field inversion (Montgomery's trick): invert the product of

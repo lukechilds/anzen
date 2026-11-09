@@ -551,10 +551,10 @@ fn g_point_f(window: u32, digit: u32) -> AffF {
     return AffF(fe_to_f(q.x), fe_to_f(q.y), false);
 }
 
-// acc + k·G from the table: one mixed addition per nonzero window of k.
-fn jac_add_mul_g(start: JacF, k: Fe) -> JacF {
+// acc + k·G from the table, from window `first` up: one mixed addition per nonzero window.
+fn jac_add_mul_g(start: JacF, k: Fe, first: u32) -> JacF {
     var acc = start;
-    for (var w = 0u; w < G_WINDOWS; w++) {
+    for (var w = first; w < G_WINDOWS; w++) {
         let digit = window_digit(k, w * G_WINDOW_BITS, G_WINDOW_BITS);
         if digit != 0u {
             acc = jac_add_affine(acc, g_point_f(w, digit));
