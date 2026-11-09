@@ -28,4 +28,4 @@ pub mod bench;
 #[cfg(feature = "gpu")]
 mod gpu;
 #[cfg(feature = "gpu")]
-pub use gpu::{GpuSearch, Prepared, SearchResult};
+pub use gpu::{GpuSearch, Prepared, SEARCH_CHUNK, SearchResult};

@@ -23,18 +23,28 @@ const SPLIT_BITS: u32 = 9;
 const FIRST_BATCH: u32 = 1 << 16;
 const MAX_BATCH: u32 = 1 << 22;
 const TARGET_BATCH_TIME: Duration = Duration::from_millis(250);
+/// Candidates per chunk of a batch: the shader's first pass writes each candidate's X and ZZ to a
+/// scratch buffer (80 bytes each) and the second inverts them in batches.
+#[doc(hidden)]
+pub const SEARCH_CHUNK: u32 = 1 << 19;
+const SCRATCH_BYTES: u64 = 80;
+/// The parameter word holding a chunk's offset in its batch, as P_CHUNK_OFFSET in the shader.
+const P_CHUNK_OFFSET: usize = 60;
 
 /// An open GPU device with the search kernel compiled.
 pub struct GpuSearch {
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
+    /// A search's first pass: each candidate's X and ZZ, into `search_scratch`.
+    project: wgpu::ComputePipeline,
     search: wgpu::ComputePipeline,
     debug: wgpu::ComputePipeline,
     /// Each search's setup pass, which writes its window-0 table with Q added.
     fold_q: wgpu::ComputePipeline,
     tuning: Tuning,
     g_table: wgpu::Buffer,
+    search_scratch: wgpu::Buffer,
     adapter: String,
 }
 
@@ -313,6 +323,7 @@ impl GpuSearch {
                 cache: None,
             })
         };
+        let project = pipeline("project");
         let search = pipeline("search");
         let debug = pipeline("debug");
         let fold_q = pipeline("fold_q");
@@ -321,11 +332,18 @@ impl GpuSearch {
             device: device.clone(),
             queue,
             layout,
+            project,
             search,
             debug,
             fold_q,
             tuning,
             g_table,
+            search_scratch: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("search scratch"),
+                size: u64::from(SEARCH_CHUNK) * SCRATCH_BYTES,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }),
             // Browsers do not name the GPU.
             adapter: if info.name.is_empty() {
                 format!("{:?}", info.backend)
@@ -587,11 +605,7 @@ impl GpuSearch {
         start: u32,
         count: u32,
     ) -> Result<Vec<u32>> {
-        let mut params = prepared.params.clone();
-        params[0] = start;
-        params[1] = count;
         let read_bytes = if debug { count as u64 * 36 } else { 4 };
-        let params = upload(&self.device, "params", &params);
         let found = {
             use wgpu::util::DeviceExt;
             self.device
@@ -613,22 +627,41 @@ impl GpuSearch {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group = self.bind_group(&[
-            (0, &params),
-            (1, &self.g_table),
-            (2, &found),
-            (3, &debug_out),
-            (4, &prepared.q_table),
-            (5, &self.scratch("unused table output")),
-        ]);
+        // Each chunk's parameters and bind group, all in one pass: WebGPU orders each
+        // dispatch's writes before the next dispatch's reads.
+        let chunks: Vec<(u32, wgpu::BindGroup)> = (0..count)
+            .step_by(SEARCH_CHUNK as usize)
+            .map(|offset| {
+                let size = SEARCH_CHUNK.min(count - offset);
+                let mut params = prepared.params.clone();
+                params.resize(P_CHUNK_OFFSET + 1, 0);
+                params[0] = start + offset;
+                params[1] = size;
+                params[P_CHUNK_OFFSET] = offset;
+                let params = upload(&self.device, "params", &params);
+                let bind_group = self.bind_group(&[
+                    (0, &params),
+                    (1, &self.g_table),
+                    (2, &found),
+                    (3, &debug_out),
+                    (4, &prepared.q_table),
+                    (5, &self.search_scratch),
+                ]);
+                (size, bind_group)
+            })
+            .collect();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(if debug { &self.debug } else { &self.search });
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(self.tuning.workgroups(count), 1, 1);
+            for (size, bind_group) in &chunks {
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_pipeline(&self.project);
+                pass.dispatch_workgroups(size.div_ceil(self.tuning.workgroup_size), 1, 1);
+                pass.set_pipeline(if debug { &self.debug } else { &self.search });
+                pass.dispatch_workgroups(self.tuning.workgroups(*size), 1, 1);
+            }
         }
         let source = if debug { &debug_out } else { &found };
         encoder.copy_buffer_to_buffer(source, 0, &readback, 0, read_bytes);

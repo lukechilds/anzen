@@ -68,6 +68,28 @@ fn nonce_shader_output_keys_match_miniscript() {
     }
 }
 
+/// A batch runs in chunks of SEARCH_CHUNK candidates, each inverted PER_INVOCATION at a time:
+/// check candidates on both sides of a chunk boundary and a partial batch at the end.
+#[test]
+fn nonce_output_keys_match_across_chunks() {
+    let Some((gpu, internal, signer, inputs)) = nonce_setup() else {
+        return;
+    };
+    let start = 1_500_000_000;
+    let count = anzen_vanity::SEARCH_CHUNK + 37;
+    let keys = gpu.nonce_output_keys_blocking(&inputs, start, count).unwrap();
+    assert_eq!(keys.len(), count as usize);
+    let boundary = anzen_vanity::SEARCH_CHUNK;
+    for offset in (0..40).chain(boundary - 40..count) {
+        let locktime = start + offset;
+        assert_eq!(
+            keys[offset as usize],
+            Some(library_nonce_output_key(&internal, &signer, locktime)),
+            "locktime {locktime}"
+        );
+    }
+}
+
 #[test]
 fn nonce_search_finds_the_first_match_miniscript_agrees_with() {
     let Some((gpu, internal, signer, inputs)) = nonce_setup() else {

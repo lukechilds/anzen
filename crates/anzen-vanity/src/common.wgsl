@@ -1,6 +1,6 @@
 // The nonce kernel's shared parts: bindings, the generator table, SHA-256 and the entry points.
-// The kernel defines `candidates(first)`: the vault output keys for a run of candidates, all from
-// public data. The host re-derives any match on the CPU with the library code before using it.
+// The kernel defines `projective(locktime)`: one candidate's vault output key as X and ZZ, all
+// from public data. The host re-derives any match on the CPU with the library code before using it.
 //
 // Scalars and table entries are 8 little-endian 32-bit limbs; field13.wgsl does the field
 // arithmetic in 13-bit limbs.
@@ -191,8 +191,82 @@ struct Candidate {
     output_x: Fe,
 }
 
-// Each invocation evaluates PER_INVOCATION consecutive candidates, which lets the kernel share
-// work between them (one field inversion for the batch).
+// A search runs in chunks of two passes. `project` computes each candidate's X and ZZ (the
+// output key's x is X/ZZ), one candidate per thread with nothing held between candidates, and
+// writes them packed to table_out (bound to a scratch buffer during searches): SCRATCH_WORDS per
+// candidate from the chunk's start. `search` (or `debug`) then takes PER_INVOCATION candidates
+// per thread and shares one field inversion between them (Montgomery's trick).
+const P_CHUNK_OFFSET: u32 = 60u;
+const SCRATCH_WORDS: u32 = 20u;
+// No packed limb pair is all ones (limbs are at most 2^13), so this first word marks t >= n.
+const INVALID_WORD: u32 = 0xffffffffu;
+
+@compute @workgroup_size(WORKGROUP_SIZE)
+fn project(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if index >= params[P_COUNT] {
+        return;
+    }
+    let point = projective(params[P_START] + index);
+    var x = f_pack(point.x);
+    var zz = f_pack(point.zz);
+    if !point.valid {
+        x = Packed();
+        x[0] = INVALID_WORD;
+        zz = f_pack(f_one());
+    }
+    let at = index * SCRATCH_WORDS;
+    for (var i = 0u; i < 10u; i++) {
+        table_out[at + i] = x[i];
+        table_out[at + 10u + i] = zz[i];
+    }
+}
+
+fn scratch_element(at: u32) -> F {
+    var packed: Packed;
+    for (var i = 0u; i < 10u; i++) {
+        packed[i] = table_out[at + i];
+    }
+    return f_unpack(packed);
+}
+
+// The output keys of the chunk's candidates first..first + PER_INVOCATION (those below the
+// count): invert the product of every ZZ, then peel each ZZ's inverse off it. The forward pass
+// overwrites each X with A = X·(the product of the earlier ZZ), so x = A·(the product up to and
+// including this ZZ)⁻¹ and nothing but the running product is held.
+fn finish(first: u32) -> array<Candidate, PER_INVOCATION> {
+    let count = params[P_COUNT];
+    var batch: array<Candidate, PER_INVOCATION>;
+    var product = f_one();
+    for (var j = 0u; j < PER_INVOCATION; j++) {
+        if first + j < count {
+            let at = (first + j) * SCRATCH_WORDS;
+            batch[j].valid = table_out[at] != INVALID_WORD;
+            let zz = scratch_element(at + 10u);
+            if j > 0u {
+                let scaled = f_pack(f_mul(scratch_element(at), product));
+                for (var i = 0u; i < 10u; i++) {
+                    table_out[at + i] = scaled[i];
+                }
+                product = f_mul(product, zz);
+            } else {
+                product = zz;
+            }
+        }
+    }
+    var inverse = f_inv(product);
+    for (var j = PER_INVOCATION - 1u; j < PER_INVOCATION; j--) {
+        if first + j < count {
+            let at = (first + j) * SCRATCH_WORDS;
+            batch[j].output_x = f_to_fe(f_canonical(f_mul(scratch_element(at), inverse)));
+            if j > 0u {
+                inverse = f_mul(inverse, scratch_element(at + 10u));
+            }
+        }
+    }
+    return batch;
+}
+
 @compute @workgroup_size(WORKGROUP_SIZE)
 fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     let first = id.x * PER_INVOCATION;
@@ -200,7 +274,7 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     if first >= count {
         return;
     }
-    let batch = candidates(params[P_START] + first);
+    let batch = finish(first);
     let bits = params[P_TARGET_BITS];
     for (var j = 0u; j < PER_INVOCATION; j++) {
         let c = batch[j];
@@ -210,6 +284,7 @@ fn search(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
+// Writes per candidate a validity word then the output key's x limbs, from the batch's start.
 @compute @workgroup_size(WORKGROUP_SIZE)
 fn debug(@builtin(global_invocation_id) id: vec3<u32>) {
     let first = id.x * PER_INVOCATION;
@@ -217,10 +292,10 @@ fn debug(@builtin(global_invocation_id) id: vec3<u32>) {
     if first >= count {
         return;
     }
-    let batch = candidates(params[P_START] + first);
+    let batch = finish(first);
     for (var j = 0u; j < PER_INVOCATION; j++) {
         if first + j < count {
-            let at = (first + j) * 9u;
+            let at = (params[P_CHUNK_OFFSET] + first + j) * 9u;
             debug_out[at] = select(0u, 1u, batch[j].valid);
             for (var i = 0u; i < 8u; i++) {
                 debug_out[at + 1u + i] = batch[j].output_x[i];

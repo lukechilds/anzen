@@ -18,7 +18,7 @@ const P_INTERNAL_WORDS: u32 = 36u;
 const P_INTERNAL_X: u32 = 44u;
 const P_INTERNAL_Y: u32 = 52u;
 
-const PER_INVOCATION: u32 = 8u;
+const PER_INVOCATION: u32 = 16u;
 const WORKGROUP_SIZE: u32 = 64u;
 
 // X and ZZ of Q + t·G in XYZZ coordinates for one locktime (the output key's x is X/ZZ); `valid`
@@ -229,10 +229,7 @@ fn build_table(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// The batch's output keys with one field inversion (Montgomery's trick): invert the product of
-// every ZZ, then peel each ZZ's inverse off it (the output key is X·ZZ⁻¹). Invalid candidates use
-// ZZ = 1.
-// A field element held through the batch inversion, two limbs (each at most 2^13) per word.
+// A field element held in the search's scratch buffer, two limbs (each at most 2^13) per word.
 alias Packed = array<u32, 10>;
 
 fn f_pack(a: F) -> Packed {
@@ -250,39 +247,4 @@ fn f_unpack(a: Packed) -> F {
         r[2u * i + 1u] = a[i] >> 16u;
     }
     return r;
-}
-
-fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
-    // Per candidate, keep A = X·(the product of the earlier ZZ) and ZZ: x = A·(the product up to
-    // and including this ZZ)⁻¹, so the prefix products need not be kept.
-    var scaled: array<Packed, PER_INVOCATION>;
-    var zz: array<Packed, PER_INVOCATION>;
-    var valid: array<bool, PER_INVOCATION>;
-    var product = f_one();
-    for (var j = 0u; j < PER_INVOCATION; j++) {
-        let point = projective(first + j);
-        valid[j] = point.valid;
-        var z = point.zz;
-        if !point.valid {
-            z = f_one();
-        }
-        zz[j] = f_pack(z);
-        if j == 0u {
-            scaled[j] = f_pack(point.x);
-            product = z;
-        } else {
-            scaled[j] = f_pack(f_mul(point.x, product));
-            product = f_mul(product, z);
-        }
-    }
-    var inverse = f_inv(product);
-    var batch: array<Candidate, PER_INVOCATION>;
-    for (var j = PER_INVOCATION - 1u; j < PER_INVOCATION; j--) {
-        batch[j].valid = valid[j];
-        batch[j].output_x = f_to_fe(f_canonical(f_mul(f_unpack(scaled[j]), inverse)));
-        if j > 0u {
-            inverse = f_mul(inverse, f_unpack(zz[j]));
-        }
-    }
-    return batch;
 }
