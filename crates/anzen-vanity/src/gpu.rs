@@ -110,17 +110,18 @@ impl Tuning {
             "the shader's derived window constants do not match its widths"
         );
         // Shaders that step through the windows with running sums say how; the steps must
-        // match the widths.
+        // match the widths, and the search peels the first window as a wide one.
         if let (Ok(width), Ok(wide)) = (constant("G_WIDTH"), constant("G_WIDE")) {
             ensure!(
-                tuning.widths.iter().enumerate().all(|(window, actual)| {
-                    *actual
-                        == if (window as u32) < wide {
-                            width + 1
-                        } else {
-                            width
-                        }
-                }),
+                wide >= 1
+                    && tuning.widths.iter().enumerate().all(|(window, actual)| {
+                        *actual
+                            == if (window as u32) < wide {
+                                width + 1
+                            } else {
+                                width
+                            }
+                    }),
                 "the shader's G_WIDTH and G_WIDE do not match G_WIDTHS"
             );
         }

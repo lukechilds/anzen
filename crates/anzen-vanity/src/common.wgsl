@@ -54,8 +54,8 @@ const Q_BITS: u32 = 20u;
 const Q_DIGITS: u32 = 1u << (Q_BITS - 1u);
 const G_WINDOWS: u32 = 13u;
 // The search loop steps through the windows with running sums rather than indexing these arrays:
-// the first G_WIDE windows are G_WIDTH + 1 bits, the rest G_WIDTH. The host checks that the
-// arrays agree.
+// the first G_WIDE windows (at least one: the search peels the first) are G_WIDTH + 1 bits, the
+// rest G_WIDTH. The host checks that the arrays agree.
 const G_WIDTH: u32 = 18u;
 const G_WIDE: u32 = 3u;
 const G_WIDTHS = array<u32, 13>(19u, 19u, 19u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u);
