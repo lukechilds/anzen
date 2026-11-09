@@ -27,12 +27,12 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 ## Current speed
 
 M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benchmark.rs run`):
-**~40M/s**, so `vault` takes ~0.85 s on average, after ~0.1 s of setup (compiling the kernel and
+**~43M/s**, so `vault` takes ~0.8 s on average, after ~0.1 s of setup (compiling the kernel and
 building the 128 MiB generator table on the GPU); `anzen phone init --vanity` on regtest finds one
 in ~1.4 s end to end. Sustained load throttles by up to ~25% within a minute, and much further
 after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~36.4M/s**.
 
-The third loop took the kernel from ~19.5M/s to ~40M/s (2.05×): Q folded into window 0, signed
+The third loop took the kernel from ~19.5M/s to ~40M/s (2.05×), and the fourth's two-pass split to ~43M/s: Q folded into window 0, signed
 and then varying window widths (16 additions to 13), the generator table built on the GPU, a
 reordered mixed addition, Karatsuba products, shorter reductions, fused normalizations, XYZZ
 coordinates, an affine first addition and safegcd inversion. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
@@ -177,6 +177,14 @@ limits by patching `G_WINDOW_BITS` before compiling.
 
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
+| After the two-pass split: the last addition peeled to compute only X3 and ZZ3 (5M + 2S) | nonce | 0.985 (4/60) | Still loses, as before the split: the extra code costs more than three multiplies |
+| After the two-pass split: 32 / 64 / 8 candidates per thread in the inversion pass (from 16) | nonce | 1.008 (29/40) and 1.012 (41/60) / 0.994 (19/60) / 0.991 (11/40) | 32 inconclusive, others lose; 16 stays |
+| Before the split: the running product of the batch held packed too | nonce | 1.003 (33/40) | Too small; superseded by the split |
+| Before the split: the batch loop's trip count hidden from the compiler | nonce | 1.003 (25/30) | Not being unrolled; showed the batch's cost was its held state, which led to the split |
+| Before the split: 16 / 12 candidates per thread with the held elements packed | nonce | 0.965 / 0.960 (0/40 both) | 8 stayed |
+| The tweak's padding block compressed with its constant message schedule precomputed (K + W as 64 constants) | nonce | 0.997 (11/60) | The compiler already folds it. Ablation: two of the three compressions are 3.4% of the time, so SHA-256 is ~5% |
+| The zero-digit branch around each addition removed (ablation; wrong for zero digits) | nonce | 0.995 (3/30) | The branch costs nothing |
+| `f_mul` and `f_sqr` inputs masked to 16 bits, to let the compiler use narrower multiplies | nonce | 1.000 (14/30) | Integer multiplies are not the bottleneck |
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
 | The last addition peeled out of the loop computing only X3 and ZZ3 (6M + 2S) | nonce | 1.0055 (56/60) | Too small for the extra code |
 | Candidates per thread 16 / 10 / 6 with the first addition peeled; 4 / 6 after safegcd made the inversion cheap | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40); 0.984 / 0.995 | 8 stays |
