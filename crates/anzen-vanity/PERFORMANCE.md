@@ -119,6 +119,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| safegcd's batch updates written out limb by limb (constant indices), so f, g, d and e stay in registers instead of loop-indexed arrays | nonce | 1.0420 (60/60) |
 | Inversion by Bernstein–Yang safegcd instead of Fermat's 255 squares: libsecp256k1's modinv32 in batches of 13 divsteps over 20 signed 13-bit limbs, so every matrix product stays within an i32 (no 64-bit emulation); 46 batches make 598 divsteps. `tools/model_safegcd.py` checks the exact i32 operations and their bounds over 20,000 inversions; the field test checks it against bignum, including 0 | nonce | 1.0403, 1.0401 (60/60 both) |
 | The first addition peeled out of the loop as affine plus affine into XYZZ (both ZZ = 1, 4M + 2S: U2, S2, ZZ3 and ZZZ3 become copies), unlike the Jacobian attempt that lost | nonce | 1.0238 (60/60), 1.0238 (78/80) |
 | XYZZ coordinates (x = X/ZZ, y = Y/ZZZ) for the search's accumulator: the mixed addition is madd-2008-s, 8M + 2S instead of 8M + 3S, and the output key is X·ZZ⁻¹, so the batch inversion drops a square per candidate. The extra coordinate costs less than the square | nonce | 1.1044, 1.1014 (60/60 both) |
@@ -173,7 +174,7 @@ limits by patching `G_WINDOW_BITS` before compiling.
 |---|---|---|---|
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
 | The last addition peeled out of the loop computing only X3 and ZZ3 (6M + 2S) | nonce | 1.0055 (56/60) | Too small for the extra code |
-| Candidates per thread 16 / 10 / 6 with the first addition peeled | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40) | 8 stays |
+| Candidates per thread 16 / 10 / 6 with the first addition peeled; 4 / 6 after safegcd made the inversion cheap | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40); 0.984 / 0.995 | 8 stays |
 | Fermat inversion with x2 and x3 recomputed late rather than held through the long squaring runs | nonce | 1.001 (31/60) | No spill to relieve; superseded by safegcd |
 | Negative digits negated on the canonical words (p − y with an 8-word borrow chain) instead of `f_neg` | nonce | 1.004 (43/60) | Too small |
 | One inversion shared by partner invocations in the two halves of a workgroup (separate SIMD groups on Apple GPUs; products exchanged through workgroup memory, so the second group skips the inversion) | nonce | 0.972 (0/60) | The idle group waits at the barrier, and at this kernel's register-limited occupancy nothing fills it |
