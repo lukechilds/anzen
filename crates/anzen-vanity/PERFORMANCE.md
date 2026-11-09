@@ -38,13 +38,38 @@ reordered mixed addition, Karatsuba products, shorter reductions, fused normaliz
 coordinates, an affine first addition and safegcd inversion. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
 generator table of about 2^22.2 points.
 
-Phones, from the app's settings benchmark (5 s, cool; measured while the key kernel still existed,
-so setup then also compiled it):
+Phones, cool (a fan on them), 5-second runs launched headless with `--anzen-benchmark` (see
+`mobile/modules/anzen-runtime/ios/AnzenRuntimeModule.swift`), medians of three:
 
-| Device | Rate | `vault` on average | Batch reached |
-|---|---|---|---|
-| iPhone 15 Pro (A17 Pro) | 2.67M/s | ~13 s | 262,144 |
-| iPhone 12 mini (A14) | 1.30M/s | ~26 s | 65,536 |
+| Device | Rate | `vault` on average | Setup (warm) | Batch reached |
+|---|---|---|---|---|
+| iPhone 15 Pro (A17 Pro) | 5.65–5.88M/s | ~5.8 s | 0.24 s | 1,048,576 |
+| iPhone 12 mini (A14) | 1.58M/s | ~21 s | 0.4 s | 262,144 |
+
+The loop's steps measured on both phones the same way (each row adds the named commit):
+
+| Step | 15 Pro | 12 mini |
+|---|---|---|
+| Before the third loop | 2.70M/s | 0.98M/s |
+| Signed windows, table built on the GPU | 3.05 (+13%) | 1.14 (+16%) |
+| Karatsuba products, Z3 = 2·Z1·H | 3.44 (+13%) | 1.29 (+13%) |
+| Second Karatsuba level | 3.79 (+10%) | 1.22 (−5%) |
+| 13 additions, 192 MB of tables | 4.34 (+15%) | 1.43 (+17%) |
+| XYZZ coordinates | 4.86 (+12%) | 1.53 (+7%) |
+| safegcd inversion | 5.02 (+3%) | 1.55 (+1%) |
+| `f_canonical` straight-line (end of the third loop) | 5.28 (+5%) | 1.60 (+3%) |
+| Batch state packed, two-pass search | 5.88 (+11%) | 1.58 (−1%) |
+
+The A17 Pro tracks the M4 Max; the A14 gains less, and loses on changes that add temporaries or
+trade memory traffic for registers. The A17 Pro and M3/M4 allocate registers dynamically
+("Dynamic Caching"); the A14 sizes every thread for its worst case, so its occupancy is set by the
+kernel's peak register count. Variants tried on both phones against the current kernel:
+
+| Variant | 15 Pro | 12 mini |
+|---|---|---|
+| One Karatsuba level (`KARATSUBA_LEVELS=1 tools/gen_field13.py`) | −7% | +5% |
+| Workgroup size 32 / 128 | −1% / 0% | +1% / −15% |
+| Tables of 36 MB (window 0 16 bits, 15 additions) | | 0.93× (the M4 Max: 0.886×, the arithmetic's 13/15) |
 
 The CPU path grinds the same locktimes with the library code: **831k/s** on the M4 Max's 16
 threads (`vault` in ~40 s on average) and 76k/s on one; one thread of browser WASM manages

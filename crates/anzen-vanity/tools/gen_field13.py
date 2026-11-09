@@ -9,6 +9,7 @@ representation:
     crates/anzen-vanity/tools/gen_field13.py
 """
 
+import os
 from pathlib import Path
 
 FILE = Path(__file__).resolve().parents[1] / "src" / "field13.wgsl"
@@ -167,6 +168,10 @@ def columns_karatsuba(prefix: str, a, b, square: bool) -> list[str]:
     return lines
 
 
+# Karatsuba levels in f_mul and f_sqr: 2 (the default) or 1, from KARATSUBA_LEVELS.
+LEVELS = int(os.environ.get("KARATSUBA_LEVELS", "2"))
+
+
 def karatsuba(square: bool) -> list[str]:
     """One level of Karatsuba on the two 10-limb halves: low·low, high·high and
     (low + high)·(low + high), whose middle columns less the other two are the cross terms.
@@ -175,14 +180,16 @@ def karatsuba(square: bool) -> list[str]:
     lines = []
     if square:
         lines += [f"    let s{i} = a[{i}] + a[{i + HALF}];" for i in range(HALF)]
-        lines += columns_karatsuba("lo", lambda i: f"a[{i}]", None, True)
-        lines += columns_karatsuba("hi", lambda i: f"a[{i + HALF}]", None, True)
+        halves = columns_karatsuba if LEVELS == 2 else columns
+        lines += halves("lo", lambda i: f"a[{i}]", None, True)
+        lines += halves("hi", lambda i: f"a[{i + HALF}]", None, True)
         lines += columns("mid", lambda i: f"s{i}", None, True)
     else:
         lines += [f"    let s{i} = a[{i}] + a[{i + HALF}];" for i in range(HALF)]
         lines += [f"    let t{i} = b[{i}] + b[{i + HALF}];" for i in range(HALF)]
-        lines += columns_karatsuba("lo", lambda i: f"a[{i}]", lambda i: f"b[{i}]", False)
-        lines += columns_karatsuba("hi", lambda i: f"a[{i + HALF}]", lambda i: f"b[{i + HALF}]", False)
+        halves = columns_karatsuba if LEVELS == 2 else columns
+        lines += halves("lo", lambda i: f"a[{i}]", lambda i: f"b[{i}]", False)
+        lines += halves("hi", lambda i: f"a[{i + HALF}]", lambda i: f"b[{i + HALF}]", False)
         lines += columns("mid", lambda i: f"s{i}", lambda i: f"t{i}", False)
     for k in range(2 * LIMBS - 1):
         terms = []
