@@ -68,6 +68,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Metal key: the 32-bit field with 32-bit carries and native `mulhi` for products (it used 64-bit accumulators, which Apple GPUs emulate) | metal key | 2.48 |
 | wgpu key: the 32-bit field functions (mul_wide, fe_sqr, fe_add, sub_raw, gte) unrolled straight-line by `tools/gen_field32.py`, so every limb index is constant | key | 2.29 |
 | Metal key: 8 candidates per thread share each inversion stage (from 4; 2 gave 0.83×, 16 gave 0.74×) | metal key | 1.126 |
 | Nonce: 13-bit mixed addition without the P = ±Q checks, which cost two full reductions per addition and happen with probability ~2^-256; the host re-verifies every match on the CPU | nonce / metal nonce | 1.129 / 1.051 |

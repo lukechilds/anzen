@@ -66,12 +66,12 @@ inline bool gte_const(Fe a, constant uint *b) {
 
 inline Fe sub_const(Fe a, constant uint *b) {
     Fe r;
-    long borrow = 0;
+    uint borrow = 0;
     #pragma unroll
     for (int i = 0; i < 8; i++) {
-        long d = (long)a.v[i] - (long)b[i] + borrow;
-        r.v[i] = (uint)d;
-        borrow = d >> 32;
+        uint d = a.v[i] - b[i];
+        r.v[i] = d - borrow;
+        borrow = uint(a.v[i] < b[i]) + uint(d < borrow);
     }
     return r;
 }
@@ -79,108 +79,137 @@ inline Fe sub_const(Fe a, constant uint *b) {
 // ---------------------------------------------------------------------------------------------
 // The field modulo p = 2^256 - 2^32 - 977. Every function returns a fully reduced element.
 
+// 32-bit arithmetic throughout: Apple GPUs emulate 64-bit integers with several 32-bit
+// instructions, so products come from mul + mulhi and carries stay in 32-bit words.
+inline uint2 mul32(uint a, uint b) {
+    return uint2(a * b, mulhi(a, b));
+}
+
+// a + b + carry, as (sum, carry out).
+inline uint2 adc(uint a, uint b, uint carry) {
+    uint s1 = a + b;
+    uint s2 = s1 + carry;
+    return uint2(s2, uint(s1 < a) + uint(s2 < s1));
+}
+
 // Reduce a 512-bit product with 2^256 ≡ 2^32 + 977 (mod p).
 inline Fe fe_reduce(thread const uint *t) {
+    // r = low + high·977 + (high << 32), keeping the overflow above limb 7 in `top`.
     Fe r;
-    ulong c = 0;
+    uint carry = 0;
+    uint previous_high = 0;
+    uint previous_word = 0;
     #pragma unroll
     for (int i = 0; i < 8; i++) {
-        c += (ulong)t[i] + (ulong)t[8 + i] * 977ul;
-        if (i > 0) c += t[7 + i];
-        r.v[i] = (uint)c;
-        c >>= 32;
+        uint2 p = mul32(t[8 + i], 977u);
+        uint2 s = adc(t[i], p.x, carry);
+        uint2 s2 = adc(s.x, previous_high, 0);
+        uint2 s3 = adc(s2.x, previous_word, 0);
+        r.v[i] = s3.x;
+        carry = s.y + s2.y + s3.y;
+        previous_high = p.y;
+        previous_word = t[8 + i];
     }
-    // What is left sits at 2^256: the carry plus the top word's 2^32 term.
-    ulong top = c + t[15];
-    c = (ulong)r.v[0] + top * 977ul;
-    r.v[0] = (uint)c;
-    c >>= 32;
-    c += (ulong)r.v[1] + top;
-    r.v[1] = (uint)c;
-    c >>= 32;
+    // top < 2^34: previous_high + previous_word + carry.
+    uint2 top = adc(previous_high, previous_word, carry);
+    // Fold top·(2^32 + 977) back in.
+    uint2 p = mul32(top.x, 977u);
+    uint2 s = adc(r.v[0], p.x, 0);
+    r.v[0] = s.x;
+    s = adc(r.v[1], p.y, s.y);
+    uint2 s1 = adc(s.x, top.x, 0);
+    uint2 s1b = adc(s1.x, top.y * 977u, 0);
+    r.v[1] = s1b.x;
+    uint c = s.y + s1.y + s1b.y;
+    s = adc(r.v[2], top.y, c);
+    r.v[2] = s.x;
+    c = s.y;
+    #pragma unroll
+    for (int i = 3; i < 8; i++) {
+        s = adc(r.v[i], 0, c);
+        r.v[i] = s.x;
+        c = s.y;
+    }
+    // A final carry leaves r small, so adding 2^32 + 977 cannot carry again.
+    s = adc(r.v[0], c * 977u, 0);
+    r.v[0] = s.x;
+    s = adc(r.v[1], c, s.y);
+    r.v[1] = s.x;
+    c = s.y;
     #pragma unroll
     for (int i = 2; i < 8; i++) {
-        c += r.v[i];
-        r.v[i] = (uint)c;
-        c >>= 32;
-    }
-    // A final carry leaves r small, so adding 2^32 + 977 once more cannot carry far.
-    c = (ulong)r.v[0] + c * 977ul + (c << 32);
-    r.v[0] = (uint)c;
-    c >>= 32;
-    #pragma unroll
-    for (int i = 1; i < 8; i++) {
-        c += r.v[i];
-        r.v[i] = (uint)c;
-        c >>= 32;
+        s = adc(r.v[i], 0, c);
+        r.v[i] = s.x;
+        c = s.y;
     }
     if (gte_const(r, FIELD_P)) r = sub_const(r, FIELD_P);
     return r;
 }
 
-// Product scanning with a 96-bit column accumulator (acc + acc_hi·2^64).
+// Operand scanning with 32-bit carries.
 inline Fe fe_mul(Fe a, Fe b) {
     uint t[16];
-    ulong acc = 0;
-    uint acc_hi = 0;
     #pragma unroll
-    for (int k = 0; k < 15; k++) {
+    for (int i = 0; i < 16; i++) t[i] = 0;
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        uint carry = 0;
         #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            int j = k - i;
-            if (j >= 0 && j < 8) {
-                ulong p = (ulong)a.v[i] * b.v[j];
-                acc += p;
-                acc_hi += acc < p;
-            }
+        for (int j = 0; j < 8; j++) {
+            uint2 p = mul32(a.v[i], b.v[j]);
+            uint s1 = t[i + j] + p.x;
+            uint s2 = s1 + carry;
+            t[i + j] = s2;
+            carry = p.y + uint(s1 < p.x) + uint(s2 < s1);
         }
-        t[k] = (uint)acc;
-        acc = (acc >> 32) | ((ulong)acc_hi << 32);
-        acc_hi = 0;
+        t[i + 8] = carry;
     }
-    t[15] = (uint)acc;
     return fe_reduce(t);
 }
 
-// Each cross product once, added twice: 36 products instead of 64.
+// Each cross product once, doubled: 36 word products instead of 64.
 inline Fe fe_sqr(Fe a) {
     uint t[16];
-    ulong acc = 0;
-    uint acc_hi = 0;
     #pragma unroll
-    for (int k = 0; k < 15; k++) {
+    for (int i = 0; i < 16; i++) t[i] = 0;
+    #pragma unroll
+    for (int i = 0; i < 7; i++) {
+        uint carry = 0;
         #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            int j = k - i;
-            if (j > i && j < 8) {
-                ulong p = (ulong)a.v[i] * a.v[j];
-                acc += p;
-                acc_hi += acc < p;
-                acc += p;
-                acc_hi += acc < p;
-            }
+        for (int j = i + 1; j < 8; j++) {
+            uint2 p = mul32(a.v[i], a.v[j]);
+            uint s1 = t[i + j] + p.x;
+            uint s2 = s1 + carry;
+            t[i + j] = s2;
+            carry = p.y + uint(s1 < p.x) + uint(s2 < s1);
         }
-        if ((k & 1) == 0) {
-            ulong p = (ulong)a.v[k / 2] * a.v[k / 2];
-            acc += p;
-            acc_hi += acc < p;
-        }
-        t[k] = (uint)acc;
-        acc = (acc >> 32) | ((ulong)acc_hi << 32);
-        acc_hi = 0;
+        t[i + 8] = carry;
     }
-    t[15] = (uint)acc;
+    // The cross products sum to less than 2^511, so doubling cannot overflow.
+    #pragma unroll
+    for (int i = 15; i > 0; i--) t[i] = (t[i] << 1) | (t[i - 1] >> 31);
+    t[0] <<= 1;
+    uint carry = 0;
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        uint2 p = mul32(a.v[i], a.v[i]);
+        uint2 low = adc(t[2 * i], p.x, carry);
+        uint2 high = adc(t[2 * i + 1], p.y, low.y);
+        t[2 * i] = low.x;
+        t[2 * i + 1] = high.x;
+        carry = high.y;
+    }
     return fe_reduce(t);
 }
 
 inline Fe fe_add(Fe a, Fe b) {
     Fe r;
-    ulong c = 0;
+    uint c = 0;
     #pragma unroll
     for (int i = 0; i < 8; i++) {
-        c += (ulong)a.v[i] + b.v[i];
-        r.v[i] = (uint)c;
-        c >>= 32;
+        uint2 s = adc(a.v[i], b.v[i], c);
+        r.v[i] = s.x;
+        c = s.y;
     }
     if (c != 0 || gte_const(r, FIELD_P)) r = sub_const(r, FIELD_P);
     return r;
@@ -188,21 +217,21 @@ inline Fe fe_add(Fe a, Fe b) {
 
 inline Fe fe_sub(Fe a, Fe b) {
     Fe r;
-    long borrow = 0;
+    uint borrow = 0;
     #pragma unroll
     for (int i = 0; i < 8; i++) {
-        long d = (long)a.v[i] - (long)b.v[i] + borrow;
-        r.v[i] = (uint)d;
-        borrow = d >> 32;
+        uint d = a.v[i] - b.v[i];
+        r.v[i] = d - borrow;
+        borrow = uint(a.v[i] < b.v[i]) + uint(d < borrow);
     }
     if (borrow != 0) {
         // Add p back.
-        ulong c = 0;
+        uint c = 0;
         #pragma unroll
         for (int i = 0; i < 8; i++) {
-            c += (ulong)r.v[i] + FIELD_P[i];
-            r.v[i] = (uint)c;
-            c >>= 32;
+            uint2 s = adc(r.v[i], FIELD_P[i], c);
+            r.v[i] = s.x;
+            c = s.y;
         }
     }
     return r;
