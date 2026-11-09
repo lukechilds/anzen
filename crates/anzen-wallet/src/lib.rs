@@ -168,8 +168,8 @@ pub(crate) struct VanityPhoneKey {
     pub(crate) searcher: String,
 }
 
-/// Grind the phone vault-key derivation index until the vault address with the signer's public
-/// key begins with the vanity prefix.
+/// Find a vault address that begins with the vanity prefix: on the GPU by grinding the recovery
+/// leaf's locktime for a fresh phone key, or on the CPU by grinding the phone vault-key index.
 pub fn initialize_vanity<F>(
     data_dir: &Path,
     signer: &PublicDeviceFile,
@@ -250,26 +250,23 @@ where
     }
 }
 
-/// The public inputs of a GPU search over the vault keys under `phone`'s vault parent.
-pub fn vanity_search_inputs(
-    phone: &DeviceKeys,
-    template: &VaultAddressTemplate,
+/// The public inputs of a GPU search over the recovery locktimes of one phone and signer key.
+pub fn vanity_nonce_inputs(
+    phone_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
+    hww_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
     suffix: &str,
-) -> Result<anzen_vanity::SearchInputs> {
+) -> Result<anzen_vanity::NonceInputs> {
     let target = VanityTarget::new(suffix)?;
-    let secp = Secp256k1::new();
-    let parent = bitcoin::bip32::Xpub::from_priv(&secp, &phone.vault_parent_xpriv(&secp)?);
-    Ok(anzen_vanity::SearchInputs {
-        parent_public_key: parent.public_key.serialize(),
-        chain_code: parent.chain_code.to_bytes(),
-        signer_key: template.hww_pubkey(),
-        merkle_root: template.merkle_root(&mut anzen_common::protocol::SoftwareCrypto::new()),
+    Ok(anzen_vanity::NonceInputs {
+        internal_key: anzen_common::policy::internal_key(phone_pubkey, hww_pubkey)?.serialize(),
+        signer_key: hww_pubkey.serialize(),
         target_value: target.value,
         target_bits: target.bit_count,
     })
 }
 
-/// Search on the GPU, then check the winner with the library code like a CPU result.
+/// Grind the recovery locktime on the GPU for a fresh phone key, then check the winner with the
+/// library code like a CPU result.
 #[cfg(feature = "gpu")]
 fn grind_vanity_phone_key_on_gpu<F>(
     network: Network,
@@ -281,24 +278,23 @@ where
     F: Fn(u64) + Sync,
 {
     validate_supported_network(network)?;
-    let base_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
-    let template = VaultAddressTemplate::new(hww_pubkey, DEFAULT_RECOVERY_LOCKTIME)?;
-    let inputs = vanity_search_inputs(&base_phone, &template, suffix)?;
+    let phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
+    let inputs = vanity_nonce_inputs(phone.vault_pubkey, hww_pubkey, suffix)?;
     let gpu = anzen_vanity::GpuSearch::open()?;
     let last_report = AtomicU64::new(0);
-    let result = gpu.search_blocking(&inputs, 0..anzen_vanity::MAX_INDEX + 1, |attempts| {
-        maybe_report_progress(attempts, &last_report, &report_progress);
-        true
-    })?;
-    let index = result
+    let result =
+        gpu.search_nonces_blocking(&inputs, anzen_common::RECOVERY_LOCKTIMES, |attempts| {
+            maybe_report_progress(attempts, &last_report, &report_progress);
+            true
+        })?;
+    let locktime = result
         .index
-        .context("vanity search tried every index without a match")?;
-    vanity_phone_key(
-        base_phone,
+        .context("vanity search tried every recovery locktime without a match")?;
+    verified_vanity(
+        phone,
         network,
-        &template,
+        &VaultAddressTemplate::new(hww_pubkey, locktime)?,
         suffix,
-        index,
         result.attempts,
         gpu.adapter_name().to_owned(),
     )
@@ -393,29 +389,26 @@ where
             .context("vanity search ended without finding a matching key")?
     })?;
 
-    vanity_phone_key(
-        base_phone,
+    verified_vanity(
+        base_phone.with_vault_key_index(&Secp256k1::new(), winning_index)?,
         network,
         &template,
         suffix,
-        winning_index,
         attempts.load(Ordering::Relaxed),
         format!("{worker_count} CPU threads"),
     )
 }
 
-/// The phone key at a search's winning index, after re-deriving its address with the library
-/// code: a search result is never trusted on its own.
-fn vanity_phone_key(
-    base_phone: DeviceKeys,
+/// A search's winning phone key and recovery locktime, after re-deriving the address with the
+/// library code: a search result is never trusted on its own.
+fn verified_vanity(
+    phone: DeviceKeys,
     network: Network,
     template: &VaultAddressTemplate,
     suffix: &str,
-    index: u32,
     attempts: u64,
     searcher: String,
 ) -> Result<VanityPhoneKey> {
-    let phone = base_phone.with_vault_key_index(&Secp256k1::new(), index)?;
     let vault_address = template.address(
         &mut anzen_common::protocol::SoftwareCrypto::new(),
         phone.vault_pubkey,
@@ -1256,9 +1249,17 @@ mod tests {
         assert!(result.attempts > 0);
     }
 
+    #[test]
+    fn the_gpu_searches_exactly_the_protocol_recovery_locktimes() {
+        assert_eq!(
+            anzen_vanity::NONCE_LOCKTIMES,
+            anzen_common::RECOVERY_LOCKTIMES
+        );
+    }
+
     #[cfg(feature = "gpu")]
     #[test]
-    fn gpu_vanity_search_finds_a_key_the_library_confirms() {
+    fn gpu_vanity_search_finds_a_locktime_the_library_confirms() {
         if anzen_vanity::GpuSearch::open().is_err() {
             eprintln!("skipping: no GPU adapter");
             return;
@@ -1270,8 +1271,10 @@ mod tests {
             grind_vanity_phone_key(network, hww.vault_pubkey, "va", VanityEngine::Gpu, |_| {})
                 .unwrap();
         assert!(result.vault_address.starts_with("tb1pva"));
+        assert_eq!(result.phone.vault_key_index, 0);
+        assert!(anzen_common::RECOVERY_LOCKTIMES.contains(&result.recovery_locktime));
         let template =
-            VaultAddressTemplate::new(hww.vault_pubkey, DEFAULT_RECOVERY_LOCKTIME).unwrap();
+            VaultAddressTemplate::new(hww.vault_pubkey, result.recovery_locktime).unwrap();
         let address = template
             .address(
                 &mut anzen_common::protocol::SoftwareCrypto::new(),
