@@ -10,6 +10,25 @@ public final class AnzenRuntimeModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("AnzenRuntime")
+    // For measuring on devices: launched with `--anzen-benchmark '{"engine":"gpu","seconds":5}'`
+    // (`xcrun devicectl device process launch --console ...`), the app runs that benchmark once
+    // the scene is up, prints the result on stdout and exits. Public inputs only, as below.
+    OnCreate {
+      let arguments = ProcessInfo.processInfo.arguments
+      guard let at = arguments.firstIndex(of: "--anzen-benchmark"), at + 1 < arguments.count else { return }
+      let request = arguments[at + 1]
+      self.benchmarkQueue.asyncAfter(deadline: .now() + 1) {
+        DispatchQueue.main.sync { UIApplication.shared.isIdleTimerDisabled = true }
+        let response = request.withCString { requestPointer -> String in
+          guard let pointer = anzen_mobile_benchmark(requestPointer) else { return "null" }
+          defer { anzen_mobile_free(pointer) }
+          return String(cString: pointer)
+        }
+        print("ANZEN_BENCHMARK \(response)")
+        fflush(stdout)
+        exit(0)
+      }
+    }
     AsyncFunction("execute") { (role: String, command: String, settings: String) throws -> String in
       guard role == "wallet" || role == "signer" else { throw self.failure("Invalid device role") }
       let manager = FileManager.default
