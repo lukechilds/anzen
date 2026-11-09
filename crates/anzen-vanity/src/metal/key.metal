@@ -21,7 +21,7 @@
 #define P_PARENT_Y 124
 
 // The signer's and the parent's tables in one buffer, 8-bit windows.
-#define KEY_WINDOW_BITS 8
+#define KEY_WINDOW_BITS 16
 #define KEY_DIGITS ((1u << KEY_WINDOW_BITS) - 1u)
 #define KEY_WINDOWS ((256 + KEY_WINDOW_BITS - 1) / KEY_WINDOW_BITS)
 #define SIGNER_TABLE 0u

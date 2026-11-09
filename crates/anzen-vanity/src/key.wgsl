@@ -20,7 +20,7 @@ const P_PARENT_Y: u32 = 124u;
 // The signer's and the parent's tables, 8-bit windows like G's at its default: entry (window
 // w, digit d) of a point's table is d·2^(8w)·point, for d in 1..=255.
 @group(0) @binding(4) var<storage, read> key_tables: array<u32>;
-const KEY_WINDOW_BITS: u32 = 8u;
+const KEY_WINDOW_BITS: u32 = 16u;
 const KEY_DIGITS: u32 = (1u << KEY_WINDOW_BITS) - 1u;
 const KEY_WINDOWS: u32 = (256u + KEY_WINDOW_BITS - 1u) / KEY_WINDOW_BITS;
 const SIGNER_TABLE: u32 = 0u;
