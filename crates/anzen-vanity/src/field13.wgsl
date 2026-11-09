@@ -528,12 +528,14 @@ fn jac_add_affine(p: JacF, q: AffF) -> JacF {
     if p.infinity {
         return jac_from_affine(q);
     }
+    // Ordered to end each value's life early: Z3 right after HH frees Z1 and Z1Z1, and every
+    // field element held is 20 registers.
     let z1z1 = f_sqr(p.z);
-    let u2 = f_mul(q.x, z1z1);
     let s2 = f_mul(q.y, f_mul(p.z, z1z1));
-    let h = f_sub(u2, p.x);
-    let s_diff = f_sub(s2, p.y);
+    let h = f_sub(f_mul(q.x, z1z1), p.x);
     let hh = f_sqr(h);
+    let z3 = f_sub(f_sub(f_sqr(f_add(p.z, h)), z1z1), hh);
+    let s_diff = f_sub(s2, p.y);
     var i = f_add(hh, hh);
     i = f_add(i, i);
     let j = f_mul(h, i);
@@ -542,7 +544,6 @@ fn jac_add_affine(p: JacF, q: AffF) -> JacF {
     let x3 = f_sub(f_sub(f_sqr(r), j), f_add(v, v));
     let y1j = f_mul(p.y, j);
     let y3 = f_sub(f_mul(r, f_sub(v, x3)), f_add(y1j, y1j));
-    let z3 = f_sub(f_sub(f_sqr(f_add(p.z, h)), z1z1), hh);
     return JacF(x3, y3, z3, false);
 }
 
