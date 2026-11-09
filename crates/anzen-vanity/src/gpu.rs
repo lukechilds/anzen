@@ -1,61 +1,39 @@
-//! The wgpu host: shader setup, point tables, parameter packing and batched dispatch.
+//! The wgpu host: shader setup, the generator table, parameter packing and batched dispatch.
 
-use crate::{MAX_INDEX, NONCE_LOCKTIMES, NonceInputs, SearchInputs};
+use crate::{NONCE_LOCKTIMES, NonceInputs};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use secp256k1::{PublicKey, Scalar, Secp256k1};
 use sha2::{Digest, Sha256, digest::generic_array::GenericArray};
 use std::time::Duration;
 
-const KEY_SHADER: &str = concat!(
-    include_str!("constants.wgsl"),
-    include_str!("common.wgsl"),
-    include_str!("key.wgsl")
-);
 const NONCE_SHADER: &str = concat!(
     include_str!("constants.wgsl"),
     include_str!("common.wgsl"),
     include_str!("field13.wgsl"),
     include_str!("nonce.wgsl")
 );
-const PARAM_WORDS: usize = 132;
 const NONCE_PARAM_WORDS: usize = 60;
 /// Candidates per dispatch to start with; the search adapts it towards `TARGET_BATCH_TIME`.
 const FIRST_BATCH: u32 = 1 << 16;
 const MAX_BATCH: u32 = 1 << 22;
 const TARGET_BATCH_TIME: Duration = Duration::from_millis(250);
 
-/// An open GPU device with both search kernels compiled.
+/// An open GPU device with the search kernel compiled.
 pub struct GpuSearch {
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
-    key: Kernel,
-    nonce: Kernel,
-    /// Bound in place of the key tables for the nonce kernel, which has none.
-    empty: wgpu::Buffer,
+    search: wgpu::ComputePipeline,
+    debug: wgpu::ComputePipeline,
+    tuning: Tuning,
+    g_table: wgpu::Buffer,
     adapter: String,
 }
 
-/// One kernel's entry points and the G table its tuning asks for.
-struct Kernel {
-    search: wgpu::ComputePipeline,
-    debug: wgpu::ComputePipeline,
-    /// A kernel split into passes runs these first, handing records on through a scratch
-    /// buffer of `SCRATCH_RECORD` words per candidate; `search` and `debug` are its last pass.
-    stages: Vec<wgpu::ComputePipeline>,
-    tuning: Tuning,
-    g_table: wgpu::Buffer,
-}
-
-/// Words per candidate in a split kernel's scratch buffer.
-const SCRATCH_RECORD: u64 = 25;
-
-/// Constants the host reads from a shader's source so tables and dispatches match it.
+/// Constants the host reads from the shader's source so tables and dispatches match it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Tuning {
     g_window_bits: u32,
-    /// The key kernel's signer and parent table windows; 8 for kernels that predate it.
-    key_window_bits: u32,
     workgroup_size: u32,
     per_invocation: u32,
 }
@@ -77,7 +55,6 @@ impl Tuning {
         };
         let tuning = Self {
             g_window_bits: constant("G_WINDOW_BITS", None)?,
-            key_window_bits: constant("KEY_WINDOW_BITS", Some(8))?,
             workgroup_size: constant("WORKGROUP_SIZE", None)?,
             per_invocation: constant("PER_INVOCATION", Some(1))?,
         };
@@ -101,34 +78,28 @@ impl Tuning {
 /// A finished search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchResult {
-    /// The first matching index found, if any.
+    /// The first matching recovery locktime found, if any.
     pub index: Option<u32>,
     /// Candidates evaluated, including the rest of the batch the match was found in.
     pub attempts: u64,
 }
 
-/// A search's parameter block and point tables, built once and reused for every batch.
+/// A search's parameter block, built once and reused for every batch.
 #[doc(hidden)]
 pub struct Prepared {
-    nonce: bool,
     params: Vec<u32>,
-    /// The key kernel's signer and parent tables.
-    key_tables: Option<wgpu::Buffer>,
 }
 
 impl GpuSearch {
-    /// Open the default high-performance adapter and compile the shaders.
+    /// Open the default high-performance adapter and compile the shader.
     pub async fn new() -> Result<Self> {
-        Self::with_sources(KEY_SHADER, NONCE_SHADER).await
+        Self::with_source(NONCE_SHADER).await
     }
 
-    /// Open the GPU with other shader sources, for benchmarking shader changes side by side.
+    /// Open the GPU with another shader source, for benchmarking shader changes side by side.
     #[doc(hidden)]
-    pub async fn with_sources(key_shader: &str, nonce_shader: &str) -> Result<Self> {
-        let tunings = [
-            Tuning::from_source(key_shader)?,
-            Tuning::from_source(nonce_shader)?,
-        ];
+    pub async fn with_source(source: &str) -> Result<Self> {
+        let tuning = Tuning::from_source(source)?;
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
@@ -142,25 +113,18 @@ impl GpuSearch {
             .map_err(|error| anyhow!("no GPU adapter is available: {error}"))?;
         let info = adapter.get_info();
         let limits = adapter.limits();
-        let largest_table = tunings
-            .iter()
-            .map(|tuning| table_words(tuning.g_window_bits))
-            .chain([2 * table_words(tunings[0].key_window_bits)])
-            .max()
-            .expect("tables")
-            * 4;
+        let table_bytes = table_words(tuning.g_window_bits) as u64 * 4;
         ensure!(
-            limits.max_storage_buffer_binding_size >= largest_table as u64
-                && limits.max_buffer_size >= largest_table as u64,
-            "the GPU cannot bind the precomputed tables"
+            limits.max_storage_buffer_binding_size >= table_bytes
+                && limits.max_buffer_size >= table_bytes,
+            "the GPU cannot bind the precomputed table"
         );
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("anzen vanity"),
                 required_limits: wgpu::Limits {
-                    max_storage_buffer_binding_size: largest_table as u64,
-                    max_buffer_size: largest_table as u64,
-                    max_storage_buffers_per_shader_stage: 6,
+                    max_storage_buffer_binding_size: table_bytes,
+                    max_buffer_size: table_bytes,
                     ..wgpu::Limits::downlevel_defaults()
                 }
                 .using_resolution(limits),
@@ -194,8 +158,6 @@ impl GpuSearch {
                 entry(1, true),
                 entry(2, false),
                 entry(3, false),
-                entry(4, true),
-                entry(5, false),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -203,60 +165,36 @@ impl GpuSearch {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let key_table = upload(
+        let g_table = upload(
             &device,
             "generator table",
-            &point_table(generator(), tunings[0].g_window_bits)?,
+            &point_table(generator(), tuning.g_window_bits)?,
         );
-        let nonce_table = if tunings[1].g_window_bits == tunings[0].g_window_bits {
-            key_table.clone()
-        } else {
-            upload(
-                &device,
-                "generator table",
-                &point_table(generator(), tunings[1].g_window_bits)?,
+        // SAFETY: every array index in the shader is in bounds by construction (fixed loop
+        // bounds, table digits within their windows) and every loop has a constant trip count.
+        // Runtime bounds checks and loop counters would otherwise stop the compiler unrolling the
+        // field arithmetic.
+        let module = unsafe {
+            device.create_shader_module_trusted(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("nonce"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                },
+                wgpu::ShaderRuntimeChecks::unchecked(),
             )
         };
-        let kernel = |label, source: &str, tuning: Tuning, g_table| -> Result<Kernel> {
-            // SAFETY: every array index in the shaders is in bounds by construction (fixed loop
-            // bounds, table digits within their windows) and every loop has a constant trip
-            // count. Runtime bounds checks and loop counters would otherwise stop the compiler
-            // unrolling the field arithmetic.
-            let module = unsafe {
-                device.create_shader_module_trusted(
-                    wgpu::ShaderModuleDescriptor {
-                        label: Some(label),
-                        source: wgpu::ShaderSource::Wgsl(source.into()),
-                    },
-                    wgpu::ShaderRuntimeChecks::unchecked(),
-                )
-            };
-            let pipeline = |entry_point| {
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some(label),
-                    layout: Some(&pipeline_layout),
-                    module: &module,
-                    entry_point: Some(entry_point),
-                    compilation_options: Default::default(),
-                    cache: None,
-                })
-            };
-            let stages = ["stage1", "stage2"]
-                .into_iter()
-                .take_while(|stage| source.contains(&format!("fn {stage}(")))
-                .map(pipeline)
-                .collect();
-            Ok(Kernel {
-                search: pipeline("search"),
-                debug: pipeline("debug"),
-                stages,
-                tuning,
-                g_table,
+        let pipeline = |entry_point| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("nonce"),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                cache: None,
             })
         };
-        let key = kernel("key", key_shader, tunings[0], key_table)?;
-        let nonce = kernel("nonce", nonce_shader, tunings[1], nonce_table)?;
-        let empty = upload(&device, "no key tables", &[0; 4]);
+        let search = pipeline("search");
+        let debug = pipeline("debug");
         #[cfg(not(target_arch = "wasm32"))]
         for scope in scopes.into_iter().rev() {
             if let Some(error) = scope.pop().await {
@@ -267,9 +205,10 @@ impl GpuSearch {
             device,
             queue,
             layout,
-            key,
-            nonce,
-            empty,
+            search,
+            debug,
+            tuning,
+            g_table,
             // Browsers do not name the GPU.
             adapter: if info.name.is_empty() {
                 format!("{:?}", info.backend)
@@ -284,24 +223,9 @@ impl GpuSearch {
         &self.adapter
     }
 
-    /// Search key indexes in `range` in order until a match, reporting the candidates tested so
-    /// far; `progress` returns false to stop early. A match is the lowest matching index of its
-    /// batch.
-    pub async fn search(
-        &self,
-        inputs: &SearchInputs,
-        range: std::ops::Range<u32>,
-        progress: impl FnMut(u64) -> bool,
-    ) -> Result<SearchResult> {
-        ensure!(
-            range.end <= MAX_INDEX + 1,
-            "vault key indexes must be below 2^31"
-        );
-        let prepared = self.prepare_key(inputs)?;
-        self.search_prepared(&prepared, range, progress).await
-    }
-
-    /// Search recovery locktimes in `range` in order until a match, like [`Self::search`].
+    /// Search recovery locktimes in `range` in order until a match, reporting the candidates
+    /// tested so far; `progress` returns false to stop early. A match is the lowest matching
+    /// locktime of its batch.
     pub async fn search_nonces(
         &self,
         inputs: &NonceInputs,
@@ -317,24 +241,9 @@ impl GpuSearch {
     }
 
     #[doc(hidden)]
-    pub fn prepare_key(&self, inputs: &SearchInputs) -> Result<Prepared> {
-        Ok(Prepared {
-            nonce: false,
-            params: encode_params(inputs)?,
-            key_tables: Some(upload(
-                &self.device,
-                "key tables",
-                &key_tables(inputs, self.key.tuning.key_window_bits)?,
-            )),
-        })
-    }
-
-    #[doc(hidden)]
     pub fn prepare_nonce(&self, inputs: &NonceInputs) -> Result<Prepared> {
         Ok(Prepared {
-            nonce: true,
             params: encode_nonce_params(inputs)?,
-            key_tables: None,
         })
     }
 
@@ -393,19 +302,8 @@ impl GpuSearch {
         })
     }
 
-    /// The vault output key the shader computes for each index in `start..start + count`, or
+    /// The vault output key the shader computes for each locktime in `start..start + count`, or
     /// `None` where it rejects the candidate. For checking the shader against the CPU.
-    pub async fn output_keys(
-        &self,
-        inputs: &SearchInputs,
-        start: u32,
-        count: u32,
-    ) -> Result<Vec<Option<[u8; 32]>>> {
-        let prepared = self.prepare_key(inputs)?;
-        self.debug_keys(&prepared, start, count).await
-    }
-
-    /// The output key the nonce shader computes for each locktime in `start..start + count`.
     pub async fn nonce_output_keys(
         &self,
         inputs: &NonceInputs,
@@ -416,7 +314,7 @@ impl GpuSearch {
         self.debug_keys(&prepared, start, count).await
     }
 
-    /// The output keys for a prepared search, as [`Self::output_keys`].
+    /// The output keys for a prepared search, as [`Self::nonce_output_keys`].
     #[doc(hidden)]
     pub async fn debug_keys(
         &self,
@@ -448,11 +346,6 @@ impl GpuSearch {
         start: u32,
         count: u32,
     ) -> Result<Vec<u32>> {
-        let kernel = if prepared.nonce {
-            &self.nonce
-        } else {
-            &self.key
-        };
         let mut params = prepared.params.clone();
         params[0] = start;
         params[1] = count;
@@ -479,28 +372,14 @@ impl GpuSearch {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let key_tables = prepared.key_tables.as_ref().unwrap_or(&self.empty);
-        let scratch_bytes = if kernel.stages.is_empty() {
-            4
-        } else {
-            u64::from(count.next_multiple_of(kernel.tuning.per_invocation)) * SCRATCH_RECORD * 4
-        };
-        let scratch = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("scratch"),
-            size: scratch_bytes,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vanity"),
             layout: &self.layout,
             entries: &[
                 (0, &params),
-                (1, &kernel.g_table),
+                (1, &self.g_table),
                 (2, &found),
                 (3, &debug_out),
-                (4, key_tables),
-                (5, &scratch),
             ]
             .map(|(binding, buffer)| wgpu::BindGroupEntry {
                 binding,
@@ -512,15 +391,9 @@ impl GpuSearch {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(if debug { &self.debug } else { &self.search });
             pass.set_bind_group(0, &bind_group, &[]);
-            // WebGPU makes each dispatch's writes visible to the next.
-            for stage in &kernel.stages {
-                pass.set_pipeline(stage);
-                pass.dispatch_workgroups(kernel.tuning.workgroups(count), 1, 1);
-            }
-            pass.set_pipeline(if debug { &kernel.debug } else { &kernel.search });
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(kernel.tuning.workgroups(count), 1, 1);
+            pass.dispatch_workgroups(self.tuning.workgroups(count), 1, 1);
         }
         let source = if debug { &debug_out } else { &found };
         encoder.copy_buffer_to_buffer(source, 0, &readback, 0, read_bytes);
@@ -578,8 +451,8 @@ impl GpuSearch {
     }
 
     #[doc(hidden)]
-    pub fn open_with_sources(key_shader: &str, nonce_shader: &str) -> Result<Self> {
-        pollster::block_on(Self::with_sources(key_shader, nonce_shader))
+    pub fn open_with_source(source: &str) -> Result<Self> {
+        pollster::block_on(Self::with_source(source))
     }
 
     /// Run the nonce shader's field self-test: `inputs` is a case count then 40 limbs per case;
@@ -634,27 +507,15 @@ impl GpuSearch {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let unused_scratch = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("field test scratch"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("field test"),
             layout: &self.layout,
-            entries: &[
-                (0, &params),
-                (1, &self.nonce.g_table),
-                (2, &unused),
-                (3, &out),
-                (4, &self.empty),
-                (5, &unused_scratch),
-            ]
-            .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                binding,
-                resource: buffer.as_entire_binding(),
-            }),
+            entries: &[(0, &params), (1, &self.g_table), (2, &unused), (3, &out)].map(
+                |(binding, buffer)| wgpu::BindGroupEntry {
+                    binding,
+                    resource: buffer.as_entire_binding(),
+                },
+            ),
         });
         let mut encoder = self
             .device
@@ -693,24 +554,6 @@ impl GpuSearch {
         pollster::block_on(self.run_batch(prepared, start, count))
     }
 
-    pub fn search_blocking(
-        &self,
-        inputs: &SearchInputs,
-        range: std::ops::Range<u32>,
-        progress: impl FnMut(u64) -> bool,
-    ) -> Result<SearchResult> {
-        pollster::block_on(self.search(inputs, range, progress))
-    }
-
-    pub fn output_keys_blocking(
-        &self,
-        inputs: &SearchInputs,
-        start: u32,
-        count: u32,
-    ) -> Result<Vec<Option<[u8; 32]>>> {
-        pollster::block_on(self.output_keys(inputs, start, count))
-    }
-
     pub fn search_nonces_blocking(
         &self,
         inputs: &NonceInputs,
@@ -747,17 +590,6 @@ fn affine(point: &PublicKey) -> ([u32; 8], [u32; 8]) {
 const SHA256_IV: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
-const SHA512_IV: [u64; 8] = [
-    0x6a09e667f3bcc908,
-    0xbb67ae8584caa73b,
-    0x3c6ef372fe94f82b,
-    0xa54ff53a5f1d36f1,
-    0x510e527fade682d1,
-    0x9b05688c2b3e6c1f,
-    0x1f83d9abfb41bd6b,
-    0x5be0cd19137e2179,
-];
-
 /// The SHA-256 state after `tag || tag` for a BIP340 tagged hash.
 fn tag_midstate(tag: &[u8]) -> [u32; 8] {
     let hash = Sha256::digest(tag);
@@ -767,73 +599,6 @@ fn tag_midstate(tag: &[u8]) -> [u32; 8] {
     let mut state = SHA256_IV;
     sha2::compress256(&mut state, &[GenericArray::clone_from_slice(&block)]);
     state
-}
-
-/// The SHA-512 state after the HMAC key block padded with `pad`.
-fn hmac_midstate(chain_code: &[u8; 32], pad: u8) -> [u32; 16] {
-    let mut block = [pad; 128];
-    for (byte, key) in block.iter_mut().zip(chain_code) {
-        *byte ^= key;
-    }
-    let mut state = SHA512_IV;
-    sha2::compress512(&mut state, &[GenericArray::clone_from_slice(&block)]);
-    let mut words = [0_u32; 16];
-    for (index, word) in state.iter().enumerate() {
-        words[2 * index] = (word >> 32) as u32;
-        words[2 * index + 1] = *word as u32;
-    }
-    words
-}
-
-/// The parameter block the shader reads, in its `P_*` order.
-pub(crate) fn encode_params(inputs: &SearchInputs) -> Result<Vec<u32>> {
-    ensure!(
-        (1..=32).contains(&inputs.target_bits),
-        "target must be between 1 and 32 bits"
-    );
-    let parent = PublicKey::from_slice(&inputs.parent_public_key).context("invalid parent key")?;
-    let signer = signer_point(&inputs.signer_key)?;
-    let mut params = Vec::with_capacity(PARAM_WORDS);
-    params.extend([0, 0, inputs.target_value, inputs.target_bits]);
-    params.extend(hmac_midstate(&inputs.chain_code, 0x36));
-    params.extend(hmac_midstate(&inputs.chain_code, 0x5c));
-    // The inner message: serP(parent) || index || padding, length (128 + 37) bytes.
-    let mut message = [0_u8; 128];
-    message[..33].copy_from_slice(&inputs.parent_public_key);
-    message[37] = 0x80;
-    message[120..].copy_from_slice(&((128_u64 + 37) * 8).to_be_bytes());
-    params.extend(
-        message
-            .chunks(4)
-            .map(|chunk| u32::from_be_bytes(chunk.try_into().expect("four bytes"))),
-    );
-    let (signer_x, signer_y) = affine(&signer);
-    params.extend(signer_x);
-    params.extend(signer_y);
-    params.extend(tag_midstate(b"KeyAgg list"));
-    params.extend(tag_midstate(b"KeyAgg coefficient"));
-    params.extend(tag_midstate(b"TapTweak"));
-    params.extend(
-        inputs
-            .merkle_root
-            .chunks(4)
-            .map(|chunk| u32::from_be_bytes(chunk.try_into().expect("four bytes"))),
-    );
-    let (parent_x, parent_y) = affine(&parent);
-    params.extend(parent_x);
-    params.extend(parent_y);
-    ensure!(params.len() == PARAM_WORDS, "parameter block size changed");
-    Ok(params)
-}
-
-/// The key kernel's signer table then parent table.
-pub(crate) fn key_tables(inputs: &SearchInputs, bits: u32) -> Result<Vec<u32>> {
-    let mut tables = point_table(signer_point(&inputs.signer_key)?, bits)?;
-    tables.extend(point_table(
-        PublicKey::from_slice(&inputs.parent_public_key).context("invalid parent key")?,
-        bits,
-    )?);
-    Ok(tables)
 }
 
 /// The nonce kernel's parameter block, in its `P_*` order.

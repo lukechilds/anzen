@@ -98,30 +98,25 @@ extern "C" {
     fn benchmark_panic(message: &str);
 }
 
-/// A GPU vanity-search benchmark on fixed public inputs, through WebGPU. `request` is
-/// `{"kernel":"key"|"nonce","seconds":n}`; resolves to the same JSON envelope as `execute`.
+/// The GPU vanity-search benchmark on fixed public inputs, through WebGPU. `request` is
+/// `{"seconds":n}`; resolves to the same JSON envelope as `execute`.
 /// It touches no device storage, so it runs in its own worker.
 #[wasm_bindgen]
 pub async fn benchmark(request: String) -> String {
-    use anzen_vanity::bench;
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Request {
-        kernel: String,
         seconds: f64,
     }
     std::panic::set_hook(Box::new(|info| benchmark_panic(&info.to_string())));
     let result = async {
         let request: Request = serde_json::from_str(&request)?;
-        let kernel = bench::Kernel::parse(&request.kernel)?;
-        let report = bench::run_wgpu(kernel, request.seconds.clamp(1.0, 300.0), || {
+        let report = anzen_vanity::bench::run_wgpu(request.seconds.clamp(1.0, 300.0), || {
             performance_now() / 1000.0
         })
         .await?;
         let measurement = report.measurement;
         anyhow::Ok(json!({
-            "backend": "wgpu",
-            "kernel": kernel.name(),
             "adapter": report.adapter,
             "setup_seconds": report.setup_seconds,
             "batch": measurement.batch,

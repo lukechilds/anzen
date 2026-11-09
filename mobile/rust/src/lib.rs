@@ -212,61 +212,35 @@ pub unsafe extern "C" fn anzen_mobile_watch(
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
-enum BenchmarkRequest {
-    Backends,
-    Run {
-        backend: String,
-        kernel: String,
-        seconds: f64,
-    },
+#[serde(deny_unknown_fields)]
+struct BenchmarkRequest {
+    seconds: f64,
 }
 
 /// Benchmarks hold the GPU flat out, so only one runs at a time.
 static BENCHMARK: Mutex<()> = Mutex::new(());
 
-/// GPU vanity-search benchmarks on fixed public inputs. They touch no keys or wallet state, so
-/// they run outside the command gate. `backends` lists what this build can run: wgpu
-/// everywhere, plus native Metal on Apple devices.
+/// The GPU vanity search's throughput on fixed public inputs, through wgpu. It touches no keys
+/// or wallet state, so it runs outside the command gate.
 pub fn benchmark(request: &str) -> Result<Value> {
-    use anzen_vanity::bench;
-    Ok(match serde_json::from_str(request)? {
-        BenchmarkRequest::Backends => json!({
-            "backends": if cfg!(target_vendor = "apple") { vec!["wgpu", "metal"] } else { vec!["wgpu"] }
-        }),
-        BenchmarkRequest::Run {
-            backend,
-            kernel,
-            seconds,
-        } => {
-            let kernel = bench::Kernel::parse(&kernel)?;
-            let seconds = seconds.clamp(1.0, 300.0);
-            let _running = BENCHMARK
-                .try_lock()
-                .map_err(|_| anyhow::anyhow!("another benchmark is running"))?;
-            let report = match backend.as_str() {
-                "wgpu" => bench::run_wgpu_blocking(kernel, seconds)?,
-                #[cfg(target_vendor = "apple")]
-                "metal" => bench::run_metal(kernel, seconds)?,
-                other => bail!("this device cannot run the {other} backend"),
-            };
-            let measurement = report.measurement;
-            json!({
-                "backend": backend,
-                "kernel": kernel.name(),
-                "adapter": report.adapter,
-                "setup_seconds": report.setup_seconds,
-                "batch": measurement.batch,
-                "attempts": measurement.attempts,
-                "seconds": measurement.seconds,
-                "rate": measurement.rate,
-            })
-        }
-    })
+    let request: BenchmarkRequest = serde_json::from_str(request)?;
+    let _running = BENCHMARK
+        .try_lock()
+        .map_err(|_| anyhow::anyhow!("another benchmark is running"))?;
+    let report = anzen_vanity::bench::run_wgpu_blocking(request.seconds.clamp(1.0, 300.0))?;
+    let measurement = report.measurement;
+    Ok(json!({
+        "adapter": report.adapter,
+        "setup_seconds": report.setup_seconds,
+        "batch": measurement.batch,
+        "attempts": measurement.attempts,
+        "seconds": measurement.seconds,
+        "rate": measurement.rate,
+    }))
 }
 
-/// GPU benchmark requests (`backends`, `run`); returns a JSON envelope the caller owns until
-/// `anzen_mobile_free`. `run` blocks for the whole benchmark, so call it off the main thread.
+/// Run the GPU benchmark (`{"seconds": n}`); returns a JSON envelope the caller owns until
+/// `anzen_mobile_free`. It blocks for the whole benchmark, so call it off the main thread.
 ///
 /// # Safety
 /// `request` must reference a live NUL-terminated UTF-8 string for this call.

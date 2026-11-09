@@ -1,12 +1,15 @@
 # GPU vanity search performance log
 
-Two kernels, both measured on an Apple M4 Max (40-core GPU) through wgpu → Metal:
+One kernel, through wgpu everywhere (Metal, Vulkan, DirectX natively and WebGPU in browsers):
+grind the recovery leaf's long-past `after()` locktime with both keys fixed (leaf hash, Taproot
+tweak, one `t·G`). A 5-character `vault` prefix needs about 33.5M candidates on average.
 
-- **key**: grind the phone vault key index (BIP32 child, MuSig2 key aggregation, Taproot tweak).
-- **nonce**: grind the recovery leaf's past `after()` locktime with both keys fixed (leaf hash,
-  Taproot tweak, one `t·G`).
-
-A 5-character `vault` prefix needs about 33.5M candidates on average.
+Earlier there was also a **key** kernel, grinding the phone vault key index (BIP32 child, MuSig2
+key aggregation, Taproot tweak), and a native **Metal** backend for both. Metal was 1.15–1.3×
+faster for nonce grinding and ~1.5× for key grinding, but it was a second implementation of every
+kernel, it hit the iOS GPU watchdog on an iPhone 12 mini, and nonce grinding on wgpu is already
+~5× faster than key grinding on Metal. Both were removed so one implementation runs everywhere;
+their measurements below are kept as history, and the code is in git history.
 
 ## Method
 
@@ -14,7 +17,7 @@ The GPU's clocks drift by tens of percent within seconds (a run can read 1.1M or
 separate runs barely compare: an A/A test of two whole-run builds differed by 17%. `bench/ab.py`
 instead compiles the baseline commit's shaders next to the working tree's in one process and
 alternates single dispatches between them, over the same candidate ranges, then takes the median
-of the paired ratios. A/A noise this way: key 0.995, nonce 1.016 (40 pairs).
+of the paired ratios. A/A noise this way: 0.995–1.016 (40 pairs).
 
 A change is kept when its paired ratio is at least 1.03 and it wins most pairs (marginal results
 are re-run), and the GPU tests still match the library code. Host-side changes, which the
@@ -22,36 +25,44 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 
 ## Current speed
 
-Alternating 3-second runs on an M4 Max, first round (cool GPU); sustained load throttles all
-kernels by up to ~25% within a minute, and by up to ~2× after long runs:
+M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benchmark.rs run`):
+**~19.5M/s**, so `vault` takes ~1.7 s on average, after 0.45 s of setup (compiling the kernel and
+building the 67 MB generator table on every core). Sustained load throttles by up to ~25% within
+a minute, and by up to ~2× after long runs. Chrome's WebGPU on the same Mac runs the same kernel
+at **19.2M/s**; building the table in single-thread WASM takes ~4 s before the first dispatch.
 
-| Kernel | Start | wgpu | Metal | `vault` (33.5M), best |
-|---|---|---|---|---|
-| key | 710k/s | ~3.4M/s | **~5.2M/s** | ~6.5 s |
-| nonce | 2.64M/s | ~19.8M/s | **~23–25M/s** | ~1.4 s |
+Phones, from the app's settings benchmark (5 s, cool; measured while the key kernel still existed,
+so setup then also compiled it):
 
-The CPU path (16 threads, library code) does about 118k/s of key grinding.
+| Device | Rate | `vault` on average | Batch reached |
+|---|---|---|---|
+| iPhone 15 Pro (A17 Pro) | 2.67M/s | ~13 s | 262,144 |
+| iPhone 12 mini (A14) | 1.30M/s | ~26 s | 65,536 |
 
-The same wgpu kernels in Chrome's WebGPU on the same Mac, from the app's settings benchmark
-(5-second window): key **4.53M/s**, nonce **19.3M/s**. Chrome compiles the key kernel better than
-naga does natively (3.4M/s); the nonce kernel is level. Building the point tables in single-thread
-WASM takes ~13 s for key grinding and ~4 s for nonce grinding before the first dispatch.
+The CPU path (16 threads, library code) grinds phone keys at about 118k/s.
 
-The app benchmark (`bench::Plan`, also `examples/benchmark.rs run <wgpu|metal> <key|nonce>`)
-uses the ramp guard and caps each dispatch at ~0.25 s, so a phone's GPU stays responsive.
+The app benchmark (`bench::Plan`) uses the ramp guard and caps each dispatch at ~0.25 s, so a
+phone's GPU stays responsive.
 
 Browser notes: WGSL requires parentheses between `<<` and `|`. naga accepted the nonce shader
 without them, but Chrome rejected it, and every dispatch through the rejected pipeline then did
 nothing, at an impossible rate. wgpu 30 also panics popping an empty error scope on WebGPU, so
 the browser benchmark checks the kernel's output keys before timing instead.
 
-How the backends differ: the fastest field is not the same on each. Metal has `mulhi`, so its
-32-bit field gets each 64-bit product in two instructions and keeps carries in 32-bit words;
-both Metal kernels use it. WGSL has no `mulhi`, so wgpu builds products from 16-bit halves:
-fine for the key kernel once fully unrolled, but its nonce kernel is faster on the 13-bit field
-(limb products fit in 26 bits, columns sum in a u32). On Apple GPUs 64-bit integer operations are
-emulated, so anything accumulating in 64 bits is slow, and constant limb indexes (unrolled code)
-matter more than anything else: every un-unrolled field ran 2–2.5× slower.
+Why the 13-bit field: WGSL has no `mulhi`, so a 32-bit field builds every product from 16-bit
+halves, and the nonce kernel is faster on 20 limbs of 13 bits (limb products fit in 26 bits,
+columns sum in a u32). On Apple GPUs 64-bit integer operations are emulated, so anything
+accumulating in 64 bits is slow, and constant limb indexes (unrolled code) matter more than
+anything else: every un-unrolled field ran 2–2.5× slower. Metal's `mulhi` was most of its lead.
+
+History, before the removal (alternating 3-second runs, first round):
+
+| Kernel | Start | wgpu | Metal | `vault` (33.5M), best |
+|---|---|---|---|---|
+| key | 710k/s | ~3.4M/s | ~5.2M/s | ~6.5 s |
+| nonce | 2.64M/s | ~19.8M/s | ~23–25M/s | ~1.4 s |
+
+Chrome's WebGPU compiled the key kernel better than naga did natively (4.53M/s against 3.4M/s).
 
 ## Where the time goes
 

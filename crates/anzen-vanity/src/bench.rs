@@ -1,55 +1,15 @@
-//! Throughput benchmarks on fixed public inputs, for comparing devices and backends.
+//! Throughput benchmarks of the nonce search on fixed public inputs, for comparing devices.
 //!
 //! [`Plan`] paces a run without touching the GPU or a clock itself, so native hosts and browsers
 //! drive the same steps: grow dispatches from 256 candidates under a guard, warm up, then count
 //! candidates over a measured window. The target never matches in practice, so the rate is
 //! steady-state throughput.
 
-use crate::{NONCE_LOCKTIMES, NonceInputs, SearchInputs};
+use crate::{NONCE_LOCKTIMES, NonceInputs};
 use anyhow::{Result, bail, ensure};
 
-/// Which search to time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kernel {
-    /// Key grinding: vault key indexes.
-    Key,
-    /// Script nonce grinding: recovery locktimes.
-    Nonce,
-}
-
-impl Kernel {
-    pub fn parse(name: &str) -> Result<Self> {
-        match name {
-            "key" => Ok(Self::Key),
-            "nonce" => Ok(Self::Nonce),
-            other => bail!("unknown kernel {other}"),
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Key => "key",
-            Self::Nonce => "nonce",
-        }
-    }
-
-    /// The first candidate: key indexes start at 0, locktimes at the first past Unix time.
-    fn first(self) -> u32 {
-        match self {
-            Self::Key => 0,
-            Self::Nonce => NONCE_LOCKTIMES.start,
-        }
-    }
-
-    /// The largest dispatch: the batch the desktop benchmarks were tuned at.
-    fn full_batch(self) -> u32 {
-        match self {
-            Self::Key => 1 << 17,
-            Self::Nonce => 1 << 20,
-        }
-    }
-}
-
+/// The largest dispatch: the batch the desktop benchmarks were tuned at.
+const FULL_BATCH: u32 = 1 << 20;
 /// The first ramp step, in candidates.
 const FIRST_BATCH: u32 = 256;
 /// Dispatches stop growing once the next ×4 step would pass this. Short dispatches keep a
@@ -76,7 +36,6 @@ enum Phase {
 /// [`Plan::record`] how long it took, until `next` returns `None`.
 #[derive(Debug, Clone)]
 pub struct Plan {
-    kernel: Kernel,
     phase: Phase,
     count: u32,
     offset: u32,
@@ -89,9 +48,8 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn new(kernel: Kernel, seconds: f64) -> Self {
+    pub fn new(seconds: f64) -> Self {
         Self {
-            kernel,
             phase: Phase::Prime,
             count: FIRST_BATCH,
             offset: 0,
@@ -105,13 +63,13 @@ impl Plan {
 
     /// The next dispatch as (first candidate, count), or `None` when the run is over.
     pub fn next(&self) -> Option<(u32, u32)> {
-        (self.phase != Phase::Done).then(|| (self.kernel.first() + self.offset, self.count))
+        (self.phase != Phase::Done).then(|| (NONCE_LOCKTIMES.start + self.offset, self.count))
     }
 
     /// Record how long the dispatch from [`Plan::next`] took, in seconds.
     pub fn record(&mut self, seconds: f64) -> Result<()> {
         let count = self.count;
-        // Stay well inside each kernel's candidate range.
+        // Stay well inside the locktime range.
         self.offset = (self.offset + count) % (1 << 29);
         match self.phase {
             Phase::Prime => self.phase = Phase::Ramp,
@@ -133,10 +91,10 @@ impl Plan {
                     self.cheapest
                         .map_or(per_candidate, |c| c.min(per_candidate)),
                 );
-                if count >= self.kernel.full_batch() || seconds * 4.0 > TARGET_DISPATCH_SECONDS {
+                if count >= FULL_BATCH || seconds * 4.0 > TARGET_DISPATCH_SECONDS {
                     self.phase = Phase::Warmup;
                 } else {
-                    self.count = (count * 4).min(self.kernel.full_batch());
+                    self.count = (count * 4).min(FULL_BATCH);
                 }
             }
             Phase::Warmup => {
@@ -186,25 +144,12 @@ pub struct Measurement {
 pub struct Report {
     /// The GPU, as its API names it.
     pub adapter: String,
-    /// Opening the GPU, compiling the kernels and building the point tables, in seconds.
+    /// Opening the GPU, compiling the kernel and building the generator table, in seconds.
     pub setup_seconds: f64,
     pub measurement: Measurement,
 }
 
-/// A fixed, valid key search. 32 bits of target match about once in four billion candidates.
-pub fn key_inputs() -> SearchInputs {
-    let mut parent_public_key = [0x02_u8; 33];
-    parent_public_key[1..].copy_from_slice(&GENERATOR_X);
-    SearchInputs {
-        parent_public_key,
-        chain_code: [7; 32],
-        signer_key: SIGNER,
-        merkle_root: [9; 32],
-        target_value: 0xffff_ffff,
-        target_bits: 32,
-    }
-}
-
+/// A fixed, valid search. 32 bits of target match about once in four billion candidates.
 pub fn nonce_inputs() -> NonceInputs {
     NonceInputs {
         internal_key: GENERATOR_X,
@@ -224,17 +169,14 @@ const SIGNER: [u8; 32] = [
     0x5c, 0x77, 0x8e, 0x4b, 0x8c, 0xef, 0x3c, 0xa7, 0xab, 0xac, 0x09, 0xb9, 0x5c, 0x70, 0x9e, 0xe5,
 ];
 
-/// Time `kernel` through wgpu for `seconds`. `now` is a clock in seconds: browsers have no
+/// Time the search through wgpu for `seconds`. `now` is a clock in seconds: browsers have no
 /// `std::time::Instant`, so they pass `performance.now()`.
-pub async fn run_wgpu(kernel: Kernel, seconds: f64, now: impl Fn() -> f64) -> Result<Report> {
+pub async fn run_wgpu(seconds: f64, now: impl Fn() -> f64) -> Result<Report> {
     let started = now();
     let gpu = crate::GpuSearch::new().await?;
-    let prepared = match kernel {
-        Kernel::Key => gpu.prepare_key(&key_inputs())?,
-        Kernel::Nonce => gpu.prepare_nonce(&nonce_inputs())?,
-    };
+    let prepared = gpu.prepare_nonce(&nonce_inputs())?;
     let setup_seconds = now() - started;
-    let mut plan = Plan::new(kernel, seconds);
+    let mut plan = Plan::new(seconds);
     // A browser that rejects a shader reports it asynchronously, and dispatches through it then
     // return nothing at an impossible rate. Check the kernel computes distinct output keys.
     let (start, _) = plan.next().expect("a new plan has a first dispatch");
@@ -257,32 +199,9 @@ pub async fn run_wgpu(kernel: Kernel, seconds: f64, now: impl Fn() -> f64) -> Re
 
 /// [`run_wgpu`] on a native host, blocking.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_wgpu_blocking(kernel: Kernel, seconds: f64) -> Result<Report> {
+pub fn run_wgpu_blocking(seconds: f64) -> Result<Report> {
     let epoch = std::time::Instant::now();
-    pollster::block_on(run_wgpu(kernel, seconds, || epoch.elapsed().as_secs_f64()))
-}
-
-/// Time `kernel` through native Metal for `seconds`.
-#[cfg(all(feature = "metal", target_vendor = "apple"))]
-pub fn run_metal(kernel: Kernel, seconds: f64) -> Result<Report> {
-    let epoch = std::time::Instant::now();
-    let metal = crate::MetalSearch::open()?;
-    let prepared = match kernel {
-        Kernel::Key => metal.prepare_key(&key_inputs())?,
-        Kernel::Nonce => metal.prepare_nonce(&nonce_inputs())?,
-    };
-    let setup_seconds = epoch.elapsed().as_secs_f64();
-    let mut plan = Plan::new(kernel, seconds);
-    while let Some((start, count)) = plan.next() {
-        let started = std::time::Instant::now();
-        metal.run_batch(&prepared, start, count)?;
-        plan.record(started.elapsed().as_secs_f64())?;
-    }
-    Ok(Report {
-        adapter: metal.device_name().into(),
-        setup_seconds,
-        measurement: plan.measurement(),
-    })
+    pollster::block_on(run_wgpu(seconds, || epoch.elapsed().as_secs_f64()))
 }
 
 #[cfg(test)]
@@ -300,7 +219,7 @@ mod tests {
 
     #[test]
     fn ramps_to_the_full_batch_on_a_fast_gpu() {
-        let mut plan = Plan::new(Kernel::Nonce, 2.0);
+        let mut plan = Plan::new(2.0);
         let counts = drive(&mut plan, 1.0 / 24e6);
         assert_eq!(
             &counts[..8],
@@ -314,17 +233,17 @@ mod tests {
 
     #[test]
     fn keeps_dispatches_short_on_a_slow_gpu() {
-        let mut plan = Plan::new(Kernel::Key, 1.0);
-        let per_candidate = 1.0 / 300e3;
+        let mut plan = Plan::new(1.0);
+        let per_candidate = 1.0 / 1.3e6;
         drive(&mut plan, per_candidate);
         let batch = plan.measurement().batch;
-        assert!(batch < Kernel::Key.full_batch());
+        assert!(batch < FULL_BATCH);
         assert!(f64::from(batch) * per_candidate <= TARGET_DISPATCH_SECONDS);
     }
 
     #[test]
     fn stops_when_a_step_slows_down_sharply() {
-        let mut plan = Plan::new(Kernel::Key, 1.0);
+        let mut plan = Plan::new(1.0);
         plan.record(0.5).unwrap();
         plan.record(256.0 * 1e-6).unwrap();
         let error = plan.record(1024.0 * 5e-6).unwrap_err();
@@ -333,7 +252,7 @@ mod tests {
 
     #[test]
     fn stops_on_a_slow_dispatch() {
-        let mut plan = Plan::new(Kernel::Key, 1.0);
+        let mut plan = Plan::new(1.0);
         plan.record(3.0).unwrap();
         assert!(plan.record(3.0).is_err());
     }

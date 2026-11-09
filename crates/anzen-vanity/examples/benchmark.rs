@@ -1,18 +1,20 @@
-//! Measure GPU vanity candidates per second for one kernel and print one JSON line:
+//! Measure GPU vanity candidates per second and print one JSON line:
 //!
 //! ```console
-//! cargo run --release -p anzen-vanity --example benchmark -- nonce --seconds 4 --warmup 1
+//! cargo run --release -p anzen-vanity --example benchmark -- --seconds 4 --warmup 1
 //! ```
 //!
 //! The target never matches in practice, so the rate is steady-state throughput.
 //!
-//! `pair <kernel> --base-shaders DIR` compiles the baseline shaders in DIR next to this build's
-//! and alternates fixed-size dispatches between them, reporting the median of the paired
-//! ratios. The GPU's clocks drift by tens of percent within seconds, so only dispatches
-//! milliseconds apart compare fairly. `bench/ab.py` sets this up from a git revision.
+//! `run [seconds]` runs the app's benchmark instead, ramp guard included.
+//!
+//! `pair --base-shaders DIR` compiles the baseline shaders in DIR next to this build's and
+//! alternates fixed-size dispatches between them, reporting the median of the paired ratios. The
+//! GPU's clocks drift by tens of percent within seconds, so only dispatches milliseconds apart
+//! compare fairly. `bench/ab.py` sets this up from a git revision.
 
-use anzen_vanity::bench::{key_inputs, nonce_inputs};
-use anzen_vanity::{GpuSearch, MAX_INDEX, NONCE_LOCKTIMES};
+use anzen_vanity::bench::nonce_inputs;
+use anzen_vanity::{GpuSearch, NONCE_LOCKTIMES};
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
@@ -21,53 +23,17 @@ fn main() -> anyhow::Result<()> {
         args.next();
         return pair(args.collect());
     }
-    // `run <wgpu|metal> <key|nonce> [seconds]`: the app's benchmark, ramp guard included.
     if args.peek().map(String::as_str) == Some("run") {
         args.next();
-        let backend = args.next().unwrap_or_else(|| "wgpu".into());
-        let kernel = anzen_vanity::bench::Kernel::parse(&args.next().unwrap_or_default())?;
         let seconds = args.next().map_or(Ok(5.0), |value| value.parse())?;
-        let report = match backend.as_str() {
-            "wgpu" => anzen_vanity::bench::run_wgpu_blocking(kernel, seconds)?,
-            #[cfg(feature = "metal")]
-            "metal" => anzen_vanity::bench::run_metal(kernel, seconds)?,
-            other => anyhow::bail!("unknown backend {other}"),
-        };
-        println!("{report:?}");
+        println!("{:?}", anzen_vanity::bench::run_wgpu_blocking(seconds)?);
         return Ok(());
     }
-    // `probe-metal [count]`: compile the Metal kernels and report their thread limits, then, if
-    // given a count, time one key-kernel dispatch of that many candidates. For checking a risky
-    // kernel before benchmarking it.
-    #[cfg(feature = "metal")]
-    if args.peek().map(String::as_str) == Some("probe-metal") {
+    // Builds from before the key kernel was removed took the kernel name first; accept it so
+    // `bench/ab.py --binaries` can run old and new builds alike.
+    if args.peek().map(String::as_str) == Some("nonce") {
         args.next();
-        let started = Instant::now();
-        let metal = anzen_vanity::MetalSearch::open()?;
-        let (key, nonce) = metal.max_threads();
-        println!(
-            "compiled in {:.1?}: max threads per threadgroup key {key}, nonce {nonce}",
-            started.elapsed()
-        );
-        if let Some(count) = args.next() {
-            let count: u32 = count.parse()?;
-            let prepared = metal.prepare_key(&key_inputs())?;
-            let started = Instant::now();
-            metal.run_batch(&prepared, 0, count)?;
-            let elapsed = started.elapsed();
-            println!(
-                "{count} key candidates in {elapsed:.1?}: {:.0}/s",
-                f64::from(count) / elapsed.as_secs_f64()
-            );
-        }
-        return Ok(());
     }
-    #[cfg(feature = "metal")]
-    if args.peek().map(String::as_str) == Some("pair-metal") {
-        args.next();
-        return pair_metal(args.collect());
-    }
-    let kernel = args.next().unwrap_or_else(|| "nonce".into());
     let (mut seconds, mut warmup) = (4.0, 1.0);
     while let Some(flag) = args.next() {
         let value: f64 = args.next().expect("flag value").parse()?;
@@ -77,28 +43,15 @@ fn main() -> anyhow::Result<()> {
             other => anyhow::bail!("unknown flag {other}"),
         }
     }
-    #[cfg(feature = "metal")]
-    if let Some(metal_kernel) = kernel.strip_prefix("metal-") {
-        return metal(metal_kernel, seconds, warmup);
-    }
     let gpu = GpuSearch::open()?;
     let measure = |duration: f64| -> anyhow::Result<u64> {
         let deadline = Instant::now() + Duration::from_secs_f64(duration);
         let mut attempts = 0_u64;
         let mut start = 0_u32;
         while Instant::now() < deadline {
-            let result = match kernel.as_str() {
-                "key" => gpu.search_blocking(&key_inputs(), start..MAX_INDEX + 1, |_| {
-                    Instant::now() < deadline
-                })?,
-                "nonce" => {
-                    let range = NONCE_LOCKTIMES.start + start..NONCE_LOCKTIMES.end;
-                    gpu.search_nonces_blocking(&nonce_inputs(), range, |_| {
-                        Instant::now() < deadline
-                    })?
-                }
-                other => anyhow::bail!("unknown kernel {other}"),
-            };
+            let range = NONCE_LOCKTIMES.start + start..NONCE_LOCKTIMES.end;
+            let result =
+                gpu.search_nonces_blocking(&nonce_inputs(), range, |_| Instant::now() < deadline)?;
             attempts += result.attempts;
             // A chance match ends the search early; carry on after it.
             start = start.wrapping_add(result.attempts as u32) % (1 << 30);
@@ -110,7 +63,7 @@ fn main() -> anyhow::Result<()> {
     let attempts = measure(seconds)?;
     let elapsed = started.elapsed().as_secs_f64();
     println!(
-        "{{\"kernel\":\"{kernel}\",\"rate\":{:.0},\"attempts\":{attempts},\"seconds\":{elapsed:.3},\"adapter\":\"{}\"}}",
+        "{{\"rate\":{:.0},\"attempts\":{attempts},\"seconds\":{elapsed:.3},\"adapter\":\"{}\"}}",
         attempts as f64 / elapsed,
         gpu.adapter_name()
     );
@@ -118,46 +71,32 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn pair(args: Vec<String>) -> anyhow::Result<()> {
-    let kernel = args.first().cloned().unwrap_or_else(|| "nonce".into());
-    let (mut base_dir, mut pairs, mut batch_log2) = (None, 40_usize, None);
-    let mut rest = args.iter().skip(1);
+    let (mut base_dir, mut pairs, mut batch_log2) = (None, 40_usize, 19_u32);
+    let mut rest = args.iter();
     while let Some(flag) = rest.next() {
         let value = rest.next().expect("flag value");
         match flag.as_str() {
             "--base-shaders" => base_dir = Some(std::path::PathBuf::from(value)),
             "--pairs" => pairs = value.parse()?,
-            "--batch-log2" => batch_log2 = Some(value.parse::<u32>()?),
+            "--batch-log2" => batch_log2 = value.parse()?,
             other => anyhow::bail!("unknown flag {other}"),
         }
     }
     let dir = base_dir.expect("--base-shaders DIR");
     let read = |name: &str| std::fs::read_to_string(dir.join(name));
-    let common = read("constants.wgsl")? + &read("common.wgsl")?;
-    let base = GpuSearch::open_with_sources(
-        &(common.clone() + &read("key.wgsl")?),
-        &(common + &read("field13.wgsl").unwrap_or_default() + &read("nonce.wgsl")?),
+    let base = GpuSearch::open_with_source(
+        &(read("constants.wgsl")?
+            + &read("common.wgsl")?
+            + &read("field13.wgsl")?
+            + &read("nonce.wgsl")?),
     )?;
     let candidate = GpuSearch::open()?;
-    let (prepare, batch): (
-        fn(&GpuSearch) -> anyhow::Result<anzen_vanity::Prepared>,
-        u32,
-    ) = match kernel.as_str() {
-        "key" => (
-            |gpu| gpu.prepare_key(&key_inputs()),
-            1 << batch_log2.unwrap_or(17),
-        ),
-        "nonce" => (
-            |gpu| gpu.prepare_nonce(&nonce_inputs()),
-            1 << batch_log2.unwrap_or(19),
-        ),
-        other => anyhow::bail!("unknown kernel {other}"),
-    };
-    let first = if kernel == "nonce" {
-        NONCE_LOCKTIMES.start
-    } else {
-        0
-    };
-    let builds = [(&base, prepare(&base)?), (&candidate, prepare(&candidate)?)];
+    let batch = 1 << batch_log2;
+    let first = NONCE_LOCKTIMES.start;
+    let builds = [
+        (&base, base.prepare_nonce(&nonce_inputs())?),
+        (&candidate, candidate.prepare_nonce(&nonce_inputs())?),
+    ];
     let time = |index: usize, start: u32| -> anyhow::Result<f64> {
         let (gpu, prepared) = &builds[index];
         let started = Instant::now();
@@ -190,122 +129,7 @@ fn pair(args: Vec<String>) -> anyhow::Result<()> {
     }
     let wins = ratios.iter().filter(|ratio| **ratio > 1.0).count();
     println!(
-        "{{\"kernel\":\"{kernel}\",\"base\":{:.0},\"candidate\":{:.0},\"ratio\":{:.4},\"wins\":\"{wins}/{pairs}\"}}",
-        median(&mut base_rates),
-        median(&mut candidate_rates),
-        median(&mut ratios)
-    );
-    Ok(())
-}
-
-/// Native Metal throughput for `key` or `nonce`, in fixed batches.
-#[cfg(feature = "metal")]
-fn metal(kernel: &str, seconds: f64, warmup: f64) -> anyhow::Result<()> {
-    let metal = anzen_vanity::MetalSearch::open()?;
-    let (prepared, first, batch) = metal_prepared(&metal, kernel)?;
-    let measure = |duration: f64| -> anyhow::Result<u64> {
-        let deadline = Instant::now() + Duration::from_secs_f64(duration);
-        let mut attempts = 0_u64;
-        while Instant::now() < deadline {
-            metal.run_batch(&prepared, first + (attempts as u32 % (1 << 29)), batch)?;
-            attempts += u64::from(batch);
-        }
-        Ok(attempts)
-    };
-    ramp("Metal kernel", batch, |count| {
-        metal.run_batch(&prepared, first, count)?;
-        Ok(())
-    })?;
-    measure(warmup)?;
-    let started = Instant::now();
-    let attempts = measure(seconds)?;
-    let elapsed = started.elapsed().as_secs_f64();
-    println!(
-        "{{\"kernel\":\"metal-{kernel}\",\"rate\":{:.0},\"attempts\":{attempts},\"seconds\":{elapsed:.3},\"adapter\":\"{}\"}}",
-        attempts as f64 / elapsed,
-        metal.device_name()
-    );
-    Ok(())
-}
-
-#[cfg(feature = "metal")]
-fn metal_prepared(
-    metal: &anzen_vanity::MetalSearch,
-    kernel: &str,
-) -> anyhow::Result<(anzen_vanity::MetalPrepared, u32, u32)> {
-    Ok(match kernel {
-        "key" => (metal.prepare_key(&key_inputs())?, 0, 1 << 17),
-        "nonce" => (
-            metal.prepare_nonce(&nonce_inputs())?,
-            NONCE_LOCKTIMES.start,
-            1 << 20,
-        ),
-        other => anyhow::bail!("unknown kernel {other}"),
-    })
-}
-
-/// Like `pair`, for the Metal kernels: `pair-metal <kernel> --base-dir DIR` compiles DIR's
-/// common.metal, key.metal and field13.metal + nonce.metal next to this build's.
-#[cfg(feature = "metal")]
-fn pair_metal(args: Vec<String>) -> anyhow::Result<()> {
-    let kernel = args.first().cloned().unwrap_or_else(|| "nonce".into());
-    let (mut base_dir, mut pairs) = (None, 40_usize);
-    let mut rest = args.iter().skip(1);
-    while let Some(flag) = rest.next() {
-        let value = rest.next().expect("flag value");
-        match flag.as_str() {
-            "--base-dir" => base_dir = Some(std::path::PathBuf::from(value)),
-            "--pairs" => pairs = value.parse()?,
-            other => anyhow::bail!("unknown flag {other}"),
-        }
-    }
-    let dir = base_dir.expect("--base-dir DIR");
-    let read = |name: &str| std::fs::read_to_string(dir.join(name));
-    let builds = [
-        anzen_vanity::MetalSearch::with_full_sources(
-            &read("common.metal")?,
-            &read("key.metal")?,
-            &(read("field13.metal").unwrap_or_default() + &read("nonce.metal")?),
-        )?,
-        anzen_vanity::MetalSearch::open()?,
-    ];
-    let prepared = [
-        metal_prepared(&builds[0], &kernel)?,
-        metal_prepared(&builds[1], &kernel)?,
-    ];
-    let (first, batch) = (prepared[0].1, prepared[0].2);
-    for (index, build) in builds.iter().enumerate() {
-        ramp(&format!("build {index}"), batch, |count| {
-            build.run_batch(&prepared[index].0, first, count)?;
-            Ok(())
-        })?;
-    }
-    let time = |index: usize, start: u32| -> anyhow::Result<f64> {
-        let started = Instant::now();
-        builds[index].run_batch(&prepared[index].0, start, batch)?;
-        Ok(f64::from(batch) / started.elapsed().as_secs_f64())
-    };
-    for round in 0..3 {
-        time(0, first + round * batch)?;
-        time(1, first + round * batch)?;
-    }
-    let (mut base_rates, mut candidate_rates, mut ratios) = (vec![], vec![], vec![]);
-    for round in 0..pairs {
-        let start = first + (round as u32 % 256) * batch;
-        let (base_rate, candidate_rate) = if round % 2 == 0 {
-            let base_rate = time(0, start)?;
-            (base_rate, time(1, start)?)
-        } else {
-            let candidate_rate = time(1, start)?;
-            (time(0, start)?, candidate_rate)
-        };
-        base_rates.push(base_rate);
-        candidate_rates.push(candidate_rate);
-        ratios.push(candidate_rate / base_rate);
-    }
-    let wins = ratios.iter().filter(|ratio| **ratio > 1.0).count();
-    println!(
-        "{{\"kernel\":\"metal-{kernel}\",\"base\":{:.0},\"candidate\":{:.0},\"ratio\":{:.4},\"wins\":\"{wins}/{pairs}\"}}",
+        "{{\"base\":{:.0},\"candidate\":{:.0},\"ratio\":{:.4},\"wins\":\"{wins}/{pairs}\"}}",
         median(&mut base_rates),
         median(&mut candidate_rates),
         median(&mut ratios)

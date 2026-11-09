@@ -21,9 +21,6 @@ zeroize = "1.8"
 # Mobile devices do not provide libsqlite3 development files for cross-compilation.
 rusqlite = { version = "0.31", features = ["bundled"] }
 
-[target.'cfg(target_vendor = "apple")'.dependencies]
-anzen-vanity = { path = "../../crates/anzen-vanity", features = ["metal"] }
-
 [dev-dependencies]
 tempfile = "3.23"
 bitcoincore-rpc = "0.19"

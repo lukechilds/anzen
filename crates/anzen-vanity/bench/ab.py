@@ -8,9 +8,9 @@ The GPU's clocks drift by tens of percent within seconds, so separate runs barel
 - Host changes (--binaries): BASE is built in a scratch worktree and whole runs alternate in
   ABBA order. Much noisier; use more rounds.
 
-    crates/anzen-vanity/bench/ab.py nonce
-    crates/anzen-vanity/bench/ab.py both --base HEAD~1 --pairs 60
-    crates/anzen-vanity/bench/ab.py key --binaries --rounds 8
+    crates/anzen-vanity/bench/ab.py
+    crates/anzen-vanity/bench/ab.py --base HEAD~1 --pairs 60
+    crates/anzen-vanity/bench/ab.py --binaries --rounds 8
 """
 
 import argparse
@@ -18,11 +18,10 @@ import json
 import os
 import statistics
 import subprocess
-import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-BUILD = ["cargo", "build", "-q", "--release", "-p", "anzen-vanity", "--features", "metal", "--example", "benchmark"]
+BUILD = ["cargo", "build", "-q", "--release", "-p", "anzen-vanity", "--example", "benchmark"]
 
 
 def build_base(rev: str) -> Path:
@@ -44,37 +43,19 @@ def build_candidate() -> Path:
 def base_shaders(rev: str) -> Path:
     directory = REPO / "target" / "bench-base-shaders"
     directory.mkdir(parents=True, exist_ok=True)
-    for name in ["constants.wgsl", "common.wgsl", "field13.wgsl", "key.wgsl", "nonce.wgsl"]:
+    for name in ["constants.wgsl", "common.wgsl", "field13.wgsl", "nonce.wgsl"]:
         shown = subprocess.run(
             ["git", "show", f"{rev}:crates/anzen-vanity/src/{name}"],
-            cwd=REPO, capture_output=True, text=True,
+            cwd=REPO, capture_output=True, text=True, check=True,
         )
-        # Files a baseline predates are left out (the benchmark treats them as empty).
-        if shown.returncode == 0:
-            (directory / name).write_text(shown.stdout)
-        elif (directory / name).exists():
-            (directory / name).unlink()
+        (directory / name).write_text(shown.stdout)
     return directory
 
 
-def base_metal(rev: str) -> Path:
-    directory = REPO / "target" / "bench-base-metal"
-    directory.mkdir(parents=True, exist_ok=True)
-    for name in ["common.metal", "field13.metal", "key.metal", "nonce.metal"]:
-        shown = subprocess.run(
-            ["git", "show", f"{rev}:crates/anzen-vanity/src/metal/{name}"],
-            cwd=REPO, capture_output=True, text=True,
-        )
-        if shown.returncode == 0:
-            (directory / name).write_text(shown.stdout)
-        elif (directory / name).exists():
-            (directory / name).unlink()
-    return directory
-
-
-def run(binary: Path, kernel: str, seconds: float, warmup: float) -> float:
+def run(binary: Path, seconds: float, warmup: float) -> float:
     output = subprocess.run(
-        [str(binary), kernel, "--seconds", str(seconds), "--warmup", str(warmup)],
+        # Older builds take the kernel name first; newer ones accept and ignore it.
+        [str(binary), "nonce", "--seconds", str(seconds), "--warmup", str(warmup)],
         capture_output=True, text=True, check=True, timeout=600,
     ).stdout
     return json.loads(output.strip().splitlines()[-1])["rate"]
@@ -82,7 +63,6 @@ def run(binary: Path, kernel: str, seconds: float, warmup: float) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("kernel", choices=["key", "nonce", "both", "metal-key", "metal-nonce", "metal-both", "all"])
     parser.add_argument("--base", default="HEAD")
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--seconds", type=float, default=3.0)
@@ -90,50 +70,36 @@ def main() -> None:
     parser.add_argument("--binaries", action="store_true")
     parser.add_argument("--pairs", type=int, default=40)
     args = parser.parse_args()
-    kernels = {
-        "both": ["key", "nonce"],
-        "metal-both": ["metal-key", "metal-nonce"],
-        "all": ["key", "nonce", "metal-key", "metal-nonce"],
-    }.get(args.kernel, [args.kernel])
 
     if not args.binaries:
         candidate = build_candidate()
-        shaders, metal = base_shaders(args.base), base_metal(args.base)
-        for kernel in kernels:
-            if kernel.startswith("metal-"):
-                command = [str(candidate), "pair-metal", kernel.removeprefix("metal-"), "--base-dir", str(metal)]
-            else:
-                command = [str(candidate), "pair", kernel, "--base-shaders", str(shaders)]
-            # A shader that hangs Apple's compiler never returns; give up rather than wait.
-            result = subprocess.run(
-                command + ["--pairs", str(args.pairs)],
-                capture_output=True, text=True, timeout=600,
-            )
-            lines = (result.stdout.strip() or result.stderr.strip()).splitlines()
-            print(lines[-1] if lines else f"{kernel}: no output (exit {result.returncode})")
-            sys.stdout.flush()
+        command = [str(candidate), "pair", "--base-shaders", str(base_shaders(args.base))]
+        # A shader that hangs the GPU compiler never returns; give up rather than wait.
+        result = subprocess.run(
+            command + ["--pairs", str(args.pairs)],
+            capture_output=True, text=True, timeout=600,
+        )
+        lines = (result.stdout.strip() or result.stderr.strip()).splitlines()
+        print(lines[-1] if lines else f"no output (exit {result.returncode})")
         return
 
     base, candidate = build_base(args.base), build_candidate()
-    for kernel in kernels:
-        rates = {"base": [], "candidate": []}
-        for round_index in range(args.rounds):
-            order = [("base", base), ("candidate", candidate)]
-            if round_index % 2:
-                order.reverse()
-            for name, binary in order:
-                rates[name].append(run(binary, kernel, args.seconds, args.warmup))
-        base_median = statistics.median(rates["base"])
-        candidate_median = statistics.median(rates["candidate"])
-        print(json.dumps({
-            "kernel": kernel,
-            "base": round(base_median),
-            "candidate": round(candidate_median),
-            "ratio": round(candidate_median / base_median, 4),
-            "base_runs": [round(rate) for rate in rates["base"]],
-            "candidate_runs": [round(rate) for rate in rates["candidate"]],
-        }))
-        sys.stdout.flush()
+    rates = {"base": [], "candidate": []}
+    for round_index in range(args.rounds):
+        order = [("base", base), ("candidate", candidate)]
+        if round_index % 2:
+            order.reverse()
+        for name, binary in order:
+            rates[name].append(run(binary, args.seconds, args.warmup))
+    base_median = statistics.median(rates["base"])
+    candidate_median = statistics.median(rates["candidate"])
+    print(json.dumps({
+        "base": round(base_median),
+        "candidate": round(candidate_median),
+        "ratio": round(candidate_median / base_median, 4),
+        "base_runs": [round(rate) for rate in rates["base"]],
+        "candidate_runs": [round(rate) for rate in rates["candidate"]],
+    }))
 
 
 if __name__ == "__main__":

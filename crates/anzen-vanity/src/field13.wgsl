@@ -478,15 +478,6 @@ fn f_canonical(a: F) -> F {
     return r;
 }
 
-fn f_is_zero(a: F) -> bool {
-    let r = f_canonical(a);
-    var bits = 0u;
-    for (var i = 0u; i < 20u; i++) {
-        bits |= r[i];
-    }
-    return bits == 0u;
-}
-
 fn fe_to_f(a: Fe) -> F {
     var r: F;
     for (var i = 0u; i < 20u; i++) {
@@ -521,12 +512,6 @@ fn f_one() -> F {
     var r: F;
     r[0] = 1u;
     return r;
-}
-
-fn jac_infinity() -> JacF {
-    var p: JacF;
-    p.infinity = true;
-    return p;
 }
 
 fn jac_from_affine(q: AffF) -> JacF {
