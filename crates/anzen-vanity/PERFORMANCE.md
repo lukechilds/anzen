@@ -22,20 +22,23 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 
 ## Current speed
 
-Measured on a cool GPU, alternating short runs (sustained load throttles all by up to ~2×):
+Alternating 3-second runs on an M4 Max, first round (cool GPU); sustained load throttles all
+kernels by up to ~25% within a minute, and by up to ~2× after long runs:
 
-| Kernel | Start | wgpu now | Metal | `vault` (33.5M), best |
+| Kernel | Start | wgpu | Metal | `vault` (33.5M), best |
 |---|---|---|---|---|
-| key | 710k/s | ~1.25M/s | **~1.51M/s** | ~22 s |
-| nonce | 2.64M/s | ~16.0M/s | **~17.1M/s** | ~2.0 s |
+| key | 710k/s | ~3.4M/s | **~5.2M/s** | ~6.5 s |
+| nonce | 2.64M/s | ~19.8M/s | **~23–25M/s** | ~1.4 s |
 
-The Metal kernels (`--features metal`) carry the same optimizations as the wgpu ones (16-bit G
-windows, a shared inversion per 4 or 8 candidates). The key kernel keeps 8×32-bit limbs with
-native 64-bit products, which beats wgpu's 32-bit limbs built from 16-bit halves. The nonce
-kernel first did the same and ran at 9.1M/s, 1.8× slower than the 13-bit wgpu kernel: Apple GPUs
-emulate 64-bit integer operations with several 32-bit instructions. Ported to the same unrolled
-13-bit field (generated from the same script as the WGSL), it runs at ~17.1M/s, about 7% ahead
-of wgpu in alternating runs.
+The CPU path (16 threads, library code) does about 118k/s of key grinding.
+
+How the backends differ: the fastest field is not the same on each. Metal has `mulhi`, so its
+32-bit field gets each 64-bit product in two instructions and keeps carries in 32-bit words;
+both Metal kernels use it. WGSL has no `mulhi`, so wgpu builds products from 16-bit halves:
+fine for the key kernel once fully unrolled, but its nonce kernel is faster on the 13-bit field
+(limb products fit in 26 bits, columns sum in a u32). On Apple GPUs 64-bit integer operations are
+emulated, so anything accumulating in 64 bits is slow, and constant limb indexes (unrolled code)
+matter more than anything else: every un-unrolled field ran 2–2.5× slower.
 
 ## Where the time goes
 
@@ -90,6 +93,10 @@ What other secp256k1 GPU engines do, and whether it applies here:
 | wgpu nonce on the unrolled 32-bit field instead of 13-bit | nonce | 0.89 | Without mulhi the 13-bit field still wins on wgpu |
 | Metal kernels: candidates per thread 4 / 16 after the field change (from 8) | metal key / metal nonce | 0.93 / 0.90 at 4; 0.65 / 0.99 at 16 | 8 stays best |
 | Metal key: stage functions inlined (only the hashes kept `noinline`) | metal key | 0.82 | `noinline` helps on Apple GPUs; see the kept row |
+| Metal: `fe_mul` and `fe_sqr` `noinline` too | metal key / metal nonce | 0.59 / 0.58 | Call overhead dominates at this granularity |
+| Metal: `point_double` and `scalar_mul` `noinline` (rarely or once called) | metal key / metal nonce | 0.99 / 0.99 | No gain; reverted |
+| Metal: 32-bit point addition without the P = ±Q checks | metal key / metal nonce | 0.99 / 0.99 | Unlike the 13-bit field, its zero checks are cheap, and the doubling path is already out of line |
+| Thread-group size 32 / 128 re-swept after the field changes | metal key, metal nonce, key | 0.93–1.005 | 64 stays best |
 | wgpu key: 8 candidates per thread after the table change (from 4) | key | 0.97 | 4 stays best on wgpu, unlike Metal |
 | Thread-group size 32 / 128 / 256 (from 64) | metal key, metal nonce, nonce | 0.96–0.99; wgpu nonce 0.95 at 256 | 64 stays best on every kernel and backend |
 | Workgroup size 32 / 128 / 256 (from 64) | both | 1.01 / 0.93 / 0.83 key; 0.98 / 1.00 / 0.92 nonce | 64 is best; bigger groups lower occupancy |
