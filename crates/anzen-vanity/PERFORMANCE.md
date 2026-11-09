@@ -30,7 +30,7 @@ M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benc
 **~43M/s**, so `vault` takes ~0.8 s on average, after ~0.1 s of setup (compiling the kernel and
 building the 128 MiB generator table on the GPU); `anzen phone init --vanity` on regtest finds one
 in ~1.4 s end to end. Sustained load throttles by up to ~25% within a minute, and much further
-after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~36.4M/s**.
+after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~37–38M/s** cool (this morning's build, alternated with it: 32–34M/s); hot after hours of benchmarking, Chrome throttles far harder than native (14–17M/s for both builds).
 
 The third loop took the kernel from ~19.5M/s to ~40M/s (2.05×), and the fourth's two-pass split to ~43M/s: Q folded into window 0, signed
 and then varying window widths (16 additions to 13), the generator table built on the GPU, a
@@ -43,8 +43,8 @@ Phones, cool (a fan on them), 5-second runs launched headless with `--anzen-benc
 
 | Device | Rate | `vault` on average | Setup (warm) | Batch reached |
 |---|---|---|---|---|
-| iPhone 15 Pro (A17 Pro) | 5.65–5.88M/s | ~5.8 s | 0.24 s | 1,048,576 |
-| iPhone 12 mini (A14) | 1.58M/s | ~21 s | 0.4 s | 262,144 |
+| iPhone 15 Pro (A17 Pro) | 5.65–5.88M/s | ~5.8 s | 0.24 s, 0.15 s with the two-pass setup | 1,048,576 |
+| iPhone 12 mini (A14) | 1.58M/s | ~21 s | 0.4 s, 0.33 s with the two-pass setup | 262,144 |
 
 The loop's steps measured on both phones the same way (each row adds the named commit):
 
@@ -147,6 +147,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| The search's pipelines compiled from the source without the setup section (`// BEGIN SETUP` … `// END SETUP`), the setup's from the whole source. After the two-pass setup, the iPhone 12 mini's search measured ~5% slower (1.59 → 1.52M/s in reverse order, 1.58 → 1.48 in order) and the 15 Pro's ~1–5%, though the search's code had not changed; separate modules keep setup code from affecting how the search compiles. Not yet measured on the phones (they locked) | nonce | isolation |
 | Setup passes split like the search: one thread per point writes its Jacobian point packed to the search's scratch buffer (borrowed through the debug binding), then a second pass makes 16 per thread affine with one inversion, holding only the running product. The benchmark's whole setup on the M4 Max ~66 → ~53 ms; preparing a search ~22 → ~18 ms | nonce | setup only |
 | Setup passes back to one point per thread (from 8): batching paid when inversion was Fermat's, but with safegcd holding 8 Jacobian points through the inversion costs more than the 7 inversions it saves. The GPU's table build ~45 → ~27 ms; the benchmark's whole setup on the M4 Max ~72 → ~63 ms (fresh processes, interleaved) | nonce | setup only |
 | The generator table's small CPU tables (~10,000 points from libsecp256k1) built one window per thread on native hosts: 20 → 3.3 ms of the M4 Max's warm 69 ms to open the GPU (the rest: ~11 ms device and pipelines, ~40 ms the GPU's table build) | nonce | setup only |

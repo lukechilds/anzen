@@ -310,32 +310,39 @@ impl GpuSearch {
         // bounds, table digits within their windows) and every loop has a constant trip count.
         // Runtime bounds checks and loop counters would otherwise stop the compiler unrolling the
         // field arithmetic.
-        let module = unsafe {
+        let module = |label, source: &str| unsafe {
             device.create_shader_module_trusted(
                 wgpu::ShaderModuleDescriptor {
-                    label: Some("nonce"),
+                    label: Some(label),
                     source: wgpu::ShaderSource::Wgsl(source.into()),
                 },
                 wgpu::ShaderRuntimeChecks::unchecked(),
             )
         };
-        let pipeline = |entry_point| {
+        // The search compiles without the setup passes' section: with it in the module, the
+        // iPhone 12 mini's search ran ~5% slower.
+        let search_module = module("nonce search", &without_setup(source)?);
+        let setup_module = module("nonce setup", source);
+        let pipeline = |module: &wgpu::ShaderModule, entry_point| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("nonce"),
+                label: Some(entry_point),
                 layout: Some(&pipeline_layout),
-                module: &module,
+                module,
                 entry_point: Some(entry_point),
                 compilation_options: Default::default(),
                 cache: None,
             })
         };
-        let project = pipeline("project");
-        let search = pipeline("search");
-        let debug = pipeline("debug");
-        let fold_q = [pipeline("fold_q_points"), pipeline("fold_q_affine")];
+        let project = pipeline(&search_module, "project");
+        let search = pipeline(&search_module, "search");
+        let debug = pipeline(&search_module, "debug");
+        let fold_q = [
+            pipeline(&setup_module, "fold_q_points"),
+            pipeline(&setup_module, "fold_q_affine"),
+        ];
         let build_table = [
-            pipeline("build_table_points"),
-            pipeline("build_table_affine"),
+            pipeline(&setup_module, "build_table_points"),
+            pipeline(&setup_module, "build_table_affine"),
         ];
         let search = Self {
             device: device.clone(),
@@ -722,6 +729,18 @@ impl GpuSearch {
         readback.unmap();
         Ok(words)
     }
+}
+
+/// The shader source without its setup section (from `// BEGIN SETUP` to `// END SETUP`).
+fn without_setup(source: &str) -> Result<String> {
+    let start = source
+        .find("// BEGIN SETUP")
+        .context("the shader has no setup section")?;
+    let end = source[start..]
+        .find("// END SETUP")
+        .context("the shader's setup section has no end")?
+        + start;
+    Ok(format!("{}{}", &source[..start], &source[end..]))
 }
 
 fn upload(device: &wgpu::Device, label: &str, words: &[u32]) -> wgpu::Buffer {

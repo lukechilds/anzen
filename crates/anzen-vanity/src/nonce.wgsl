@@ -78,6 +78,8 @@ fn q_point(digit: Digit) -> AffF {
     return AffF(fe_to_f(x), fe_to_f(y), false);
 }
 
+// BEGIN SETUP: the search's pipelines compile without this section, so the setup passes'
+// code cannot change how the compiler treats the search.
 // The setup passes take small tables from the host and split each digit d into
 // hi·2^SPLIT_BITS + lo: for a window with base B, lo·B for lo in 1..2^SPLIT_BITS, then
 // (hi·2^SPLIT_BITS)·B for hi in 1..=2^(width − 1 − SPLIT_BITS). hi·2^SPLIT_BITS = ±lo never
@@ -257,6 +259,8 @@ fn build_table_affine(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     setup_affine(first, false);
 }
+
+// END SETUP
 
 // A field element held in the search's scratch buffer, two limbs (each at most 2^13) per word.
 alias Packed = array<u32, 10>;
