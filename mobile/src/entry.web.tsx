@@ -26,22 +26,25 @@ function initialNetwork(): Network | null {
   const chosen = linked && networks.includes(linked) ? linked : last && networks.includes(last) ? last : hostCapability ? 'regtest' : null;
   return chosen === 'bitcoin' && !prefs().mainnet ? null : chosen;
 }
-// Each network keeps its own devices. Regtest's belong to the host session, so they live in its
-// link; the others are remembered by this browser.
+// Each network keeps its own devices, remembered by this browser. Regtest's belong to the host
+// session, so they are kept under its capability. Nothing is written to the URL: the host's link
+// keeps its capability and port, and `#network=…` only picks a network when opened.
+const sessionKey = (network: Network) => network === 'regtest' ? `anzen-regtest-session:${hostCapability}` : `anzen-static-session:${network}`;
 function savedDevices(network: Network) {
-  if (network === 'regtest') {
-    const current = new URLSearchParams(window.location.hash.slice(1));
-    return current.get('network') === 'regtest' ? current : new URLSearchParams();
-  }
-  try { return new URLSearchParams(localStorage.getItem(`anzen-static-session:${network}`) || ''); } catch { return new URLSearchParams(); }
+  try {
+    const saved = localStorage.getItem(sessionKey(network));
+    if (saved) return new URLSearchParams(saved);
+  } catch { /* Only a convenience. */ }
+  // Links from before kept regtest's devices in the URL.
+  return network === 'regtest' && options.get('network') === 'regtest' ? options : new URLSearchParams();
 }
 function saveDevices(network: Network, ids: string[]) {
   const next = new URLSearchParams();
-  if (hostCapability) { next.set('playground', hostCapability); if (options.get('port')) next.set('port', options.get('port')!); }
-  next.set('network', network);
   ids.forEach((id, i) => next.set(slots[i], id));
-  window.history.replaceState(null, '', `#${next}`);
-  if (network !== 'regtest') try { localStorage.setItem(`anzen-static-session:${network}`, next.toString()); } catch { /* Only a convenience. */ }
+  try { localStorage.setItem(sessionKey(network), next.toString()); } catch { /* Only a convenience. */ }
+  const host = new URLSearchParams();
+  if (hostCapability) { host.set('playground', hostCapability); if (options.get('port')) host.set('port', options.get('port')!); }
+  window.history.replaceState(null, '', hostCapability ? `#${host}` : window.location.pathname + window.location.search);
 }
 const settingsFor = (network: Network): Settings => network === 'regtest'
   ? { endpoint, capability: hostCapability!, allowMainnet: false, network }

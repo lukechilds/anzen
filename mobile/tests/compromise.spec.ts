@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { policyDevices, openVaultPanel, closeVaultPanel, setUpVault, declinedOnSigner, recoverWithSigner, openSignerRecovery, approveOnSigner, signerShows, useDevice } from './helpers';
+import { policyDevices, openVaultPanel, closeVaultPanel, setUpVault, declinedOnSigner, recoverWithSigner, openSignerRecovery, approveOnSigner, signerShows, useDevice, deviceId } from './helpers';
 import { startTestHost } from './host';
 
 let host: Awaited<ReturnType<typeof startTestHost>>;
@@ -9,11 +9,11 @@ test.afterAll(() => host?.stop());
 test('both compromised devices can jointly drain the vault immediately', async ({ page }) => {
   const { wallet, signer, w, s, node, approve } = await policyDevices(page, host.url);
   await approve();
-  const original = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')!;
+  const original = await deviceId(page, 'wallet');
   // A separate phone supplies the attacker's destination. The original pair represents
   // both compromised keys; no private state is copied into the receiving device.
   await page.getByRole('button', { name: 'New wallet phone', exact: true }).click(); await w('Get started').click();
-  const receiver = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')!;
+  const receiver = await deviceId(page, 'wallet');
   await w('↓ Receive').click();
   const destination = (await wallet.getByTestId('wallet-address').textContent())!;
   await useDevice(page, 'wallet', original);
@@ -35,11 +35,11 @@ test('cloud ciphertext and public vault data cannot authorize unrelated attacker
   const { wallet, signer, w, s, approve } = await policyDevices(page, host.url);
   await approve();
   await openVaultPanel(wallet, 'Vault settings'); await w('Recovery backup').click(); await approveOnSigner(page, 'Approve recovery backup'); await expect(wallet.getByText('Recovery backup saved.')).toBeVisible();
-  const originalSigner = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('signer')!;
+  const originalSigner = await deviceId(page, 'signer');
   await page.getByRole('button', { name: 'New wallet phone', exact: true }).click();
   await page.getByRole('button', { name: 'New signer device', exact: true }).click();
   await w('Get started').click(); await setUpVault(page, wallet);
-  const attackerSigner = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('signer')!;
+  const attackerSigner = await deviceId(page, 'signer');
   // Public vault information is assumed exposed, as in the CLI cloud-compromise test.
   // The original signer only shares existing public information; it approves no new action.
   await useDevice(page, 'signer', originalSigner);
@@ -65,7 +65,7 @@ test('cloud ciphertext and public vault data cannot authorize unrelated attacker
 test('a stolen phone exposes hot funds but the owner can rotate cold funds away', async ({ page }) => {
   const { wallet, signer, w, s, node, approve } = await policyDevices(page, host.url);
   await approve();
-  const stolenPhone = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')!;
+  const stolenPhone = await deviceId(page, 'wallet');
   await openVaultPanel(wallet, 'Vault settings'); await w('Recovery backup').click(); await approveOnSigner(page, 'Approve recovery backup'); await expect(wallet.getByText('Recovery backup saved.')).toBeVisible();
   await closeVaultPanel(wallet); await wallet.getByRole('tab', { name: 'Wallet', exact: true }).click(); await w('↓ Receive').click();
   const hotAddress = (await wallet.getByTestId('wallet-address').textContent())!;
@@ -75,7 +75,7 @@ test('a stolen phone exposes hot funds but the owner can rotate cold funds away'
 
   // The attacker's receiving phone and the owner's replacement are separate devices.
   await page.getByRole('button', { name: 'New wallet phone', exact: true }).click(); await w('Get started').click();
-  const attacker = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')!;
+  const attacker = await deviceId(page, 'wallet');
   await w('↓ Receive').click();
   const destination = (await wallet.getByTestId('wallet-address').textContent())!;
   await useDevice(page, 'wallet', stolenPhone);
@@ -97,7 +97,7 @@ test('a stolen phone exposes hot funds but the owner can rotate cold funds away'
   // The owner recovers using the surviving HWW and exported ciphertext, without opening
   // the compromised phone or approving its proposed destination.
   await page.getByRole('button', { name: 'New wallet phone', exact: true }).click(); await w('Get started').click();
-  const owner = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')!;
+  const owner = await deviceId(page, 'wallet');
   await recoverWithSigner(page);
   await page.getByRole('button', { name: 'Load latest exported backup', exact: true }).click();
   await w('Request phone key recovery').click();

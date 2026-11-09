@@ -1,6 +1,6 @@
 import { test, expect, BrowserContext, Page } from '@playwright/test';
 import fixtures from '../../test-vectors/chain-headers.json';
-import { closeVaultPanel, openVaultPanel, vaultAddress, setUpVault, recoverWithSigner, approveOnSigner } from './helpers';
+import { closeVaultPanel, openVaultPanel, vaultAddress, setUpVault, recoverWithSigner, approveOnSigner, deviceId } from './helpers';
 import { WebSocketServer, WebSocket } from 'ws';
 import { once } from 'node:events';
 import { AddressInfo } from 'node:net';
@@ -139,7 +139,10 @@ test('mainnet asks once, then reopens where it left off, never a localhost backe
   await expect(wallet.getByTestId('bitcoin-balance')).toHaveText('₿0.0000', { timeout: 60_000 });
   await wallet.getByRole('button', { name: '↓ Receive', exact: true }).click();
   await expect(wallet.getByText(/^bc1p/)).toBeVisible();
-  const savedWallet = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet');
+  const savedWallet = await deviceId(page, 'wallet', 'bitcoin');
+  expect(savedWallet).toBeTruthy();
+  // The devices are remembered by the browser, not the URL.
+  expect(new URL(page.url()).hash).toBe('');
   await page.reload();
   await expect(page.getByText('Real bitcoin', { exact: true })).toBeVisible();
   await expect(wallet.getByRole('tab', { name: 'Wallet', exact: true })).toBeVisible();
@@ -147,7 +150,7 @@ test('mainnet asks once, then reopens where it left off, never a localhost backe
   await page.goto('about:blank'); await page.goto(origin(baseURL));
   await expect(page.getByText('Choose a network', { exact: true })).toHaveCount(0);
   await expect(wallet.getByRole('tab', { name: 'Wallet', exact: true })).toBeVisible();
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')).toBe(savedWallet);
+  expect(await deviceId(page, 'wallet', 'bitcoin')).toBe(savedWallet);
   expect(backend).toEqual([]);
 });
 

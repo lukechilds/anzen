@@ -50,6 +50,16 @@ export async function openSignerRecovery(wallet: Locator) {
 
 // Put an earlier device back in its slot (a stolen phone, say). The playground keeps replaced
 // devices but never lists them; this test hook brings one back.
+// The device open in a slot, from where the emulator keeps each network's devices: a regtest host
+// session's under its capability, Mutinynet's and mainnet's under the network.
+export async function deviceId(page: Page, slot: 'wallet' | 'signer', network: 'regtest' | 'signet' | 'bitcoin' = 'regtest') {
+  return page.evaluate(([slot, network]) => {
+    const prefix = network === 'regtest' ? 'anzen-regtest-session:' : `anzen-static-session:${network}`;
+    const key = Object.keys(localStorage).find(key => key.startsWith(prefix));
+    return new URLSearchParams((key && localStorage.getItem(key)) || '').get(slot)!;
+  }, [slot, network] as const);
+}
+
 export async function useDevice(page: Page, slot: 'wallet' | 'signer', id: string) {
   await page.evaluate(([slot, id]) => (window as unknown as { anzenPlayground: { use(slot: string, id: string): Promise<void> } }).anzenPlayground.use(slot, id), [slot, id]);
 }

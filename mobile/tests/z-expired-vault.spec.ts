@@ -1,5 +1,5 @@
 import { test, expect, type Locator } from '@playwright/test';
-import { policyDevices, openVaultPanel, openSignerRecovery, setUpVault, approveOnSigner, signerShows, useDevice } from './helpers';
+import { policyDevices, openVaultPanel, openSignerRecovery, setUpVault, approveOnSigner, signerShows, useDevice, deviceId } from './helpers';
 import { startTestHost } from './host';
 
 // Run after the ordinary wallet cases: these tests move the chain clock more than a year ahead.
@@ -38,11 +38,11 @@ test('losing both devices and the signer’s own backup leaves the savings locke
   const { wallet, signer, w, node, approve } = await policyDevices(page, host.url);
   await approve();
   await openVaultPanel(wallet, 'Vault settings'); await w('Recovery backup').click(); await approveOnSigner(page, 'Approve recovery backup'); await expect(wallet.getByText('Recovery backup saved.')).toBeVisible();
-  const originalSigner = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('signer')!;
+  const originalSigner = await deviceId(page, 'signer');
   await page.getByRole('button', { name: 'New wallet phone', exact: true }).click();
   await page.getByRole('button', { name: 'New signer device', exact: true }).click();
   await w('Get started').click(); await setUpVault(page, wallet);
-  const freshSigner = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('signer')!;
+  const freshSigner = await deviceId(page, 'signer');
   // Public vault details are assumed known; the original signer shares only those, then is gone.
   await useDevice(page, 'signer', originalSigner);
   await openSignerRecovery(wallet); await w('Load vault from signer').click();

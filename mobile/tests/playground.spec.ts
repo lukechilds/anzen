@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { policyDevices, openVaultPanel, closeVaultPanel, vaultAddress, vaultCaughtUp, setUpVault, declinedOnSigner, recoverWithSigner, openSignerRecovery, approveOnSigner, signerShows, fundedText, useDevice } from './helpers';
+import { policyDevices, openVaultPanel, closeVaultPanel, vaultAddress, vaultCaughtUp, setUpVault, declinedOnSigner, recoverWithSigner, openSignerRecovery, approveOnSigner, signerShows, fundedText, useDevice, deviceId } from './helpers';
 import { startTestHost } from './host';
 import { readdir } from 'node:fs/promises';
 
@@ -133,10 +133,13 @@ test('the emulator reopens where it left off and asks once before switching to r
   // Opened from the host's link, the emulator starts on regtest with a fresh pair.
   await expect(page.getByRole('tab', { name: 'Regtest', exact: true })).toHaveAttribute('aria-selected', 'true');
   await wallet.getByRole('button', { name: 'Get started', exact: true }).click();
-  const phone = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet');
+  const phone = await deviceId(page, 'wallet');
+  expect(phone).toBeTruthy();
+  // Only the host's capability and port stay in the URL.
+  expect([...new URLSearchParams(new URL(page.url()).hash.slice(1)).keys()].sort()).toEqual(['playground', 'port']);
   await page.reload();
   await expect(wallet.getByTestId('bitcoin-balance')).toBeVisible();
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')).toBe(phone);
+  expect(await deviceId(page, 'wallet')).toBe(phone);
   // Mainnet asks first, and declining stays put.
   await page.getByRole('tab', { name: 'Mainnet', exact: true }).click();
   await expect(page.getByText('Use real bitcoin?', { exact: true })).toBeVisible();
@@ -146,7 +149,7 @@ test('the emulator reopens where it left off and asks once before switching to r
   // Start over replaces the pair.
   await page.getByRole('button', { name: 'Start over', exact: true }).click();
   await expect(wallet.getByRole('button', { name: 'Get started', exact: true })).toBeVisible();
-  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')).not.toBe(phone);
+  expect(await deviceId(page, 'wallet')).not.toBe(phone);
 });
 
 test('monthly withdrawal applies a zero soft limit and returns funds to the vault', async ({ page }) => {
@@ -243,7 +246,7 @@ test('signer reviews public recovery requests, rejects early fallback, and revok
   await page.getByRole('button', { name: 'Mine confirmation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Mine confirmation', exact: true })).toBeEnabled();
   await closeVaultPanel(wallet); await vaultCaughtUp(page, wallet);
-  const originalPhone = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')!;
+  const originalPhone = await deviceId(page, 'wallet');
   await page.getByRole('button', { name: 'New wallet phone', exact: true }).click();
   await w('Get started').click();
   await recoverWithSigner(page); await w('Use this wallet’s fresh address').click();
@@ -274,7 +277,7 @@ test('signer reviews public recovery requests, rejects early fallback, and revok
 test('a fresh phone restores, rotates and preserves policy with explicit signer approval', async ({ page }) => {
   const { wallet, signer, w, s, node, address, approve } = await policyDevices(page, url, { monthly: '0.08', emergency: '0.25' });
   await approve();
-  const originalPhone = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('wallet')!;
+  const originalPhone = await deviceId(page, 'wallet');
   // Distinct from the cold vault, these funds must also survive losing the original phone.
   await closeVaultPanel(wallet); await wallet.getByRole('tab', { name: 'Wallet', exact: true }).click();
   await w('↓ Receive').click();
