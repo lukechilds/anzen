@@ -17,6 +17,10 @@ const NONCE_PARAM_WORDS: usize = 60;
 /// inversion, so a chunk takes a few milliseconds on a desktop and tens on an old phone, well
 /// inside the watchdog that ends long GPU work when the display needs the GPU.
 const SETUP_CHUNK: u32 = 1 << 17;
+/// Words per point in the setup passes' scratch, as SETUP_WORDS in the shader; setup borrows the
+/// search's scratch buffer.
+const SETUP_WORDS: u64 = 40;
+const _: () = assert!(SETUP_CHUNK as u64 * SETUP_WORDS * 4 <= SEARCH_CHUNK as u64 * SCRATCH_BYTES);
 /// The table build's split of each digit into hi·2^SPLIT_BITS + lo, as in the shader.
 const SPLIT_BITS: u32 = 9;
 /// Candidates per dispatch to start with; the search adapts it towards `TARGET_BATCH_TIME`.
@@ -40,8 +44,8 @@ pub struct GpuSearch {
     project: wgpu::ComputePipeline,
     search: wgpu::ComputePipeline,
     debug: wgpu::ComputePipeline,
-    /// Each search's setup pass, which writes its window-0 table with Q added.
-    fold_q: wgpu::ComputePipeline,
+    /// Each search's setup passes, which write its window-0 table with Q added.
+    fold_q: [wgpu::ComputePipeline; 2],
     tuning: Tuning,
     g_table: wgpu::Buffer,
     search_scratch: wgpu::Buffer,
@@ -328,8 +332,11 @@ impl GpuSearch {
         let project = pipeline("project");
         let search = pipeline("search");
         let debug = pipeline("debug");
-        let fold_q = pipeline("fold_q");
-        let build_table = pipeline("build_table");
+        let fold_q = [pipeline("fold_q_points"), pipeline("fold_q_affine")];
+        let build_table = [
+            pipeline("build_table_points"),
+            pipeline("build_table_affine"),
+        ];
         let search = Self {
             device: device.clone(),
             queue,
@@ -366,7 +373,7 @@ impl GpuSearch {
     /// Fill the generator table on the GPU: the CPU computes lo·B and (hi·2^SPLIT_BITS)·B for each
     /// window base B, about 11,000 points, and each GPU thread adds one pair. On native hosts
     /// this waits for the GPU, so setup timings include it.
-    fn build_generator_table(&self, pipeline: &wgpu::ComputePipeline) -> Result<()> {
+    fn build_generator_table(&self, pipelines: &[wgpu::ComputePipeline; 2]) -> Result<()> {
         let windows: Vec<(u32, u32)> = self
             .tuning
             .shifts()
@@ -397,11 +404,11 @@ impl GpuSearch {
             (0, &params),
             (1, &self.scratch("unused table")),
             (2, &self.scratch("unused found")),
-            (3, &self.scratch("unused debug")),
+            (3, &self.search_scratch),
             (4, &self.scratch("unused window 0")),
             (5, &self.g_table),
         ]);
-        self.dispatch_chunks(pipeline, &params, &bind_group, self.tuning.entries());
+        self.dispatch_chunks(pipelines, &params, &bind_group, self.tuning.entries());
         #[cfg(not(target_arch = "wasm32"))]
         self.device
             .poll(wgpu::PollType::Wait {
@@ -412,29 +419,31 @@ impl GpuSearch {
         Ok(())
     }
 
-    /// Run `pipeline` over `total` points, SETUP_CHUNK per submission and `setup_per` per thread,
-    /// writing each chunk's first point to word 0 of `params` before it.
+    /// Run a setup pass over `total` points, SETUP_CHUNK per submission: its points pipeline with
+    /// one point per thread, writing them to the search scratch bound as debug_out, then its affine
+    /// pipeline with `setup_per` per thread. Each chunk's first point and count go to words 0 and 1
+    /// of `params` before it.
     fn dispatch_chunks(
         &self,
-        pipeline: &wgpu::ComputePipeline,
+        [points, affine]: &[wgpu::ComputePipeline; 2],
         params: &wgpu::Buffer,
         bind_group: &wgpu::BindGroup,
         total: u32,
     ) {
         for first in (0..total).step_by(SETUP_CHUNK as usize) {
+            let count = SETUP_CHUNK.min(total - first);
             self.queue
-                .write_buffer(params, 0, bytemuck::cast_slice(&[first]));
+                .write_buffer(params, 0, bytemuck::cast_slice(&[first, count]));
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-                pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, bind_group, &[]);
-                let threads = SETUP_CHUNK
-                    .min(total - first)
-                    .div_ceil(self.tuning.setup_per);
-                pass.dispatch_workgroups(threads.div_ceil(64), 1, 1);
+                pass.set_pipeline(points);
+                pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
+                pass.set_pipeline(affine);
+                pass.dispatch_workgroups(count.div_ceil(self.tuning.setup_per).div_ceil(64), 1, 1);
             }
             self.queue.submit([encoder.finish()]);
         }
@@ -497,7 +506,7 @@ impl GpuSearch {
             (0, &setup_params),
             (1, &self.g_table),
             (2, &self.scratch("unused found")),
-            (3, &self.scratch("unused debug")),
+            (3, &self.search_scratch),
             (4, &q_table),
             (5, &self.scratch("unused table output")),
         ]);
