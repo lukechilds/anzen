@@ -180,6 +180,7 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Candidates per thread 16 / 10 / 6 with the first addition peeled; 4 / 6 after safegcd made the inversion cheap | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40); 0.984 / 0.995 | 8 stays |
 | Fermat inversion with x2 and x3 recomputed late rather than held through the long squaring runs | nonce | 1.001 (31/60) | No spill to relieve; superseded by safegcd |
 | Negative digits negated on the canonical words (p − y with an 8-word borrow chain) instead of `f_neg` | nonce | 1.004 (43/60) | Too small |
+| The search loop pipelined, two batches in flight so the GPU starts the next while the host reads the last back (batch sizes timed between completions) | nonce search | 0.79 in alternating runs; ~0.85 on a fixed 2^28 range | Slower: the queued dispatches compete or the adaptation shrinks batches; sequential batches of up to 2^22 already leave little idle time |
 | `f_mul` and `f_sqr` with the reduction written in and every column, limb and carry a scalar (no array passed to `f_reduce`) | nonce | 1.001 (31/60) | The compiler already inlines `f_reduce` and keeps the columns in registers |
 | SHA-256's Ch and Maj in their shorter forms (g ^ (e & (f ^ g)), (a & b) \| (c & (a \| b))) | nonce | 1.000 (31/60) | The compiler already simplifies them |
 | `fe_to_f` and `f_to_fe` written out with constant word indices and shifts | nonce | 1.000 (30/60) | The compiler already unrolls these small loops (unlike safegcd's and `f_canonical`'s) |
