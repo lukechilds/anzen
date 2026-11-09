@@ -22,12 +22,19 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 
 ## Current speed
 
-Measured in paired runs on a cool GPU (sustained load throttles both by up to ~2×):
+Measured on a cool GPU, alternating short runs (sustained load throttles all by up to ~2×):
 
-| Kernel | Start | Now | Gain | `vault` (33.5M) |
+| Kernel | Start | wgpu now | Metal | `vault` (33.5M), best |
 |---|---|---|---|---|
-| key | 710k/s | ~1.2M/s | 1.7× | ~28 s |
-| nonce | 2.64M/s | ~15M/s | 5.4× | ~2.2 s |
+| key | 710k/s | ~1.25M/s | **~1.51M/s** | ~22 s |
+| nonce | 2.64M/s | **~16.2M/s** | ~9.1M/s | ~2.1 s |
+
+The Metal kernels (`--features metal`) carry the same optimizations as the wgpu ones (16-bit G
+windows, a shared inversion per 4 or 8 candidates) but keep 8×32-bit limbs with native 64-bit
+products instead of 13-bit limbs. That wins for the key kernel, which on wgpu still uses 32-bit
+limbs built from 16-bit halves, and loses to the 13-bit wgpu nonce kernel: Apple GPUs emulate
+64-bit integer operations with several 32-bit instructions, so 13-bit limbs in Metal are the
+next thing to try there.
 
 ## Where the time goes
 

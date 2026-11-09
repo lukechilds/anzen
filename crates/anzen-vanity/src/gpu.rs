@@ -42,9 +42,15 @@ pub struct GpuSearch {
 struct Kernel {
     search: wgpu::ComputePipeline,
     debug: wgpu::ComputePipeline,
+    /// A kernel split into passes runs these first, handing records on through a scratch
+    /// buffer of `SCRATCH_RECORD` words per candidate; `search` and `debug` are its last pass.
+    stages: Vec<wgpu::ComputePipeline>,
     tuning: Tuning,
     g_table: wgpu::Buffer,
 }
+
+/// Words per candidate in a split kernel's scratch buffer.
+const SCRATCH_RECORD: u64 = 25;
 
 /// Constants the host reads from a shader's source so tables and dispatches match it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +159,7 @@ impl GpuSearch {
                 required_limits: wgpu::Limits {
                     max_storage_buffer_binding_size: largest_table as u64,
                     max_buffer_size: largest_table as u64,
-                    max_storage_buffers_per_shader_stage: 5,
+                    max_storage_buffers_per_shader_stage: 6,
                     ..wgpu::Limits::downlevel_defaults()
                 }
                 .using_resolution(limits),
@@ -179,6 +185,7 @@ impl GpuSearch {
                 entry(2, false),
                 entry(3, false),
                 entry(4, true),
+                entry(5, false),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -224,9 +231,15 @@ impl GpuSearch {
                     cache: None,
                 })
             };
+            let stages = ["stage1", "stage2"]
+                .into_iter()
+                .take_while(|stage| source.contains(&format!("fn {stage}(")))
+                .map(pipeline)
+                .collect();
             Ok(Kernel {
                 search: pipeline("search"),
                 debug: pipeline("debug"),
+                stages,
                 tuning,
                 g_table,
             })
@@ -284,15 +297,10 @@ impl GpuSearch {
 
     #[doc(hidden)]
     pub fn prepare_key(&self, inputs: &SearchInputs) -> Result<Prepared> {
-        let mut tables = point_table(signer_point(&inputs.signer_key)?, KEY_TABLE_BITS)?;
-        tables.extend(point_table(
-            PublicKey::from_slice(&inputs.parent_public_key).context("invalid parent key")?,
-            KEY_TABLE_BITS,
-        )?);
         Ok(Prepared {
             nonce: false,
             params: encode_params(inputs)?,
-            key_tables: Some(upload(&self.device, "key tables", &tables)),
+            key_tables: Some(upload(&self.device, "key tables", &key_tables(inputs)?)),
         })
     }
 
@@ -445,6 +453,17 @@ impl GpuSearch {
             mapped_at_creation: false,
         });
         let key_tables = prepared.key_tables.as_ref().unwrap_or(&self.empty);
+        let scratch_bytes = if kernel.stages.is_empty() {
+            4
+        } else {
+            u64::from(count.next_multiple_of(kernel.tuning.per_invocation)) * SCRATCH_RECORD * 4
+        };
+        let scratch = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scratch"),
+            size: scratch_bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vanity"),
             layout: &self.layout,
@@ -454,6 +473,7 @@ impl GpuSearch {
                 (2, &found),
                 (3, &debug_out),
                 (4, key_tables),
+                (5, &scratch),
             ]
             .map(|(binding, buffer)| wgpu::BindGroupEntry {
                 binding,
@@ -465,6 +485,12 @@ impl GpuSearch {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_bind_group(0, &bind_group, &[]);
+            // WebGPU makes each dispatch's writes visible to the next.
+            for stage in &kernel.stages {
+                pass.set_pipeline(stage);
+                pass.dispatch_workgroups(kernel.tuning.workgroups(count), 1, 1);
+            }
             pass.set_pipeline(if debug { &kernel.debug } else { &kernel.search });
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(kernel.tuning.workgroups(count), 1, 1);
@@ -581,6 +607,12 @@ impl GpuSearch {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let unused_scratch = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("field test scratch"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("field test"),
             layout: &self.layout,
@@ -590,6 +622,7 @@ impl GpuSearch {
                 (2, &unused),
                 (3, &out),
                 (4, &self.empty),
+                (5, &unused_scratch),
             ]
             .map(|(binding, buffer)| wgpu::BindGroupEntry {
                 binding,
@@ -726,7 +759,7 @@ fn hmac_midstate(chain_code: &[u8; 32], pad: u8) -> [u32; 16] {
 }
 
 /// The parameter block the shader reads, in its `P_*` order.
-fn encode_params(inputs: &SearchInputs) -> Result<Vec<u32>> {
+pub(crate) fn encode_params(inputs: &SearchInputs) -> Result<Vec<u32>> {
     ensure!(
         (1..=32).contains(&inputs.target_bits),
         "target must be between 1 and 32 bits"
@@ -766,8 +799,18 @@ fn encode_params(inputs: &SearchInputs) -> Result<Vec<u32>> {
     Ok(params)
 }
 
+/// The key kernel's signer table then parent table.
+pub(crate) fn key_tables(inputs: &SearchInputs) -> Result<Vec<u32>> {
+    let mut tables = point_table(signer_point(&inputs.signer_key)?, KEY_TABLE_BITS)?;
+    tables.extend(point_table(
+        PublicKey::from_slice(&inputs.parent_public_key).context("invalid parent key")?,
+        KEY_TABLE_BITS,
+    )?);
+    Ok(tables)
+}
+
 /// The nonce kernel's parameter block, in its `P_*` order.
-fn encode_nonce_params(inputs: &NonceInputs) -> Result<Vec<u32>> {
+pub(crate) fn encode_nonce_params(inputs: &NonceInputs) -> Result<Vec<u32>> {
     ensure!(
         (1..=32).contains(&inputs.target_bits),
         "target must be between 1 and 32 bits"
@@ -818,7 +861,7 @@ fn table_words(bits: u32) -> usize {
     (256_usize).div_ceil(bits as usize) * ((1_usize << bits) - 1) * 16
 }
 
-fn generator() -> PublicKey {
+pub(crate) fn generator() -> PublicKey {
     let mut generator = [0x02_u8; 33];
     generator[1..].copy_from_slice(&secp256k1::constants::GENERATOR_X);
     PublicKey::from_slice(&generator).expect("the generator is a valid point")
@@ -826,7 +869,7 @@ fn generator() -> PublicKey {
 
 /// `d·2^(bits·w)·point` for every window `w` and digit `d` in `1..2^bits`, as affine limbs.
 /// Windows are independent, so wide tables are built on every core.
-fn point_table(point: PublicKey, bits: u32) -> Result<Vec<u32>> {
+pub(crate) fn point_table(point: PublicKey, bits: u32) -> Result<Vec<u32>> {
     let secp = Secp256k1::new();
     let mut shift = [0_u8; 32];
     shift[31 - bits as usize / 8] = 1 << (bits % 8);

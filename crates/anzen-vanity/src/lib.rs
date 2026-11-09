@@ -49,3 +49,8 @@ pub const MAX_INDEX: u32 = (1 << 31) - 1;
 mod gpu;
 #[cfg(feature = "gpu")]
 pub use gpu::{GpuSearch, Prepared, SearchResult};
+
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
+mod metal;
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
+pub use metal::{MetalPrepared, MetalSearch};
