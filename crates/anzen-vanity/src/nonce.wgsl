@@ -105,8 +105,9 @@ fn words_to_affine(words: array<u32, 16>) -> AffF {
 }
 
 // Each setup thread makes SETUP_PER points and turns them affine with one inversion
-// (Montgomery's trick); the inversion costs far more than a point's additions.
-const SETUP_PER: u32 = 8u;
+// (Montgomery's trick). With safegcd an inversion is cheap enough that one point per thread is
+// fastest: holding several points through the inversion costs more than it saves.
+const SETUP_PER: u32 = 1u;
 
 fn affine_batch(points: array<JacF, SETUP_PER>) -> array<array<u32, 16>, SETUP_PER> {
     var products: array<F, SETUP_PER>;
