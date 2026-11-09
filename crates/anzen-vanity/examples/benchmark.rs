@@ -20,6 +20,32 @@ fn main() -> anyhow::Result<()> {
         args.next();
         return pair(args.collect());
     }
+    // `probe-metal [count]`: compile the Metal kernels and report their thread limits, then, if
+    // given a count, time one key-kernel dispatch of that many candidates. For checking a risky
+    // kernel before benchmarking it.
+    #[cfg(feature = "metal")]
+    if args.peek().map(String::as_str) == Some("probe-metal") {
+        args.next();
+        let started = Instant::now();
+        let metal = anzen_vanity::MetalSearch::open()?;
+        let (key, nonce) = metal.max_threads();
+        println!(
+            "compiled in {:.1?}: max threads per threadgroup key {key}, nonce {nonce}",
+            started.elapsed()
+        );
+        if let Some(count) = args.next() {
+            let count: u32 = count.parse()?;
+            let prepared = metal.prepare_key(&key_inputs())?;
+            let started = Instant::now();
+            metal.run_batch(&prepared, 0, count)?;
+            let elapsed = started.elapsed();
+            println!(
+                "{count} key candidates in {elapsed:.1?}: {:.0}/s",
+                f64::from(count) / elapsed.as_secs_f64()
+            );
+        }
+        return Ok(());
+    }
     #[cfg(feature = "metal")]
     if args.peek().map(String::as_str) == Some("pair-metal") {
         args.next();

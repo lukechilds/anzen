@@ -102,6 +102,16 @@ impl MetalSearch {
         &self.name
     }
 
+    /// The most threads per threadgroup each search pipeline allows (key, nonce). Metal lowers
+    /// it below 1024 when a kernel needs many registers, an early warning before dispatching.
+    #[doc(hidden)]
+    pub fn max_threads(&self) -> (usize, usize) {
+        (
+            self.key.search.maxTotalThreadsPerThreadgroup(),
+            self.nonce.search.maxTotalThreadsPerThreadgroup(),
+        )
+    }
+
     #[doc(hidden)]
     pub fn prepare_nonce(&self, inputs: &NonceInputs) -> Result<MetalPrepared> {
         Ok(MetalPrepared {
