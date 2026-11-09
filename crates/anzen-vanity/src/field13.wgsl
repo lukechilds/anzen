@@ -959,41 +959,91 @@ fn f_inv(a: F) -> F {
     return out;
 }
 
-// The unique representative below p.
+// The unique representative below p, written out limb by limb.
 fn f_canonical(a: F) -> F {
     var r = a;
+    var v: u32;
+    var top: u32;
     // Bits 256..259 sit in limb 19 above bit 9: fold them with 2^256 ≡ 2^32 + 977, twice in
     // case the first fold carries back up.
-    for (var round = 0u; round < 2u; round++) {
-        let top = r[19] >> 9u;
-        r[19] &= 0x1ffu;
-        r[0] += top * 977u;
-        r[2] += top * 64u;
-        var carry = 0u;
-        for (var i = 0u; i < 20u; i++) {
-            let v = r[i] + carry;
-            r[i] = v & LIMB_MASK;
-            carry = v >> 13u;
-        }
-    }
-    // Now r < 2^256 < 2p: subtract p once if r >= p.
-    var at_least_p = true;
-    for (var i = 19i; i >= 0i; i--) {
-        if r[i] != P13[i] {
-            at_least_p = r[i] > P13[i];
-            break;
-        }
-    }
-    if at_least_p {
-        var borrow = 0u;
-        for (var i = 0u; i < 20u; i++) {
-            let v = r[i] + 8192u - P13[i] - borrow;
-            r[i] = v & LIMB_MASK;
-            borrow = 1u - (v >> 13u);
-        }
+    top = r[19] >> 9u;
+    r[19] &= 0x1ffu;
+    r[0] += top * 977u;
+    r[2] += top * 64u;
+    v = r[0]; r[0] = v & LIMB_MASK;
+    v = r[1] + (v >> 13u); r[1] = v & LIMB_MASK;
+    v = r[2] + (v >> 13u); r[2] = v & LIMB_MASK;
+    v = r[3] + (v >> 13u); r[3] = v & LIMB_MASK;
+    v = r[4] + (v >> 13u); r[4] = v & LIMB_MASK;
+    v = r[5] + (v >> 13u); r[5] = v & LIMB_MASK;
+    v = r[6] + (v >> 13u); r[6] = v & LIMB_MASK;
+    v = r[7] + (v >> 13u); r[7] = v & LIMB_MASK;
+    v = r[8] + (v >> 13u); r[8] = v & LIMB_MASK;
+    v = r[9] + (v >> 13u); r[9] = v & LIMB_MASK;
+    v = r[10] + (v >> 13u); r[10] = v & LIMB_MASK;
+    v = r[11] + (v >> 13u); r[11] = v & LIMB_MASK;
+    v = r[12] + (v >> 13u); r[12] = v & LIMB_MASK;
+    v = r[13] + (v >> 13u); r[13] = v & LIMB_MASK;
+    v = r[14] + (v >> 13u); r[14] = v & LIMB_MASK;
+    v = r[15] + (v >> 13u); r[15] = v & LIMB_MASK;
+    v = r[16] + (v >> 13u); r[16] = v & LIMB_MASK;
+    v = r[17] + (v >> 13u); r[17] = v & LIMB_MASK;
+    v = r[18] + (v >> 13u); r[18] = v & LIMB_MASK;
+    v = r[19] + (v >> 13u); r[19] = v & LIMB_MASK;
+    top = r[19] >> 9u;
+    r[19] &= 0x1ffu;
+    r[0] += top * 977u;
+    r[2] += top * 64u;
+    v = r[0]; r[0] = v & LIMB_MASK;
+    v = r[1] + (v >> 13u); r[1] = v & LIMB_MASK;
+    v = r[2] + (v >> 13u); r[2] = v & LIMB_MASK;
+    v = r[3] + (v >> 13u); r[3] = v & LIMB_MASK;
+    v = r[4] + (v >> 13u); r[4] = v & LIMB_MASK;
+    v = r[5] + (v >> 13u); r[5] = v & LIMB_MASK;
+    v = r[6] + (v >> 13u); r[6] = v & LIMB_MASK;
+    v = r[7] + (v >> 13u); r[7] = v & LIMB_MASK;
+    v = r[8] + (v >> 13u); r[8] = v & LIMB_MASK;
+    v = r[9] + (v >> 13u); r[9] = v & LIMB_MASK;
+    v = r[10] + (v >> 13u); r[10] = v & LIMB_MASK;
+    v = r[11] + (v >> 13u); r[11] = v & LIMB_MASK;
+    v = r[12] + (v >> 13u); r[12] = v & LIMB_MASK;
+    v = r[13] + (v >> 13u); r[13] = v & LIMB_MASK;
+    v = r[14] + (v >> 13u); r[14] = v & LIMB_MASK;
+    v = r[15] + (v >> 13u); r[15] = v & LIMB_MASK;
+    v = r[16] + (v >> 13u); r[16] = v & LIMB_MASK;
+    v = r[17] + (v >> 13u); r[17] = v & LIMB_MASK;
+    v = r[18] + (v >> 13u); r[18] = v & LIMB_MASK;
+    v = r[19] + (v >> 13u); r[19] = v & LIMB_MASK;
+    // Now r < 2^256 < 2p: subtract p once if r >= p, choosing limb by limb.
+    var t: F;
+    var borrow = 0u;
+    v = r[0] + 8192u - 7215u - borrow; t[0] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[1] + 8192u - 8191u - borrow; t[1] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[2] + 8192u - 8127u - borrow; t[2] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[3] + 8192u - 8191u - borrow; t[3] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[4] + 8192u - 8191u - borrow; t[4] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[5] + 8192u - 8191u - borrow; t[5] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[6] + 8192u - 8191u - borrow; t[6] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[7] + 8192u - 8191u - borrow; t[7] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[8] + 8192u - 8191u - borrow; t[8] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[9] + 8192u - 8191u - borrow; t[9] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[10] + 8192u - 8191u - borrow; t[10] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[11] + 8192u - 8191u - borrow; t[11] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[12] + 8192u - 8191u - borrow; t[12] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[13] + 8192u - 8191u - borrow; t[13] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[14] + 8192u - 8191u - borrow; t[14] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[15] + 8192u - 8191u - borrow; t[15] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[16] + 8192u - 8191u - borrow; t[16] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[17] + 8192u - 8191u - borrow; t[17] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[18] + 8192u - 8191u - borrow; t[18] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    v = r[19] + 8192u - 511u - borrow; t[19] = v & LIMB_MASK; borrow = 1u - (v >> 13u);
+    let below = borrow == 1u;
+    for (var i = 0u; i < 20u; i++) {
+        r[i] = select(t[i], r[i], below);
     }
     return r;
 }
+
 
 fn fe_to_f(a: Fe) -> F {
     var r: F;
