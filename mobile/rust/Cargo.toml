@@ -12,12 +12,17 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 [dependencies]
 anzen-signer-app = { path = "../../crates/anzen-signer-app" }
 anzen-wallet = { path = "../../crates/anzen-wallet" }
+# GPU benchmarks in settings: wgpu everywhere, native Metal on Apple devices.
+anzen-vanity = { path = "../../crates/anzen-vanity" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1.8"
 # Mobile devices do not provide libsqlite3 development files for cross-compilation.
 rusqlite = { version = "0.31", features = ["bundled"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+anzen-vanity = { path = "../../crates/anzen-vanity", features = ["metal"] }
 
 [dev-dependencies]
 tempfile = "3.23"

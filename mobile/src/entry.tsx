@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import { requireOptionalNativeModule } from 'expo';
 import AnzenApp, { Button } from './AnzenApp';
+import { BenchmarkRunner } from './Benchmarks';
 import { DeviceTransport, JsonObject, ProtocolMessage, Role } from './transport';
 import { parseProtocolMessage } from './fileExchange';
 import { nativeFileExchange } from './nativeFileExchange';
@@ -11,6 +12,8 @@ interface NativeRuntime {
   execute(role: Role, command: string, settings: string): Promise<string>;
   // Live updates on Rust's own thread: start, targets, changes or stop. Never waits for a command.
   watch(settings: string, request: string): string;
+  // GPU benchmarks on their own queue: {"method":"backends"} or {"method":"run", ...}.
+  benchmark(request: string): Promise<string>;
 }
 export default function NativeApp() {
   const [role, setRole] = useState<Role | null>(null);
@@ -66,6 +69,16 @@ export default function NativeApp() {
     };
     return { role, execute, ...(role === 'wallet' ? { watch } : {}) };
   }, [role, runtime, mainnet, rpcUrl, rpcUser, rpcPassword]);
+  const benchmark = useMemo<BenchmarkRunner | undefined>(() => {
+    if (!runtime?.benchmark) return undefined;
+    const call = async (request: JsonObject) => {
+      const response = JSON.parse(await runtime.benchmark(JSON.stringify(request)));
+      if (response.error) throw new Error(response.error);
+      return response.ok;
+    };
+    // The Rust library is built with native Metal for Apple devices only.
+    return { backends: Platform.OS === 'ios' ? ['wgpu', 'metal'] : ['wgpu'], run: (backend, kernel, seconds) => call({ method: 'run', backend, kernel, seconds }) };
+  }, [runtime]);
   const acceptMessage = (value: ProtocolMessage) => {
     setIncoming(value); setMessage(''); setExchange(false); setError(''); setFileNotice('');
   };
@@ -123,7 +136,7 @@ export default function NativeApp() {
     <View style={{ flex: 1, display: exchange ? 'none' : 'flex' }}>
       <AnzenApp transport={transport!} network={mainnet ? 'bitcoin' : 'regtest'} incoming={incoming} dismissIncoming={() => setIncoming(null)}
         cloudBackup={cloudBackup} saveBackup={backup => nativeFileExchange.saveBackup(role, backup)}
-        deliver={nativeFileExchange.sendMessage} />
+        deliver={nativeFileExchange.sendMessage} benchmark={role === 'wallet' ? benchmark : undefined} />
     </View>
     {!!fileNotice && <Text style={s.tiny}>{fileNotice}</Text>}
     {!!error && <Text style={s.errorText}>{error}</Text>}

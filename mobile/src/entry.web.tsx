@@ -5,6 +5,7 @@ import { DeviceTransport, JsonObject, ProtocolMessage, Role, Tap, TapAnswer } fr
 import { colors, formatBtc, styles as s } from './theme';
 import { closeBrowserDevice, createBrowserDevice, listBrowserDevices, openBrowserDevice, BrowserDevice, Settings } from './browserRuntime';
 import { browserCloud } from './browserCloud';
+import { browserBenchmark } from './browserBenchmark';
 import { parseEncryptedBackup } from './fileExchange';
 
 type Network = 'regtest' | 'signet' | 'bitcoin';
@@ -258,7 +259,7 @@ export default function Playground() {
                 boxShadow: '0 34px 80px rgba(20,18,14,.30)' }}>
               {switchingIndex === index ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Text style={s.tiny}>Opening…</Text></View> : <AnzenApp key={deviceIds[index] || transport.role} transport={transport} network={network!} incoming={inboxes[index]} dismissIncoming={() => setInboxes(current => current.map((item, i) => i === index ? null : item))}
                 saveBackup={index === 0 ? saveBackup : undefined} cloudBackup={index === 0 ? cloudBackup : null}
-                tap={link} deliver={message => deliverFrom(index, message)} />}
+                tap={link} deliver={message => deliverFrom(index, message)} benchmark={index === 0 ? browserBenchmark : undefined} />}
             </View>
             {/* Simulate losing a device: the new one takes its place. */}
             {!mainnet && <View style={{ width: 375, maxWidth: width - 64, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', columnGap: 14, paddingTop: 10 }}>

@@ -1,9 +1,12 @@
 import ExpoModulesCore
 import Foundation
 import Security
+import UIKit
 
 public final class AnzenRuntimeModule: Module {
   private let queue = DispatchQueue(label: "app.anzen.rust", qos: .userInitiated)
+  // Benchmarks block for their whole run, so they never share the wallet's command queue.
+  private let benchmarkQueue = DispatchQueue(label: "app.anzen.benchmark", qos: .userInitiated)
 
   public func definition() -> ModuleDefinition {
     Name("AnzenRuntime")
@@ -34,6 +37,19 @@ public final class AnzenRuntimeModule: Module {
         }
       }
     }.runOnQueue(queue)
+    // GPU benchmarks on fixed public inputs; no keys or storage. iOS stops GPU work once the
+    // app leaves the foreground, so the screen stays awake while one runs.
+    AsyncFunction("benchmark") { (request: String) throws -> String in
+      DispatchQueue.main.sync { UIApplication.shared.isIdleTimerDisabled = true }
+      defer { DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = false } }
+      return try request.withCString { requestPointer in
+        guard let pointer = anzen_mobile_benchmark(requestPointer) else {
+          throw self.failure("Rust returned no response")
+        }
+        defer { anzen_mobile_free(pointer) }
+        return String(cString: pointer)
+      }
+    }.runOnQueue(benchmarkQueue)
     // Live updates run on Rust's own thread; this call only starts, updates or reads them, so it
     // is synchronous and never waits behind a command on the queue above.
     Function("watch") { (settings: String, request: String) throws -> String in

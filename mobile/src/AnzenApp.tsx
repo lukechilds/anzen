@@ -8,6 +8,7 @@ import { DarkBackground, DarkEffects, DeviceStatus, Icon } from './DarkChrome';
 import { ActionPill, Activity, DarkSheet, IconButton, MenuRow, WalletHistory } from './DarkSurfaces';
 import AddressCard, { AddressLines } from './AddressCard';
 import VaultSummary from './VaultSummary';
+import Benchmarks, { BenchmarkRunner } from './Benchmarks';
 import { VaultSettings, WithdrawalOptions } from './VaultControls';
 import { PolicyEditor } from './VaultControls';
 import { DECLINED, TapArt, TapPurpose, TapSheet, TapState } from './Tap';
@@ -30,6 +31,8 @@ type Props = {
   // Asks the owner to confirm it's them (Face ID or passcode) before the app opens, the vault
   // opens or money moves. Without it, the browser emulator plays a simulated Face ID check.
   authenticate?: () => Promise<boolean>;
+  // GPU vanity-search benchmarks, shown in the wallet's settings.
+  benchmark?: BenchmarkRunner;
 };
 type Kind = ProtocolMessage['kind'];
 type ReviewKind = 'policy' | 'sweep' | 'backup' | 'offline-action' | 'restore' | 'rotation' | 'rotation-adoption' | 'share-vault';
@@ -99,7 +102,7 @@ function Field({ label, value, onChange, numeric = false }: { label: string; val
     style={s.input} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} /></>;
 }
 
-export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest' }: Props) {
+export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark }: Props) {
   const signer = transport.role === 'signer';
   const [identity, setIdentity] = useState<JsonObject | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -545,6 +548,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
             <View style={s.actions}><ActionPill title="Send" label="↑ Send" icon="send" onPress={() => setPage('send')} /><ActionPill title="Receive" label="↓ Receive" icon="receive" onPress={() => run({ method: 'receive_address' }, value => { setAddress(value.address); setPage('receive'); })} disabled={busy}/></View></View>
             <WalletHistory items={wallet?.activity || []} loaded={Boolean(wallet)} onSelect={entry => { setSelectedActivity(entry); setPage('transaction'); }}/></>}
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
+            {benchmark && <Benchmarks runner={benchmark}/>}
             <View style={{ marginTop: 48, marginHorizontal: 4 }}>
               <Text style={s.footnote}>anzen · {identity?.network || network}</Text>
             </View></>}

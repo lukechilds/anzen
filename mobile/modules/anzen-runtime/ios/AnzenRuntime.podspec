@@ -17,6 +17,7 @@ Pod::Spec.new do |s|
   s.source_files = '*.swift', 'include/*.h'
   s.public_header_files = 'include/AnzenRuntime.h'
   s.vendored_frameworks = 'AnzenMobile.xcframework'
-  s.frameworks = 'Security', 'SystemConfiguration'
+  # Metal and QuartzCore for the GPU benchmarks (wgpu and native Metal).
+  s.frameworks = 'Security', 'SystemConfiguration', 'Metal', 'QuartzCore', 'UIKit'
   s.libraries = 'c++', 'resolv'
 end
