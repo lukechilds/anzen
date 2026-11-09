@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { requireOptionalNativeModule } from 'expo';
+import { File, Paths } from 'expo-file-system';
 import AnzenApp, { Button } from './AnzenApp';
+import DeviceSettings, { DevicePrefs } from './DeviceSettings';
 import { BenchmarkRunner } from './Benchmarks';
 import { DeviceTransport, JsonObject, ProtocolMessage, Role } from './transport';
 import { parseProtocolMessage } from './fileExchange';
@@ -15,8 +17,31 @@ interface NativeRuntime {
   // Vanity-search benchmarks on their own queue: {"engine": "gpu" | "cpu", "seconds": n}.
   benchmark(request: string): Promise<string>;
 }
+// This phone's network, role and regtest node, kept between launches. Nothing secret: a regtest
+// node's credentials at most.
+const defaults: DevicePrefs = { network: 'signet', role: 'wallet', rpc: { url: 'http://127.0.0.1:18443', user: 'anzen', password: 'anzen' } };
+const prefsFile = () => new File(Paths.document, 'anzen-device.json');
+function loadPrefs(): DevicePrefs {
+  try {
+    const file = prefsFile();
+    if (!file.exists) return defaults;
+    const saved = JSON.parse(file.textSync());
+    return {
+      network: ['signet', 'bitcoin', 'regtest'].includes(saved.network) ? saved.network : defaults.network,
+      role: ['wallet', 'signer'].includes(saved.role) ? saved.role : defaults.role,
+      rpc: { ...defaults.rpc, ...saved.rpc },
+    };
+  } catch { return defaults; }
+}
+function savePrefs(prefs: DevicePrefs) {
+  try { const file = prefsFile(); if (!file.exists) file.create(); file.write(JSON.stringify(prefs)); }
+  catch { /* The choice still applies until the app closes. */ }
+}
+
 export default function NativeApp() {
-  const [role, setRole] = useState<Role | null>(null);
+  const [prefs, setPrefs] = useState<DevicePrefs>(loadPrefs);
+  const { network, role } = prefs;
+  const updatePrefs = (next: DevicePrefs) => { savePrefs(next); setPrefs(next); setIncoming(null); setCloudBackup(null); setError(''); setFileNotice(''); };
   const [incoming, setIncoming] = useState<ProtocolMessage | null>(null);
   const [exchange, setExchange] = useState(false);
   const [fileBusy, setFileBusy] = useState(false);
@@ -24,17 +49,13 @@ export default function NativeApp() {
   const [fileNotice, setFileNotice] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [mainnet, setMainnet] = useState(false);
-  const [rpcUrl, setRpcUrl] = useState('http://127.0.0.1:18443');
-  const [rpcUser, setRpcUser] = useState('anzen');
-  const [rpcPassword, setRpcPassword] = useState('anzen');
   const runtime = requireOptionalNativeModule<NativeRuntime>('AnzenRuntime');
   const transport = useMemo<DeviceTransport | null>(() => {
-    if (!role || !runtime) return null;
-    const network = mainnet ? 'bitcoin' : 'regtest';
-    const settings = JSON.stringify({ dangerously_enable_mainnet: mainnet, backend: mainnet
-      ? { type: 'electrum', servers: [] }
-      : { type: 'rpc', url: rpcUrl, user: rpcUser, password: rpcPassword } });
+    if (!runtime) return null;
+    // Electrum with no servers given uses the network's defaults (Mutinynet's or mainnet's).
+    const settings = JSON.stringify({ network, dangerously_enable_mainnet: network === 'bitcoin', backend: network === 'regtest'
+      ? { type: 'rpc', url: prefs.rpc.url, user: prefs.rpc.user, password: prefs.rpc.password }
+      : { type: 'electrum', servers: [] } });
     const watchCall = (request: JsonObject) => {
       const response = JSON.parse(runtime.watch(settings, JSON.stringify(request)));
       if (response.error) throw new Error(response.error);
@@ -68,7 +89,7 @@ export default function NativeApp() {
       return () => { clearInterval(timer); clearTimeout(targetsTimer); updateTargets = undefined; try { watchCall({ method: 'stop' }); } catch {} };
     };
     return { role, execute, ...(role === 'wallet' ? { watch } : {}) };
-  }, [role, runtime, mainnet, rpcUrl, rpcUser, rpcPassword]);
+  }, [role, runtime, network, prefs.rpc]);
   const benchmark = useMemo<BenchmarkRunner | undefined>(() => {
     if (!runtime?.benchmark) return undefined;
     return {
@@ -83,7 +104,7 @@ export default function NativeApp() {
     setIncoming(value); setMessage(''); setExchange(false); setError(''); setFileNotice('');
   };
   async function receiveFile(backup = false) {
-    if (fileBusy || !role) return;
+    if (fileBusy) return;
     setFileBusy(true); setError(''); setFileNotice('');
     try {
       if (backup) {
@@ -102,17 +123,6 @@ export default function NativeApp() {
   if (!runtime) return <View style={[s.screen, { padding: 32, justifyContent: 'center' }]}>
     <Text style={s.brand}>anzen</Text><Text style={s.subtext}>The native Rust module is not installed in this build. Native integration is under implementation; this screen does not simulate a working wallet.</Text>
   </View>;
-  if (!role) return <ScrollView style={s.screen} contentContainerStyle={{ padding: 32, paddingTop: 80 }}><Text style={s.brand}>anzen</Text><Text style={s.subtext}>How will you use this device?</Text>
-    <Text style={s.label}>Network · {mainnet ? 'MAINNET' : 'REGTEST'}</Text>
-    <Button title={mainnet ? 'Use regtest instead' : 'Dangerously enable mainnet'} danger={!mainnet} onPress={() => setMainnet(value => !value)} />
-    {mainnet ? <Text style={s.errorText}>Experimental wallet software. Mainnet uses real bitcoin and public Electrum servers. This explicitly enables mainnet for this session. Do not use funds you cannot afford to lose.</Text> : <>
-      <Text style={s.label}>Regtest RPC URL (reachable from this device)</Text><TextInput style={s.input} value={rpcUrl} onChangeText={setRpcUrl} autoCapitalize="none" />
-      <Text style={s.label}>RPC user</Text><TextInput style={s.input} value={rpcUser} onChangeText={setRpcUser} autoCapitalize="none" />
-      <Text style={s.label}>RPC password</Text><TextInput style={s.input} value={rpcPassword} onChangeText={setRpcPassword} secureTextEntry />
-    </>}
-    <Button title="Use as wallet" primary onPress={() => setRole('wallet')} /><Button title="Enable hardware wallet mode" onPress={() => setRole('signer')} />
-    <Text style={s.tiny}>Use separate physical devices for independent keys. A second phone is not a secure-element hardware wallet.</Text>
-  </ScrollView>;
   return <View style={[s.screen, { paddingTop: 50, paddingBottom: 20 }]}>
     {exchange && <ScrollView contentContainerStyle={{ padding: 24 }}><Text style={s.heading}>Receive a file</Text>
       <Text style={s.subtext}>Choose the protocol JSON shared by the other device. Importing it does not approve, sign, or broadcast anything.</Text>
@@ -134,12 +144,18 @@ export default function NativeApp() {
     </ScrollView>}
     {/* Importing a response must not unmount the app and discard an in-progress review. */}
     <View style={{ flex: 1, display: exchange ? 'none' : 'flex' }}>
-      <AnzenApp transport={transport!} network={mainnet ? 'bitcoin' : 'regtest'} incoming={incoming} dismissIncoming={() => setIncoming(null)}
+      {/* A new network or role is another device: start it fresh. */}
+      <AnzenApp key={`${network}:${role}`} transport={transport!} network={network} incoming={incoming} dismissIncoming={() => setIncoming(null)}
         cloudBackup={cloudBackup} saveBackup={backup => nativeFileExchange.saveBackup(role, backup)}
-        deliver={nativeFileExchange.sendMessage} benchmark={role === 'wallet' ? benchmark : undefined} />
+        deliver={nativeFileExchange.sendMessage} benchmark={role === 'wallet' ? benchmark : undefined}
+        deviceSettings={<DeviceSettings prefs={prefs} onChange={updatePrefs}
+          onImport={() => { setExchange(true); setError(''); setFileNotice(''); }}/>} />
     </View>
-    {!!fileNotice && <Text style={s.tiny}>{fileNotice}</Text>}
-    {!!error && <Text style={s.errorText}>{error}</Text>}
-    {!exchange && <Button title="Receive a file or message" onPress={() => { setExchange(true); setError(''); setFileNotice(''); }} />}
+    {/* What a file import did, until dismissed. */}
+    {!exchange && (!!fileNotice || !!error) && <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={() => { setFileNotice(''); setError(''); }}
+      style={{ position: 'absolute', left: 16, right: 16, bottom: 96, padding: 14, borderRadius: 16, backgroundColor: colors.surface }}>
+      {!!fileNotice && <Text style={s.tiny}>{fileNotice}</Text>}
+      {!!error && <Text style={s.errorText}>{error}</Text>}
+    </Pressable>}
   </View>;
 }

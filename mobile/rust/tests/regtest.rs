@@ -23,6 +23,7 @@ fn try_call(root: &Path, role: &str, key: u8, command: Value) -> anyhow::Result<
         [key; 32],
         &RuntimeSettings {
             dangerously_enable_mainnet: false,
+            network: None,
             backend: Backend::Rpc {
                 url: rpc_url(),
                 user: "anzen".into(),
@@ -335,6 +336,7 @@ fn encrypted_native_devices_complete_real_policy_and_payment_reviews() {
             [1; 32],
             &RuntimeSettings {
                 dangerously_enable_mainnet: false,
+                network: None,
                 backend: Backend::Rpc {
                     url: rpc_url(),
                     user: "anzen".into(),

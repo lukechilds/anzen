@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     ffi::{CStr, CString, c_char},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Mutex,
 };
 use zeroize::Zeroizing;
@@ -43,6 +43,30 @@ pub struct RuntimeSettings {
     #[serde(default)]
     pub dangerously_enable_mainnet: bool,
     pub backend: Backend,
+    /// The network the app is set to. Each network keeps its own devices; without one, a role's
+    /// device is the one directly under the root, as before networks were a setting.
+    #[serde(default)]
+    pub network: Option<hot::Network>,
+}
+
+/// Where a role's device lives: `root/<network>/<role>`. A phone set up before networks were a
+/// setting kept one device per role at `root/<role>`; that one stays where it is and serves the
+/// network it was made for, so switching networks never strands it.
+fn device_directory(
+    root: &Path,
+    role: &str,
+    network: Option<hot::Network>,
+    legacy_network: impl FnOnce(&Path) -> Result<hot::Network>,
+) -> PathBuf {
+    let legacy = root.join(role);
+    let Some(network) = network else {
+        return legacy;
+    };
+    let scoped = root.join(network.to_string()).join(role);
+    if !scoped.exists() && legacy.exists() && legacy_network(&legacy).ok() == Some(network) {
+        return legacy;
+    }
+    scoped
 }
 
 /// Electrum over WebSocket (the same shared client as the browser), or Bitcoin Core on regtest.
@@ -88,7 +112,13 @@ pub fn execute(
         .map_err(|_| anyhow::anyhow!("native runtime interrupted; restart the app"))?;
     match role {
         "wallet" => {
-            let directory = root.join("wallet");
+            let directory = device_directory(root, role, settings.network, |legacy| {
+                hot::with_protected_storage(legacy, key, || {
+                    WalletApplication::new(legacy.to_path_buf(), true)
+                        .public_identity()?
+                        .bitcoin_network()
+                })
+            });
             hot::with_protected_storage(&directory, key, || {
                 let app =
                     WalletApplication::new(directory.clone(), settings.dangerously_enable_mainnet);
@@ -105,7 +135,13 @@ pub fn execute(
             })
         }
         "signer" => {
-            let directory = root.join("signer");
+            let directory = device_directory(root, role, settings.network, |legacy| {
+                cold::with_protected_storage(legacy, key, || {
+                    SignerApplication::new(legacy.to_path_buf(), true)
+                        .public_identity()?
+                        .bitcoin_network()
+                })
+            });
             cold::with_protected_storage(&directory, key, || {
                 let app =
                     SignerApplication::new(directory.clone(), settings.dangerously_enable_mainnet);
@@ -368,7 +404,59 @@ mod tests {
         RuntimeSettings {
             dangerously_enable_mainnet: false,
             backend: Backend::Electrum { servers: vec![] },
+            network: None,
         }
+    }
+
+    #[test]
+    fn each_network_keeps_its_own_devices_and_an_earlier_device_keeps_its_network() {
+        let root = tempfile::tempdir().unwrap();
+        let on = |network: &str| RuntimeSettings {
+            network: Some(serde_json::from_value(json!(network)).unwrap()),
+            ..settings()
+        };
+        let identity = |settings: &RuntimeSettings| {
+            execute(
+                root.path(),
+                "signer",
+                [4; 32],
+                settings,
+                r#"{"method":"identity"}"#,
+            )
+        };
+        // A signer from before networks were a setting, directly under the root.
+        let earlier = execute(
+            root.path(),
+            "signer",
+            [4; 32],
+            &settings(),
+            r#"{"method":"initialize","network":"regtest"}"#,
+        )
+        .unwrap();
+        // Regtest still finds it where it is; Mutinynet starts empty and makes its own.
+        assert_eq!(
+            identity(&on("regtest")).unwrap()["vault_pubkey"],
+            earlier["vault_pubkey"]
+        );
+        assert!(identity(&on("signet")).is_err());
+        let signet = execute(
+            root.path(),
+            "signer",
+            [4; 32],
+            &on("signet"),
+            r#"{"method":"initialize","network":"signet"}"#,
+        )
+        .unwrap();
+        assert_ne!(signet["vault_pubkey"], earlier["vault_pubkey"]);
+        assert!(root.path().join("signet/signer").exists());
+        assert_eq!(
+            identity(&on("regtest")).unwrap()["vault_pubkey"],
+            earlier["vault_pubkey"]
+        );
+        assert_eq!(
+            identity(&on("signet")).unwrap()["vault_pubkey"],
+            signet["vault_pubkey"]
+        );
     }
 
     #[test]

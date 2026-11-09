@@ -101,7 +101,10 @@ public final class AnzenRuntimeModule: Module {
       return data
     }
     guard status == errSecItemNotFound else { throw failure("Unlock the device to access Anzen storage (\(status))") }
-    guard !FileManager.default.fileExists(atPath: root.appendingPathComponent(role).path) else {
+    // A role's devices live at root/<network>/<role>, or at root/<role> from before networks
+    // were a setting.
+    let devices = [role] + ["signet", "regtest", "bitcoin"].map { "\($0)/\(role)" }
+    guard !devices.contains(where: { FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path) }) else {
       throw failure("This device's storage key is missing. Restore from a recovery backup; it will not be replaced automatically.")
     }
     var key = Data(count: 32)

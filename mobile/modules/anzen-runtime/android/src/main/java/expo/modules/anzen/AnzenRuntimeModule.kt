@@ -42,12 +42,17 @@ class AnzenRuntimeModule : Module() {
 
   // AndroidKeyStore holds a non-exportable wrapping key; only the random data-encryption key
   // enters Rust memory. Both the ciphertext and app state are excluded from Android backups.
+  // A role's devices live at root/<network>/<role>, or at root/<role> from before networks were
+  // a setting.
+  private fun deviceExists(root: File, role: String): Boolean =
+    (listOf(role) + listOf("signet", "regtest", "bitcoin").map { "$it/$role" }).any { File(root, it).exists() }
+
   private fun storageKey(root: File, role: String): ByteArray {
     val alias = "app.anzen.storage.v1.$role"
     val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     val file = AtomicFile(File(root, "$role.key"))
     if (!store.containsAlias(alias)) {
-      check(!file.baseFile.exists() && !File(root, role).exists()) { "Device storage key is missing; restore from a recovery backup" }
+      check(!file.baseFile.exists() && !deviceExists(root, role)) { "Device storage key is missing; restore from a recovery backup" }
       val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
       generator.init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
         .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
@@ -63,7 +68,7 @@ class AnzenRuntimeModule : Module() {
       cipher.updateAAD(alias.toByteArray(Charsets.UTF_8))
       return cipher.doFinal(bytes.copyOfRange(12, bytes.size))
     }
-    check(!File(root, role).exists()) { "Wrapped storage key missing; refusing to replace it" }
+    check(!deviceExists(root, role)) { "Wrapped storage key missing; refusing to replace it" }
     val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
     cipher.init(Cipher.ENCRYPT_MODE, wrapping)

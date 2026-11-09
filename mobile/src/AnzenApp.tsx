@@ -33,6 +33,9 @@ type Props = {
   authenticate?: () => Promise<boolean>;
   // GPU vanity-search benchmarks, shown in the wallet's settings.
   benchmark?: BenchmarkRunner;
+  // This device's own settings (network, hardware wallet mode), from the native app: in the
+  // wallet's settings, and behind a link on the signer.
+  deviceSettings?: React.ReactNode;
 };
 type Kind = ProtocolMessage['kind'];
 type ReviewKind = 'policy' | 'sweep' | 'backup' | 'offline-action' | 'restore' | 'rotation' | 'rotation-adoption' | 'share-vault';
@@ -102,7 +105,7 @@ function Field({ label, value, onChange, numeric = false }: { label: string; val
     style={s.input} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} /></>;
 }
 
-export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark }: Props) {
+export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark, deviceSettings }: Props) {
   const signer = transport.role === 'signer';
   const [identity, setIdentity] = useState<JsonObject | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -125,6 +128,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const [backupStored, setBackupStored] = useState(false);
   const [tapState, setTapState] = useState<TapState | null>(null);
   const [linked, setLinked] = useState(false);
+  const [signerSettings, setSignerSettings] = useState(false);
   // A new phone gets its wallet straight away; this explains, once, how it is protected.
   const [welcome, setWelcome] = useState(false);
   const autoCreated = useRef(false);
@@ -548,6 +552,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
             <View style={s.actions}><ActionPill title="Send" label="↑ Send" icon="send" onPress={() => setPage('send')} /><ActionPill title="Receive" label="↓ Receive" icon="receive" onPress={() => run({ method: 'receive_address' }, value => { setAddress(value.address); setPage('receive'); })} disabled={busy}/></View></View>
             <WalletHistory items={wallet?.activity || []} loaded={Boolean(wallet)} onSelect={entry => { setSelectedActivity(entry); setPage('transaction'); }}/></>}
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
+            {deviceSettings}
             {benchmark && <Benchmarks runner={benchmark}/>}
             <View style={{ marginTop: 48, marginHorizontal: 4 }}>
               <Text style={s.footnote}>anzen · {identity?.network || network}</Text>
@@ -743,6 +748,10 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     {!!error && <Text selectable accessibilityRole="alert" style={[r.errorText, { textAlign: 'center', marginTop: 10 }]}>{error}</Text>}
     {(busy || !sessionLoaded) && <ActivityIndicator color={colors.mint} style={{ marginTop: 12 }}/>}
     {identity && <SavedMessages transport={transport} deliver={deliver}/>}
+    {deviceSettings && (signerSettings ? deviceSettings
+      : <Pressable accessibilityRole="button" accessibilityLabel="Device settings" onPress={() => setSignerSettings(true)} style={{ alignSelf: 'center', marginTop: 18, padding: 8 }}>
+        <Text style={[s.tiny, { color: colors.quiet }]}>Device settings</Text>
+      </Pressable>)}
   </>;
   if (signer) {
     const current = signerReview();
