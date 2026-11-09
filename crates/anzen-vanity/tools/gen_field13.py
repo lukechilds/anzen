@@ -172,6 +172,41 @@ def columns(prefix: str, a: str, b: str, square: bool) -> list[str]:
     return lines
 
 
+def columns_karatsuba(prefix: str, a, b, square: bool) -> list[str]:
+    """`let` bindings for the 19 columns of a 10-limb product of normalized limbs (below 2^13)
+    through a second Karatsuba level on 5-limb halves, whose sums stay below 2^14."""
+    q = HALF // 2
+    lines = [f"    let {prefix}s{i} = {a(i)} + {a(i + q)};" for i in range(q)]
+    if not square:
+        lines += [f"    let {prefix}t{i} = {b(i)} + {b(i + q)};" for i in range(q)]
+    def sub(name, x, y):
+        out = []
+        for k in range(2 * q - 1):
+            if square:
+                cross = [f"{x(i)} * {x(k - i)}" for i in range(q) if i < k - i < q]
+                parts = ["(" + " + ".join(cross) + ") * 2u"] if cross else []
+                if k % 2 == 0:
+                    parts.append(f"{x(k // 2)} * {x(k // 2)}")
+            else:
+                parts = [f"{x(i)} * {y(k - i)}" for i in range(q) if 0 <= k - i < q]
+            out.append(f"    let {prefix}{name}{k} = " + " + ".join(parts) + ";")
+        return out
+    lines += sub("ll", lambda i: a(i), lambda i: b(i) if b else None)
+    lines += sub("hh", lambda i: a(i + q), lambda i: b(i + q) if b else None)
+    lines += sub("mm", lambda i: f"{prefix}s{i}", lambda i: f"{prefix}t{i}")
+    for k in range(2 * HALF - 1):
+        terms = []
+        if k <= 2 * q - 2:
+            terms.append(f"{prefix}ll{k}")
+        if q <= k <= 3 * q - 2:
+            m = k - q
+            terms.append(f"({prefix}mm{m} - {prefix}ll{m} - {prefix}hh{m})")
+        if 2 * q <= k:
+            terms.append(f"{prefix}hh{k - 2 * q}")
+        lines.append(f"    let {prefix}{k} = " + " + ".join(terms) + ";")
+    return lines
+
+
 def karatsuba(square: bool) -> list[str]:
     """One level of Karatsuba on the two 10-limb halves: low·low, high·high and
     (low + high)·(low + high), whose middle columns less the other two are the cross terms.
@@ -180,14 +215,14 @@ def karatsuba(square: bool) -> list[str]:
     lines = []
     if square:
         lines += [f"    let s{i} = a[{i}] + a[{i + HALF}];" for i in range(HALF)]
-        lines += columns("lo", lambda i: f"a[{i}]", None, True)
-        lines += columns("hi", lambda i: f"a[{i + HALF}]", None, True)
+        lines += columns_karatsuba("lo", lambda i: f"a[{i}]", None, True)
+        lines += columns_karatsuba("hi", lambda i: f"a[{i + HALF}]", None, True)
         lines += columns("mid", lambda i: f"s{i}", None, True)
     else:
         lines += [f"    let s{i} = a[{i}] + a[{i + HALF}];" for i in range(HALF)]
         lines += [f"    let t{i} = b[{i}] + b[{i + HALF}];" for i in range(HALF)]
-        lines += columns("lo", lambda i: f"a[{i}]", lambda i: f"b[{i}]", False)
-        lines += columns("hi", lambda i: f"a[{i + HALF}]", lambda i: f"b[{i + HALF}]", False)
+        lines += columns_karatsuba("lo", lambda i: f"a[{i}]", lambda i: f"b[{i}]", False)
+        lines += columns_karatsuba("hi", lambda i: f"a[{i + HALF}]", lambda i: f"b[{i + HALF}]", False)
         lines += columns("mid", lambda i: f"s{i}", lambda i: f"t{i}", False)
     for k in range(2 * LIMBS - 1):
         terms = []

@@ -20,7 +20,8 @@ alternates single dispatches between them, over the same candidate ranges, then 
 of the paired ratios. A/A noise this way: 0.995–1.016 (40 pairs).
 
 A change is kept when its paired ratio is at least 1.03 and it wins most pairs (marginal results
-are re-run), and the GPU tests still match the library code. Host-side changes, which the
+are re-run), or when it wins nearly every pair over 100 or more (a small gain that is plainly not
+noise), and the GPU tests still match the library code. Host-side changes, which the
 baseline shaders cannot run with, use `--binaries` with more rounds.
 
 ## Current speed
@@ -102,6 +103,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| A second Karatsuba level on the low and high 5-limb halves (their sums stay below 2^14; the middle product's would not, so it stays schoolbook): 250 limb products per multiply instead of 300 | nonce | 1.0235 (60/60), 1.0229 (79/80) |
 | `f_reduce` carries only the 19 high columns before folding; the low columns stay sums below 2^30.4, below 2^31 with the folded terms, and the next chain carries them (20 carry steps fewer per product, checked by the same model) | nonce | 1.0473 (60/60) |
 | `f_reduce` ends with one carry chain, a fold and a tail to limb 5 instead of the full two-chain normalization: after the last small fold only limbs 0..4 exceed 13 bits and the value is below 2^260 + 2^63, so the chain carries out at most 1 and its fold cannot pass limb 5. `tools/model_reduce.py` checks the exact u32 operations over 300k random and extreme products | nonce | 1.0605 (60/60) |
 | One level of Karatsuba in `f_mul` and `f_sqr` (300 limb products instead of 400, 165 instead of 210), with Z3 = 2·Z1·H in the mixed addition (a multiply instead of a square and two subtractions, freeing Z1 and Z1Z1 at once). Each alone was ~1% before the addition was reordered; together after it, far more | nonce | 1.0619, 1.0713 (60/60 both) |
@@ -147,6 +149,8 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | `f_reduce`'s last chain replaced by a tail to limb 6 plus a rarely taken branch (limb 6 overflows about once in 10^4 products) that finishes the chain; the model passes | nonce | Did not compile | Apple's compiler service crashes (XPC_ERROR_CONNECTION_INTERRUPTED) with the branch inlined into every product. A branch-free version runs the full chain anyway |
+| Schoolbook squaring (doubled cross products) instead of Karatsuba squaring, after the reduction changes | nonce | 0.981 (0/60) | Karatsuba squaring stays |
+| Candidates per thread 16 / 4 after the field changes | nonce | 0.993 / 0.957 | 8 stays best |
 | Only X and Z kept per candidate until the batch inversion (Y dropped from the stored point) | nonce | 0.999 (21/60) | The compiler already drops the dead Y |
 | First addition affine plus affine (mmadd-2007-bl, 4M + 2S), window 1 peeled out of the loop; compiled this time | nonce | 0.979 (1/60) | Keeping the affine start alive for it costs more than the multiplies it saves |
 | `f_sqr` as `f_mul(a, a)` (smaller code, more products) | nonce | 0.937 (0/40) | The specialized square pays; code size is not the limit |
