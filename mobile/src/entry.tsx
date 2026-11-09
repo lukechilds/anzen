@@ -12,7 +12,7 @@ interface NativeRuntime {
   execute(role: Role, command: string, settings: string): Promise<string>;
   // Live updates on Rust's own thread: start, targets, changes or stop. Never waits for a command.
   watch(settings: string, request: string): string;
-  // The GPU vanity-search benchmark on its own queue: {"seconds": n}.
+  // Vanity-search benchmarks on their own queue: {"engine": "gpu" | "cpu", "seconds": n}.
   benchmark(request: string): Promise<string>;
 }
 export default function NativeApp() {
@@ -72,8 +72,8 @@ export default function NativeApp() {
   const benchmark = useMemo<BenchmarkRunner | undefined>(() => {
     if (!runtime?.benchmark) return undefined;
     return {
-      run: async seconds => {
-        const response = JSON.parse(await runtime.benchmark(JSON.stringify({ seconds })));
+      run: async (engine, seconds) => {
+        const response = JSON.parse(await runtime.benchmark(JSON.stringify({ engine, seconds })));
         if (response.error) throw new Error(response.error);
         return response.ok;
       },

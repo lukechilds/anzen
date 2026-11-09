@@ -98,32 +98,54 @@ extern "C" {
     fn benchmark_panic(message: &str);
 }
 
-/// The GPU vanity-search benchmark on fixed public inputs, through WebGPU. `request` is
-/// `{"seconds":n}`; resolves to the same JSON envelope as `execute`.
+/// A vanity-search benchmark on fixed public inputs: on the GPU through WebGPU, or on one CPU
+/// thread with the library code (browser WASM has no threads). `request` is
+/// `{"engine":"gpu"|"cpu","seconds":n}`; resolves to the same JSON envelope as `execute`.
 /// It touches no device storage, so it runs in its own worker.
 #[wasm_bindgen]
 pub async fn benchmark(request: String) -> String {
     #[derive(serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Engine {
+        Gpu,
+        Cpu,
+    }
+    #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Request {
+        engine: Engine,
         seconds: f64,
     }
     std::panic::set_hook(Box::new(|info| benchmark_panic(&info.to_string())));
     let result = async {
         let request: Request = serde_json::from_str(&request)?;
-        let report = anzen_vanity::bench::run_wgpu(request.seconds.clamp(1.0, 300.0), || {
-            performance_now() / 1000.0
+        let seconds = request.seconds.clamp(1.0, 300.0);
+        let clock = || performance_now() / 1000.0;
+        anyhow::Ok(match request.engine {
+            Engine::Gpu => {
+                let report = anzen_vanity::bench::run_wgpu(seconds, clock).await?;
+                let measurement = report.measurement;
+                json!({
+                    "engine": "gpu",
+                    "device": report.adapter,
+                    "setup_seconds": report.setup_seconds,
+                    "batch": measurement.batch,
+                    "attempts": measurement.attempts,
+                    "seconds": measurement.seconds,
+                    "rate": measurement.rate,
+                })
+            }
+            Engine::Cpu => {
+                let result = anzen_wallet::cpu_vanity_benchmark(seconds, 1, clock)?;
+                json!({
+                    "engine": "cpu",
+                    "device": "1 CPU thread (browser)",
+                    "attempts": result.attempts,
+                    "seconds": result.seconds,
+                    "rate": result.rate,
+                })
+            }
         })
-        .await?;
-        let measurement = report.measurement;
-        anyhow::Ok(json!({
-            "adapter": report.adapter,
-            "setup_seconds": report.setup_seconds,
-            "batch": measurement.batch,
-            "attempts": measurement.attempts,
-            "seconds": measurement.seconds,
-            "rate": measurement.rate,
-        }))
     }
     .await;
     match result {

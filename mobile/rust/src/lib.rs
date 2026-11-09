@@ -211,36 +211,66 @@ pub unsafe extern "C" fn anzen_mobile_watch(
     envelope(outcome)
 }
 
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum BenchmarkEngine {
+    Gpu,
+    Cpu,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BenchmarkRequest {
+    engine: BenchmarkEngine,
     seconds: f64,
 }
 
-/// Benchmarks hold the GPU flat out, so only one runs at a time.
+/// Benchmarks hold the GPU or every CPU core flat out, so only one runs at a time.
 static BENCHMARK: Mutex<()> = Mutex::new(());
 
-/// The GPU vanity search's throughput on fixed public inputs, through wgpu. It touches no keys
-/// or wallet state, so it runs outside the command gate.
+/// The vanity search's throughput on fixed public inputs, on the GPU through wgpu or on every CPU
+/// thread with the library code. It touches no keys or wallet state, so it runs outside the
+/// command gate.
 pub fn benchmark(request: &str) -> Result<Value> {
     let request: BenchmarkRequest = serde_json::from_str(request)?;
+    let seconds = request.seconds.clamp(1.0, 300.0);
     let _running = BENCHMARK
         .try_lock()
         .map_err(|_| anyhow::anyhow!("another benchmark is running"))?;
-    let report = anzen_vanity::bench::run_wgpu_blocking(request.seconds.clamp(1.0, 300.0))?;
-    let measurement = report.measurement;
-    Ok(json!({
-        "adapter": report.adapter,
-        "setup_seconds": report.setup_seconds,
-        "batch": measurement.batch,
-        "attempts": measurement.attempts,
-        "seconds": measurement.seconds,
-        "rate": measurement.rate,
-    }))
+    Ok(match request.engine {
+        BenchmarkEngine::Gpu => {
+            let report = anzen_vanity::bench::run_wgpu_blocking(seconds)?;
+            let measurement = report.measurement;
+            json!({
+                "engine": "gpu",
+                "device": report.adapter,
+                "setup_seconds": report.setup_seconds,
+                "batch": measurement.batch,
+                "attempts": measurement.attempts,
+                "seconds": measurement.seconds,
+                "rate": measurement.rate,
+            })
+        }
+        BenchmarkEngine::Cpu => {
+            let epoch = std::time::Instant::now();
+            let threads = anzen_wallet::available_worker_count();
+            let result = anzen_wallet::cpu_vanity_benchmark(seconds, threads, || {
+                epoch.elapsed().as_secs_f64()
+            })?;
+            json!({
+                "engine": "cpu",
+                "device": format!("{threads} CPU threads"),
+                "attempts": result.attempts,
+                "seconds": result.seconds,
+                "rate": result.rate,
+            })
+        }
+    })
 }
 
-/// Run the GPU benchmark (`{"seconds": n}`); returns a JSON envelope the caller owns until
-/// `anzen_mobile_free`. It blocks for the whole benchmark, so call it off the main thread.
+/// Run a vanity-search benchmark (`{"engine": "gpu"|"cpu", "seconds": n}`); returns a JSON
+/// envelope the caller owns until `anzen_mobile_free`. It blocks for the whole benchmark, so call
+/// it off the main thread.
 ///
 /// # Safety
 /// `request` must reference a live NUL-terminated UTF-8 string for this call.
@@ -323,6 +353,15 @@ pub unsafe extern "C" fn anzen_mobile_free(value: *mut c_char) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn benchmarks_run_on_the_cpu_and_reject_unknown_engines() {
+        let result = super::benchmark(r#"{"engine":"cpu","seconds":1}"#).unwrap();
+        assert_eq!(result["engine"], "cpu");
+        assert!(result["rate"].as_f64().unwrap() > 0.0);
+        assert!(result["device"].as_str().unwrap().ends_with("CPU threads"));
+        assert!(super::benchmark(r#"{"engine":"metal","seconds":1}"#).is_err());
+    }
+
     use super::*;
 
     fn settings() -> RuntimeSettings {
