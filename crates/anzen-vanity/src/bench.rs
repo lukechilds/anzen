@@ -235,6 +235,14 @@ pub async fn run_wgpu(kernel: Kernel, seconds: f64, now: impl Fn() -> f64) -> Re
     };
     let setup_seconds = now() - started;
     let mut plan = Plan::new(kernel, seconds);
+    // A browser that rejects a shader reports it asynchronously, and dispatches through it then
+    // return nothing at an impossible rate. Check the kernel computes distinct output keys.
+    let (start, _) = plan.next().expect("a new plan has a first dispatch");
+    let keys = gpu.debug_keys(&prepared, start, 4).await?;
+    ensure!(
+        keys.iter().all(Option::is_some) && keys[0] != keys[1],
+        "the GPU returned no output keys; it may have rejected the shader"
+    );
     while let Some((start, count)) = plan.next() {
         let started = now();
         gpu.run_batch(&prepared, start, count).await?;

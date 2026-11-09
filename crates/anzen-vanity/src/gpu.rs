@@ -168,9 +168,10 @@ impl GpuSearch {
             })
             .await
             .context("could not open the GPU device")?;
-        // Browsers report a rejected shader or pipeline asynchronously, never by failing the
-        // call, and dispatches through it then do nothing. Catch that here instead of timing it.
-        // (wgpu's WebGPU backend cannot convert internal errors, so they are not scoped.)
+        // Report a rejected shader or pipeline as an error rather than a panic. Not in browsers:
+        // there wgpu 30 panics popping an empty scope (WebGPU resolves it to null, which
+        // wasm-bindgen does not treat as none), so callers check the shader's output instead.
+        #[cfg(not(target_arch = "wasm32"))]
         let scopes = [
             wgpu::ErrorFilter::Validation,
             wgpu::ErrorFilter::OutOfMemory,
@@ -256,6 +257,7 @@ impl GpuSearch {
         let key = kernel("key", key_shader, tunings[0], key_table)?;
         let nonce = kernel("nonce", nonce_shader, tunings[1], nonce_table)?;
         let empty = upload(&device, "no key tables", &[0; 4]);
+        #[cfg(not(target_arch = "wasm32"))]
         for scope in scopes.into_iter().rev() {
             if let Some(error) = scope.pop().await {
                 bail!("the GPU rejected the vanity search: {error}");
@@ -268,7 +270,12 @@ impl GpuSearch {
             key,
             nonce,
             empty,
-            adapter: format!("{} ({:?})", info.name, info.backend),
+            // Browsers do not name the GPU.
+            adapter: if info.name.is_empty() {
+                format!("{:?}", info.backend)
+            } else {
+                format!("{} ({:?})", info.name, info.backend)
+            },
         })
     }
 
@@ -409,7 +416,9 @@ impl GpuSearch {
         self.debug_keys(&prepared, start, count).await
     }
 
-    async fn debug_keys(
+    /// The output keys for a prepared search, as [`Self::output_keys`].
+    #[doc(hidden)]
+    pub async fn debug_keys(
         &self,
         prepared: &Prepared,
         start: u32,
