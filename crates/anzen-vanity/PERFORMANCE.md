@@ -204,6 +204,11 @@ limits by patching `G_WINDOW_BITS` before compiling.
 
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
+| Batch-affine additions through the scratch buffer: per window, one pass for each candidate's x2 − x1, one inverting 16–32 of them per thread, one for the affine sum (2M + 1S + 3M of batching + an amortized inversion, against 8M + 2S) | nonce | Not built | Every window's state goes through memory: ~570 bytes per candidate per window, ~320 GB/s at 43M/s, most of the M4 Max's bandwidth and several times the phones'. The earlier analysis below assumed the inversion runs on one lane; per-thread batches keep every lane busy, so memory is the real limit |
+| After the split: workgroup size 32 / 128 | nonce | 0.999 (13/40) / 0.993 (7/40) | 64 stays |
+| After the split: 32 candidates per thread in the inversion pass, over 100 pairs | nonce | 1.003 (68/100) | Too small; 16 keeps more threads for small batches on phones |
+| Search batches up to 2^23 (from 2^22) | nonce search | 0.998 (6/10 rounds) | The pause to read each batch back costs nothing measurable |
+| Chunks of 2^18 / 2^20 candidates (from 2^19) | nonce search | 0.996 (12 rounds) / inconclusive | No effect; 2^19 keeps the scratch at 40 MB |
 | After the two-pass split: the last addition peeled to compute only X3 and ZZ3 (5M + 2S) | nonce | 0.985 (4/60) | Still loses, as before the split: the extra code costs more than three multiplies |
 | After the two-pass split: 32 / 64 / 8 candidates per thread in the inversion pass (from 16) | nonce | 1.008 (29/40) and 1.012 (41/60) / 0.994 (19/60) / 0.991 (11/40) | 32 inconclusive, others lose; 16 stays |
 | Before the split: the running product of the batch held packed too | nonce | 1.003 (33/40) | Too small; superseded by the split |
