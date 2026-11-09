@@ -40,6 +40,7 @@ struct Kernel {
     debug: Pipeline,
     per_invocation: u32,
     threads_per_group: usize,
+    key_window_bits: u32,
 }
 
 /// A search's parameter block, and the key kernel's signer and parent tables.
@@ -84,6 +85,7 @@ impl MetalSearch {
                 per_invocation: define(source, "PER_INVOCATION")?,
                 // Older kernel sources predate the constant and used 64.
                 threads_per_group: define(source, "THREADS_PER_GROUP").unwrap_or(64) as usize,
+                key_window_bits: define(source, "KEY_WINDOW_BITS").unwrap_or(8),
             })
         };
         let key = kernel(key_source)?;
@@ -128,7 +130,10 @@ impl MetalSearch {
         Ok(MetalPrepared {
             nonce: false,
             params: crate::gpu::encode_params(inputs)?,
-            tables: Some(buffer(&self.device, &crate::gpu::key_tables(inputs)?)?),
+            tables: Some(buffer(
+                &self.device,
+                &crate::gpu::key_tables(inputs, self.key.key_window_bits)?,
+            )?),
         })
     }
 

@@ -21,8 +21,11 @@
 #define P_PARENT_Y 124
 
 // The signer's and the parent's tables in one buffer, 8-bit windows.
+#define KEY_WINDOW_BITS 8
+#define KEY_DIGITS ((1u << KEY_WINDOW_BITS) - 1u)
+#define KEY_WINDOWS ((256 + KEY_WINDOW_BITS - 1) / KEY_WINDOW_BITS)
 #define SIGNER_TABLE 0u
-#define PARENT_TABLE 130560u
+#define PARENT_TABLE (KEY_WINDOWS * KEY_DIGITS * 16u)
 
 constant uint ORDER_N_COMPLEMENT[5] = {0x2FC9BEBFu, 0x402DA173u, 0x50B75FC4u, 0x45512319u, 1u};
 
@@ -249,7 +252,7 @@ __attribute__((noinline)) Fe bip32_tweak(uint index, device const uint *params) 
 // Points and stages
 
 inline Affine key_point(device const uint *tables, uint table, uint window, uint digit) {
-    uint base = table + (window * 255 + digit - 1) * 16;
+    uint base = table + (window * KEY_DIGITS + digit - 1) * 16;
     Affine q;
     #pragma unroll
     for (int i = 0; i < 8; i++) {
@@ -261,8 +264,13 @@ inline Affine key_point(device const uint *tables, uint table, uint window, uint
 }
 
 __attribute__((noinline)) Jacobian add_mul_key(Jacobian acc, device const uint *tables, uint table, Fe k) {
-    for (uint w = 0; w < 32; w++) {
-        uint digit = (k.v[w / 4] >> (8 * (w % 4))) & 0xffu;
+    for (uint w = 0; w < KEY_WINDOWS; w++) {
+        uint bit = w * KEY_WINDOW_BITS;
+        uint limb = bit / 32;
+        uint shift = bit % 32;
+        uint digit = k.v[limb] >> shift;
+        if (shift + KEY_WINDOW_BITS > 32 && limb < 7) digit |= k.v[limb + 1] << (32 - shift);
+        digit &= KEY_DIGITS;
         if (digit != 0) {
             Affine q = key_point(tables, table, w, digit);
             acc = point_add_affine(acc, q.x, q.y);

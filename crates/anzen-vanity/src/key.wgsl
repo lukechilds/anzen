@@ -20,11 +20,14 @@ const P_PARENT_Y: u32 = 124u;
 // The signer's and the parent's tables, 8-bit windows like G's at its default: entry (window
 // w, digit d) of a point's table is d·2^(8w)·point, for d in 1..=255.
 @group(0) @binding(4) var<storage, read> key_tables: array<u32>;
+const KEY_WINDOW_BITS: u32 = 8u;
+const KEY_DIGITS: u32 = (1u << KEY_WINDOW_BITS) - 1u;
+const KEY_WINDOWS: u32 = (256u + KEY_WINDOW_BITS - 1u) / KEY_WINDOW_BITS;
 const SIGNER_TABLE: u32 = 0u;
-const PARENT_TABLE: u32 = 130560u;
+const PARENT_TABLE: u32 = KEY_WINDOWS * KEY_DIGITS * 16u;
 
 fn key_point(table: u32, window: u32, digit: u32) -> Affine {
-    let base = table + (window * 255u + digit - 1u) * 16u;
+    let base = table + (window * KEY_DIGITS + digit - 1u) * 16u;
     var q: Affine;
     for (var i = 0u; i < 8u; i++) {
         q.x[i] = key_tables[base + i];
@@ -36,8 +39,8 @@ fn key_point(table: u32, window: u32, digit: u32) -> Affine {
 // acc + k·point for the signer or parent key.
 fn add_mul_key(start: Jacobian, table: u32, k: Fe) -> Jacobian {
     var acc = start;
-    for (var w = 0u; w < 32u; w++) {
-        let digit = (k[w / 4u] >> (8u * (w % 4u))) & 0xffu;
+    for (var w = 0u; w < KEY_WINDOWS; w++) {
+        let digit = window_digit(k, w * KEY_WINDOW_BITS, KEY_WINDOW_BITS);
         if digit != 0u {
             acc = point_add_affine(acc, key_point(table, w, digit));
         }

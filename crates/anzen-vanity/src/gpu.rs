@@ -19,8 +19,6 @@ const NONCE_SHADER: &str = concat!(
 );
 const PARAM_WORDS: usize = 132;
 const NONCE_PARAM_WORDS: usize = 60;
-/// The key kernel's signer and parent tables use 8-bit windows.
-const KEY_TABLE_BITS: u32 = 8;
 /// Candidates per dispatch to start with; the search adapts it towards `TARGET_BATCH_TIME`.
 const FIRST_BATCH: u32 = 1 << 16;
 const MAX_BATCH: u32 = 1 << 22;
@@ -56,6 +54,8 @@ const SCRATCH_RECORD: u64 = 25;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Tuning {
     g_window_bits: u32,
+    /// The key kernel's signer and parent table windows; 8 for kernels that predate it.
+    key_window_bits: u32,
     workgroup_size: u32,
     per_invocation: u32,
 }
@@ -77,6 +77,7 @@ impl Tuning {
         };
         let tuning = Self {
             g_window_bits: constant("G_WINDOW_BITS", None)?,
+            key_window_bits: constant("KEY_WINDOW_BITS", Some(8))?,
             workgroup_size: constant("WORKGROUP_SIZE", None)?,
             per_invocation: constant("PER_INVOCATION", Some(1))?,
         };
@@ -144,7 +145,7 @@ impl GpuSearch {
         let largest_table = tunings
             .iter()
             .map(|tuning| table_words(tuning.g_window_bits))
-            .chain([2 * table_words(KEY_TABLE_BITS)])
+            .chain([2 * table_words(tunings[0].key_window_bits)])
             .max()
             .expect("tables")
             * 4;
@@ -300,7 +301,11 @@ impl GpuSearch {
         Ok(Prepared {
             nonce: false,
             params: encode_params(inputs)?,
-            key_tables: Some(upload(&self.device, "key tables", &key_tables(inputs)?)),
+            key_tables: Some(upload(
+                &self.device,
+                "key tables",
+                &key_tables(inputs, self.key.tuning.key_window_bits)?,
+            )),
         })
     }
 
@@ -800,11 +805,11 @@ pub(crate) fn encode_params(inputs: &SearchInputs) -> Result<Vec<u32>> {
 }
 
 /// The key kernel's signer table then parent table.
-pub(crate) fn key_tables(inputs: &SearchInputs) -> Result<Vec<u32>> {
-    let mut tables = point_table(signer_point(&inputs.signer_key)?, KEY_TABLE_BITS)?;
+pub(crate) fn key_tables(inputs: &SearchInputs, bits: u32) -> Result<Vec<u32>> {
+    let mut tables = point_table(signer_point(&inputs.signer_key)?, bits)?;
     tables.extend(point_table(
         PublicKey::from_slice(&inputs.parent_public_key).context("invalid parent key")?,
-        KEY_TABLE_BITS,
+        bits,
     )?);
     Ok(tables)
 }
