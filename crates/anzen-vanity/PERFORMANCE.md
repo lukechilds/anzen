@@ -27,14 +27,15 @@ Measured on a cool GPU, alternating short runs (sustained load throttles all by 
 | Kernel | Start | wgpu now | Metal | `vault` (33.5M), best |
 |---|---|---|---|---|
 | key | 710k/s | ~1.25M/s | **~1.51M/s** | ~22 s |
-| nonce | 2.64M/s | **~16.2M/s** | ~9.1M/s | ~2.1 s |
+| nonce | 2.64M/s | ~16.0M/s | **~17.1M/s** | ~2.0 s |
 
 The Metal kernels (`--features metal`) carry the same optimizations as the wgpu ones (16-bit G
-windows, a shared inversion per 4 or 8 candidates) but keep 8×32-bit limbs with native 64-bit
-products instead of 13-bit limbs. That wins for the key kernel, which on wgpu still uses 32-bit
-limbs built from 16-bit halves, and loses to the 13-bit wgpu nonce kernel: Apple GPUs emulate
-64-bit integer operations with several 32-bit instructions, so 13-bit limbs in Metal are the
-next thing to try there.
+windows, a shared inversion per 4 or 8 candidates). The key kernel keeps 8×32-bit limbs with
+native 64-bit products, which beats wgpu's 32-bit limbs built from 16-bit halves. The nonce
+kernel first did the same and ran at 9.1M/s, 1.8× slower than the 13-bit wgpu kernel: Apple GPUs
+emulate 64-bit integer operations with several 32-bit instructions. Ported to the same unrolled
+13-bit field (generated from the same script as the WGSL), it runs at ~17.1M/s, about 7% ahead
+of wgpu in alternating runs.
 
 ## Where the time goes
 
@@ -67,6 +68,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Metal nonce: the 13-bit field instead of 32-bit limbs with 64-bit products (9.1 → 17.1M/s) | metal nonce | 1.88× |
 | Nonce: point arithmetic in 20 limbs of 13 bits, fully unrolled. Products fit in 26 bits, so a column of 20 sums in a u32 with no carry handling. Loop form was 0.43×, unrolled products only 0.72×; unrolling the reduction, normalization and add/sub too gave the win. `tests/field.rs` checks every operation against num-bigint on edge and random inputs | nonce | 2.31× |
 | Key: each of the three inversion stages batched across 4 candidates per invocation; 2 gave 1.17×, 8 gave 1.17× (register pressure) | key | 1.24× |
 | Nonce: 8 candidates per invocation share one field inversion (Montgomery's trick); 4 gave 1.49×, 16 gave 1.56× | nonce | 1.55× |
