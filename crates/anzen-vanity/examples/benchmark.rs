@@ -148,16 +148,11 @@ fn pair(args: Vec<String>) -> anyhow::Result<()> {
         gpu.run_batch_blocking(prepared, start, batch)?;
         Ok(f64::from(batch) / started.elapsed().as_secs_f64())
     };
-    // A pathological shader (spilling everything) can take minutes per full batch, and killing
-    // the process does not cancel GPU work already queued. Try a tiny dispatch first.
     for (index, (gpu, prepared)) in builds.iter().enumerate() {
-        let started = Instant::now();
-        gpu.run_batch_blocking(prepared, first, 256)?;
-        anyhow::ensure!(
-            started.elapsed() < Duration::from_secs(1),
-            "build {index} took {:?} for 256 candidates; not queuing more",
-            started.elapsed()
-        );
+        ramp(&format!("build {index}"), batch, |count| {
+            gpu.run_batch_blocking(prepared, first, count)?;
+            Ok(())
+        })?;
     }
     for round in 0..3 {
         time(0, first + round * batch)?;
@@ -201,12 +196,10 @@ fn metal(kernel: &str, seconds: f64, warmup: f64) -> anyhow::Result<()> {
         }
         Ok(attempts)
     };
-    let started = Instant::now();
-    metal.run_batch(&prepared, first, 256)?;
-    anyhow::ensure!(
-        started.elapsed() < Duration::from_secs(1),
-        "Metal kernel is pathologically slow"
-    );
+    ramp("Metal kernel", batch, |count| {
+        metal.run_batch(&prepared, first, count)?;
+        Ok(())
+    })?;
     measure(warmup)?;
     let started = Instant::now();
     let attempts = measure(seconds)?;
@@ -236,7 +229,7 @@ fn metal_prepared(
 }
 
 /// Like `pair`, for the Metal kernels: `pair-metal <kernel> --base-dir DIR` compiles DIR's
-/// common.metal, key.metal and nonce.metal next to this build's.
+/// common.metal, key.metal and field13.metal + nonce.metal next to this build's.
 #[cfg(feature = "metal")]
 fn pair_metal(args: Vec<String>) -> anyhow::Result<()> {
     let kernel = args.first().cloned().unwrap_or_else(|| "nonce".into());
@@ -256,7 +249,7 @@ fn pair_metal(args: Vec<String>) -> anyhow::Result<()> {
         anzen_vanity::MetalSearch::with_full_sources(
             &read("common.metal")?,
             &read("key.metal")?,
-            &read("nonce.metal")?,
+            &(read("field13.metal").unwrap_or_default() + &read("nonce.metal")?),
         )?,
         anzen_vanity::MetalSearch::open()?,
     ];
@@ -266,12 +259,10 @@ fn pair_metal(args: Vec<String>) -> anyhow::Result<()> {
     ];
     let (first, batch) = (prepared[0].1, prepared[0].2);
     for (index, build) in builds.iter().enumerate() {
-        let started = Instant::now();
-        build.run_batch(&prepared[index].0, first, 256)?;
-        anyhow::ensure!(
-            started.elapsed() < Duration::from_secs(1),
-            "build {index} is pathologically slow"
-        );
+        ramp(&format!("build {index}"), batch, |count| {
+            build.run_batch(&prepared[index].0, first, count)?;
+            Ok(())
+        })?;
     }
     let time = |index: usize, start: u32| -> anyhow::Result<f64> {
         let started = Instant::now();
@@ -304,6 +295,42 @@ fn pair_metal(args: Vec<String>) -> anyhow::Result<()> {
         median(&mut ratios)
     );
     Ok(())
+}
+
+/// Grow dispatches from 256 candidates to `full` by 4× steps, refusing to go on if a step takes
+/// over 2 s or costs over 4× more per candidate than the previous one. Killing a process does
+/// not cancel GPU work it queued, and two kernels have hung the GPU at full load after small
+/// dispatches ran fine, so a kernel must prove it scales before it gets a full batch.
+fn ramp(
+    name: &str,
+    full: u32,
+    mut run: impl FnMut(u32) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let mut count = 256_u32;
+    let mut previous: Option<f64> = None;
+    loop {
+        let started = Instant::now();
+        run(count)?;
+        let elapsed = started.elapsed();
+        let per_candidate = elapsed.as_secs_f64() / f64::from(count);
+        anyhow::ensure!(
+            elapsed < Duration::from_secs(2),
+            "{name}: {count} candidates took {elapsed:?}; not queuing more"
+        );
+        if let Some(previous) = previous {
+            anyhow::ensure!(
+                per_candidate < previous * 4.0,
+                "{name}: {count} candidates cost {:.1}x more each than the last step; not queuing more",
+                per_candidate / previous
+            );
+        }
+        if count >= full {
+            return Ok(());
+        }
+        // Small dispatches are latency-bound, so compare against the cheaper of the two.
+        previous = Some(previous.map_or(per_candidate, |p: f64| p.min(per_candidate)));
+        count = (count * 4).min(full);
+    }
 }
 
 fn median(values: &mut [f64]) -> f64 {

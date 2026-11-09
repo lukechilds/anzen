@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-BUILD = ["cargo", "build", "-q", "--release", "-p", "anzen-vanity", "--example", "benchmark"]
+BUILD = ["cargo", "build", "-q", "--release", "-p", "anzen-vanity", "--features", "metal", "--example", "benchmark"]
 
 
 def build_base(rev: str) -> Path:
@@ -57,6 +57,21 @@ def base_shaders(rev: str) -> Path:
     return directory
 
 
+def base_metal(rev: str) -> Path:
+    directory = REPO / "target" / "bench-base-metal"
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ["common.metal", "field13.metal", "key.metal", "nonce.metal"]:
+        shown = subprocess.run(
+            ["git", "show", f"{rev}:crates/anzen-vanity/src/metal/{name}"],
+            cwd=REPO, capture_output=True, text=True,
+        )
+        if shown.returncode == 0:
+            (directory / name).write_text(shown.stdout)
+        elif (directory / name).exists():
+            (directory / name).unlink()
+    return directory
+
+
 def run(binary: Path, kernel: str, seconds: float, warmup: float) -> float:
     output = subprocess.run(
         [str(binary), kernel, "--seconds", str(seconds), "--warmup", str(warmup)],
@@ -67,7 +82,7 @@ def run(binary: Path, kernel: str, seconds: float, warmup: float) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("kernel", choices=["key", "nonce", "both"])
+    parser.add_argument("kernel", choices=["key", "nonce", "both", "metal-key", "metal-nonce", "metal-both", "all"])
     parser.add_argument("--base", default="HEAD")
     parser.add_argument("--rounds", type=int, default=4)
     parser.add_argument("--seconds", type=float, default=3.0)
@@ -75,17 +90,27 @@ def main() -> None:
     parser.add_argument("--binaries", action="store_true")
     parser.add_argument("--pairs", type=int, default=40)
     args = parser.parse_args()
-    kernels = ["key", "nonce"] if args.kernel == "both" else [args.kernel]
+    kernels = {
+        "both": ["key", "nonce"],
+        "metal-both": ["metal-key", "metal-nonce"],
+        "all": ["key", "nonce", "metal-key", "metal-nonce"],
+    }.get(args.kernel, [args.kernel])
 
     if not args.binaries:
-        candidate, shaders = build_candidate(), base_shaders(args.base)
+        candidate = build_candidate()
+        shaders, metal = base_shaders(args.base), base_metal(args.base)
         for kernel in kernels:
+            if kernel.startswith("metal-"):
+                command = [str(candidate), "pair-metal", kernel.removeprefix("metal-"), "--base-dir", str(metal)]
+            else:
+                command = [str(candidate), "pair", kernel, "--base-shaders", str(shaders)]
             # A shader that hangs Apple's compiler never returns; give up rather than wait.
-            output = subprocess.run(
-                [str(candidate), "pair", kernel, "--base-shaders", str(shaders), "--pairs", str(args.pairs)],
-                capture_output=True, text=True, check=True, timeout=600,
-            ).stdout
-            print(output.strip().splitlines()[-1])
+            result = subprocess.run(
+                command + ["--pairs", str(args.pairs)],
+                capture_output=True, text=True, timeout=600,
+            )
+            lines = (result.stdout.strip() or result.stderr.strip()).splitlines()
+            print(lines[-1] if lines else f"{kernel}: no output (exit {result.returncode})")
             sys.stdout.flush()
         return
 
