@@ -16,6 +16,7 @@ CARRY = "carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);"
 
 def mul_wide() -> list[str]:
     lines = [
+        "// The full 512-bit product.",
         "fn mul_wide(a: Fe, b: Fe) -> array<u32, 16> {",
         "    var t: array<u32, 16>;",
         "    var p: vec2<u32>;",
@@ -77,7 +78,7 @@ def fe_add() -> list[str]:
 
 
 def sub_raw() -> list[str]:
-    lines = ["fn sub_raw(a: Fe, b: Fe) -> Fe {", "    var r: Fe;", "    var borrow = 0u;", "    var d: u32;"]
+    lines = ["// a - b mod 2^256.", "fn sub_raw(a: Fe, b: Fe) -> Fe {", "    var r: Fe;", "    var borrow = 0u;", "    var d: u32;"]
     for i in range(8):
         lines.append(
             f"    d = a[{i}] - b[{i}]; r[{i}] = d - borrow;"
@@ -87,7 +88,7 @@ def sub_raw() -> list[str]:
 
 
 def gte() -> list[str]:
-    lines = ["fn gte(a: Fe, b: Fe) -> bool {", "    var result = true;", "    var decided = false;"]
+    lines = ["// a >= b as unsigned 256-bit integers.", "fn gte(a: Fe, b: Fe) -> bool {", "    var result = true;", "    var decided = false;"]
     for i in range(7, -1, -1):
         lines.append(f"    if !decided && a[{i}] != b[{i}] {{ result = a[{i}] > b[{i}]; decided = true; }}")
     return lines + ["    return result;", "}", ""]

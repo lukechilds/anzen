@@ -82,6 +82,7 @@ fn equal(a: Fe, b: Fe) -> bool {
     return bits == 0u;
 }
 
+// a >= b as unsigned 256-bit integers.
 fn gte(a: Fe, b: Fe) -> bool {
     var result = true;
     var decided = false;
@@ -96,6 +97,7 @@ fn gte(a: Fe, b: Fe) -> bool {
     return result;
 }
 
+// a - b mod 2^256.
 fn sub_raw(a: Fe, b: Fe) -> Fe {
     var r: Fe;
     var borrow = 0u;
@@ -177,6 +179,7 @@ fn fe_reduce(t: array<u32, 16>) -> Fe {
     return r;
 }
 
+// The full 512-bit product.
 fn mul_wide(a: Fe, b: Fe) -> array<u32, 16> {
     var t: array<u32, 16>;
     var p: vec2<u32>;
