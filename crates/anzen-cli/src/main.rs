@@ -947,7 +947,7 @@ fn print_status(
     println!("Height: {}", tip.height);
     println!("Median time past: {}", tip.median_time);
     println!("Vault UTXOs: {}", utxos.len());
-    println!("Vault balance: {} sats", balance);
+    println!("Vault balance: {balance} sats");
     println!("Live policy controller outputs: {}", connectors.len());
     println!(
         "Monthly spending: {}",

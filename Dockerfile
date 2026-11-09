@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm AS base
+FROM rust:1.88-bookworm AS base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libsqlite3-dev pkg-config \
@@ -18,6 +18,9 @@ RUN find crates -type f ! -name Cargo.toml -delete \
     done \
     && printf 'fn main() {}\n' > crates/anzen-cli/src/main.rs \
     && printf 'fn main() {}\n' > crates/anzen-playground/src/main.rs \
+    && mkdir -p crates/anzen-vanity/examples crates/anzen-vanity/tests \
+    && printf 'fn main() {}\n' > crates/anzen-vanity/examples/benchmark.rs \
+    && printf '' > crates/anzen-vanity/tests/gpu.rs \
     && rm crates/anzen-cli/src/lib.rs crates/anzen-playground/src/lib.rs
 
 FROM base AS release-dependencies
