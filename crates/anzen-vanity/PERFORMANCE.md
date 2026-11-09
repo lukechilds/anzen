@@ -68,6 +68,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| wgpu key: the 32-bit field functions (mul_wide, fe_sqr, fe_add, sub_raw, gte) unrolled straight-line by `tools/gen_field32.py`, so every limb index is constant | key | 2.29 |
 | Metal key: 8 candidates per thread share each inversion stage (from 4; 2 gave 0.83×, 16 gave 0.74×) | metal key | 1.126 |
 | Nonce: 13-bit mixed addition without the P = ±Q checks, which cost two full reductions per addition and happen with probability ~2^-256; the host re-verifies every match on the CPU | nonce / metal nonce | 1.129 / 1.051 |
 | Key: signer and parent tables with 16-bit windows (KeyAgg's table additions 32 → 16; 134 MB of tables per search) | key / metal key | 1.20 / 1.18 |
@@ -83,6 +84,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | Candidates per thread 4 / 16 (from 8) on the 13-bit nonce kernels | nonce / metal nonce | 0.98 / 0.95 at 4; 0.99 / 0.99 at 16 | 8 stays best after the field change |
+| wgpu key: 8 candidates per thread after the table change (from 4) | key | 0.97 | 4 stays best on wgpu, unlike Metal |
 | Thread-group size 32 / 128 / 256 (from 64) | metal key, metal nonce, nonce | 0.96–0.99; wgpu nonce 0.95 at 256 | 64 stays best on every kernel and backend |
 | Workgroup size 32 / 128 / 256 (from 64) | both | 1.01 / 0.93 / 0.83 key; 0.98 / 1.00 / 0.92 nonce | 64 is best; bigger groups lower occupancy |
 | Low word of `mul32` from the 16-bit partial products instead of a fifth native multiply | both | 1.006 / 1.003 | Integer multiply rate is not the bottleneck |

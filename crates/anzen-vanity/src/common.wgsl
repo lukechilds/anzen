@@ -82,28 +82,32 @@ fn equal(a: Fe, b: Fe) -> bool {
     return bits == 0u;
 }
 
-// a >= b as unsigned 256-bit integers.
 fn gte(a: Fe, b: Fe) -> bool {
-    for (var i = 7i; i >= 0i; i--) {
-        if a[i] != b[i] {
-            return a[i] > b[i];
-        }
-    }
-    return true;
+    var result = true;
+    var decided = false;
+    if !decided && a[7] != b[7] { result = a[7] > b[7]; decided = true; }
+    if !decided && a[6] != b[6] { result = a[6] > b[6]; decided = true; }
+    if !decided && a[5] != b[5] { result = a[5] > b[5]; decided = true; }
+    if !decided && a[4] != b[4] { result = a[4] > b[4]; decided = true; }
+    if !decided && a[3] != b[3] { result = a[3] > b[3]; decided = true; }
+    if !decided && a[2] != b[2] { result = a[2] > b[2]; decided = true; }
+    if !decided && a[1] != b[1] { result = a[1] > b[1]; decided = true; }
+    if !decided && a[0] != b[0] { result = a[0] > b[0]; decided = true; }
+    return result;
 }
 
-// a - b mod 2^256.
 fn sub_raw(a: Fe, b: Fe) -> Fe {
     var r: Fe;
     var borrow = 0u;
-    for (var i = 0u; i < 8u; i++) {
-        let d = a[i] - b[i];
-        let b1 = select(0u, 1u, a[i] < b[i]);
-        let d2 = d - borrow;
-        let b2 = select(0u, 1u, d < borrow);
-        r[i] = d2;
-        borrow = b1 + b2;
-    }
+    var d: u32;
+    d = a[0] - b[0]; r[0] = d - borrow; borrow = select(0u, 1u, a[0] < b[0]) + select(0u, 1u, d < borrow);
+    d = a[1] - b[1]; r[1] = d - borrow; borrow = select(0u, 1u, a[1] < b[1]) + select(0u, 1u, d < borrow);
+    d = a[2] - b[2]; r[2] = d - borrow; borrow = select(0u, 1u, a[2] < b[2]) + select(0u, 1u, d < borrow);
+    d = a[3] - b[3]; r[3] = d - borrow; borrow = select(0u, 1u, a[3] < b[3]) + select(0u, 1u, d < borrow);
+    d = a[4] - b[4]; r[4] = d - borrow; borrow = select(0u, 1u, a[4] < b[4]) + select(0u, 1u, d < borrow);
+    d = a[5] - b[5]; r[5] = d - borrow; borrow = select(0u, 1u, a[5] < b[5]) + select(0u, 1u, d < borrow);
+    d = a[6] - b[6]; r[6] = d - borrow; borrow = select(0u, 1u, a[6] < b[6]) + select(0u, 1u, d < borrow);
+    d = a[7] - b[7]; r[7] = d - borrow; borrow = select(0u, 1u, a[7] < b[7]) + select(0u, 1u, d < borrow);
     return r;
 }
 
@@ -173,22 +177,156 @@ fn fe_reduce(t: array<u32, 16>) -> Fe {
     return r;
 }
 
-// The full 512-bit product.
 fn mul_wide(a: Fe, b: Fe) -> array<u32, 16> {
     var t: array<u32, 16>;
-    for (var i = 0u; i < 8u; i++) {
-        var carry = 0u;
-        for (var j = 0u; j < 8u; j++) {
-            let p = mul32(a[i], b[j]);
-            let s1 = t[i + j] + p.x;
-            let c1 = select(0u, 1u, s1 < p.x);
-            let s2 = s1 + carry;
-            let c2 = select(0u, 1u, s2 < carry);
-            t[i + j] = s2;
-            carry = p.y + c1 + c2;
-        }
-        t[i + 8u] = carry;
-    }
+    var p: vec2<u32>;
+    var s1: u32;
+    var s2: u32;
+    var carry: u32;
+    carry = 0u;
+    p = mul32(a[0], b[0]);
+    s2 = p.x + carry; t[0] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    p = mul32(a[0], b[1]);
+    s2 = p.x + carry; t[1] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    p = mul32(a[0], b[2]);
+    s2 = p.x + carry; t[2] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    p = mul32(a[0], b[3]);
+    s2 = p.x + carry; t[3] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    p = mul32(a[0], b[4]);
+    s2 = p.x + carry; t[4] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    p = mul32(a[0], b[5]);
+    s2 = p.x + carry; t[5] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    p = mul32(a[0], b[6]);
+    s2 = p.x + carry; t[6] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    p = mul32(a[0], b[7]);
+    s2 = p.x + carry; t[7] = s2; carry = p.y + select(0u, 1u, s2 < carry);
+    t[8] = carry;
+    carry = 0u;
+    p = mul32(a[1], b[0]);
+    s1 = t[1] + p.x; s2 = s1 + carry; t[1] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], b[1]);
+    s1 = t[2] + p.x; s2 = s1 + carry; t[2] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], b[2]);
+    s1 = t[3] + p.x; s2 = s1 + carry; t[3] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], b[3]);
+    s1 = t[4] + p.x; s2 = s1 + carry; t[4] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], b[4]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], b[5]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], b[6]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], b[7]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[9] = carry;
+    carry = 0u;
+    p = mul32(a[2], b[0]);
+    s1 = t[2] + p.x; s2 = s1 + carry; t[2] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], b[1]);
+    s1 = t[3] + p.x; s2 = s1 + carry; t[3] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], b[2]);
+    s1 = t[4] + p.x; s2 = s1 + carry; t[4] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], b[3]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], b[4]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], b[5]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], b[6]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], b[7]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[10] = carry;
+    carry = 0u;
+    p = mul32(a[3], b[0]);
+    s1 = t[3] + p.x; s2 = s1 + carry; t[3] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], b[1]);
+    s1 = t[4] + p.x; s2 = s1 + carry; t[4] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], b[2]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], b[3]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], b[4]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], b[5]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], b[6]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], b[7]);
+    s1 = t[10] + p.x; s2 = s1 + carry; t[10] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[11] = carry;
+    carry = 0u;
+    p = mul32(a[4], b[0]);
+    s1 = t[4] + p.x; s2 = s1 + carry; t[4] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], b[1]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], b[2]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], b[3]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], b[4]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], b[5]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], b[6]);
+    s1 = t[10] + p.x; s2 = s1 + carry; t[10] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], b[7]);
+    s1 = t[11] + p.x; s2 = s1 + carry; t[11] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[12] = carry;
+    carry = 0u;
+    p = mul32(a[5], b[0]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], b[1]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], b[2]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], b[3]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], b[4]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], b[5]);
+    s1 = t[10] + p.x; s2 = s1 + carry; t[10] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], b[6]);
+    s1 = t[11] + p.x; s2 = s1 + carry; t[11] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], b[7]);
+    s1 = t[12] + p.x; s2 = s1 + carry; t[12] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[13] = carry;
+    carry = 0u;
+    p = mul32(a[6], b[0]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[6], b[1]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[6], b[2]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[6], b[3]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[6], b[4]);
+    s1 = t[10] + p.x; s2 = s1 + carry; t[10] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[6], b[5]);
+    s1 = t[11] + p.x; s2 = s1 + carry; t[11] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[6], b[6]);
+    s1 = t[12] + p.x; s2 = s1 + carry; t[12] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[6], b[7]);
+    s1 = t[13] + p.x; s2 = s1 + carry; t[13] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[14] = carry;
+    carry = 0u;
+    p = mul32(a[7], b[0]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[7], b[1]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[7], b[2]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[7], b[3]);
+    s1 = t[10] + p.x; s2 = s1 + carry; t[10] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[7], b[4]);
+    s1 = t[11] + p.x; s2 = s1 + carry; t[11] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[7], b[5]);
+    s1 = t[12] + p.x; s2 = s1 + carry; t[12] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[7], b[6]);
+    s1 = t[13] + p.x; s2 = s1 + carry; t[13] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[7], b[7]);
+    s1 = t[14] + p.x; s2 = s1 + carry; t[14] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[15] = carry;
     return t;
 }
 
@@ -251,33 +389,117 @@ fn fe_mul(a: Fe, b: Fe) -> Fe {
 // Squaring computes each cross product once and doubles it: 36 word products instead of 64.
 fn fe_sqr(a: Fe) -> Fe {
     var t: array<u32, 16>;
-    for (var i = 0u; i < 8u; i++) {
-        var carry = 0u;
-        for (var j = i + 1u; j < 8u; j++) {
-            let p = mul32(a[i], a[j]);
-            let s1 = t[i + j] + p.x;
-            let c1 = select(0u, 1u, s1 < p.x);
-            let s2 = s1 + carry;
-            let c2 = select(0u, 1u, s2 < carry);
-            t[i + j] = s2;
-            carry = p.y + c1 + c2;
-        }
-        t[i + 8u] = carry;
-    }
+    var p: vec2<u32>;
+    var s1: u32;
+    var s2: u32;
+    var carry: u32;
+    carry = 0u;
+    p = mul32(a[0], a[1]);
+    s1 = t[1] + p.x; s2 = s1 + carry; t[1] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[0], a[2]);
+    s1 = t[2] + p.x; s2 = s1 + carry; t[2] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[0], a[3]);
+    s1 = t[3] + p.x; s2 = s1 + carry; t[3] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[0], a[4]);
+    s1 = t[4] + p.x; s2 = s1 + carry; t[4] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[0], a[5]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[0], a[6]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[0], a[7]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[8] = carry;
+    carry = 0u;
+    p = mul32(a[1], a[2]);
+    s1 = t[3] + p.x; s2 = s1 + carry; t[3] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], a[3]);
+    s1 = t[4] + p.x; s2 = s1 + carry; t[4] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], a[4]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], a[5]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], a[6]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[1], a[7]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[9] = carry;
+    carry = 0u;
+    p = mul32(a[2], a[3]);
+    s1 = t[5] + p.x; s2 = s1 + carry; t[5] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], a[4]);
+    s1 = t[6] + p.x; s2 = s1 + carry; t[6] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], a[5]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], a[6]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[2], a[7]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[10] = carry;
+    carry = 0u;
+    p = mul32(a[3], a[4]);
+    s1 = t[7] + p.x; s2 = s1 + carry; t[7] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], a[5]);
+    s1 = t[8] + p.x; s2 = s1 + carry; t[8] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], a[6]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[3], a[7]);
+    s1 = t[10] + p.x; s2 = s1 + carry; t[10] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[11] = carry;
+    carry = 0u;
+    p = mul32(a[4], a[5]);
+    s1 = t[9] + p.x; s2 = s1 + carry; t[9] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], a[6]);
+    s1 = t[10] + p.x; s2 = s1 + carry; t[10] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[4], a[7]);
+    s1 = t[11] + p.x; s2 = s1 + carry; t[11] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[12] = carry;
+    carry = 0u;
+    p = mul32(a[5], a[6]);
+    s1 = t[11] + p.x; s2 = s1 + carry; t[11] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    p = mul32(a[5], a[7]);
+    s1 = t[12] + p.x; s2 = s1 + carry; t[12] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[13] = carry;
+    carry = 0u;
+    p = mul32(a[6], a[7]);
+    s1 = t[13] + p.x; s2 = s1 + carry; t[13] = s2; carry = p.y + select(0u, 1u, s1 < p.x) + select(0u, 1u, s2 < s1);
+    t[14] = carry;
+    t[15] = 0u;
     // The cross products sum to less than 2^511, so doubling cannot overflow.
-    for (var i = 15u; i > 0u; i--) {
-        t[i] = (t[i] << 1u) | (t[i - 1u] >> 31u);
-    }
+    t[15] = (t[15] << 1u) | (t[14] >> 31u);
+    t[14] = (t[14] << 1u) | (t[13] >> 31u);
+    t[13] = (t[13] << 1u) | (t[12] >> 31u);
+    t[12] = (t[12] << 1u) | (t[11] >> 31u);
+    t[11] = (t[11] << 1u) | (t[10] >> 31u);
+    t[10] = (t[10] << 1u) | (t[9] >> 31u);
+    t[9] = (t[9] << 1u) | (t[8] >> 31u);
+    t[8] = (t[8] << 1u) | (t[7] >> 31u);
+    t[7] = (t[7] << 1u) | (t[6] >> 31u);
+    t[6] = (t[6] << 1u) | (t[5] >> 31u);
+    t[5] = (t[5] << 1u) | (t[4] >> 31u);
+    t[4] = (t[4] << 1u) | (t[3] >> 31u);
+    t[3] = (t[3] << 1u) | (t[2] >> 31u);
+    t[2] = (t[2] << 1u) | (t[1] >> 31u);
+    t[1] = (t[1] << 1u) | (t[0] >> 31u);
     t[0] = t[0] << 1u;
-    var carry = 0u;
-    for (var i = 0u; i < 8u; i++) {
-        let p = mul32(a[i], a[i]);
-        let low = adc(t[2u * i], p.x, carry);
-        let high = adc(t[2u * i + 1u], p.y, low.y);
-        t[2u * i] = low.x;
-        t[2u * i + 1u] = high.x;
-        carry = high.y;
-    }
+    var low: vec2<u32>;
+    var high: vec2<u32>;
+    carry = 0u;
+    p = mul32(a[0], a[0]);
+    low = adc(t[0], p.x, carry); high = adc(t[1], p.y, low.y); t[0] = low.x; t[1] = high.x; carry = high.y;
+    p = mul32(a[1], a[1]);
+    low = adc(t[2], p.x, carry); high = adc(t[3], p.y, low.y); t[2] = low.x; t[3] = high.x; carry = high.y;
+    p = mul32(a[2], a[2]);
+    low = adc(t[4], p.x, carry); high = adc(t[5], p.y, low.y); t[4] = low.x; t[5] = high.x; carry = high.y;
+    p = mul32(a[3], a[3]);
+    low = adc(t[6], p.x, carry); high = adc(t[7], p.y, low.y); t[6] = low.x; t[7] = high.x; carry = high.y;
+    p = mul32(a[4], a[4]);
+    low = adc(t[8], p.x, carry); high = adc(t[9], p.y, low.y); t[8] = low.x; t[9] = high.x; carry = high.y;
+    p = mul32(a[5], a[5]);
+    low = adc(t[10], p.x, carry); high = adc(t[11], p.y, low.y); t[10] = low.x; t[11] = high.x; carry = high.y;
+    p = mul32(a[6], a[6]);
+    low = adc(t[12], p.x, carry); high = adc(t[13], p.y, low.y); t[12] = low.x; t[13] = high.x; carry = high.y;
+    p = mul32(a[7], a[7]);
+    low = adc(t[14], p.x, carry); high = adc(t[15], p.y, low.y); t[14] = low.x; t[15] = high.x; carry = high.y;
     return fe_reduce(t);
 }
 
@@ -291,16 +513,16 @@ fn fe_sqr_n(a: Fe, n: u32) -> Fe {
 
 fn fe_add(a: Fe, b: Fe) -> Fe {
     var r: Fe;
-    var carry = 0u;
-    for (var i = 0u; i < 8u; i++) {
-        let s1 = a[i] + b[i];
-        let c1 = select(0u, 1u, s1 < a[i]);
-        let s2 = s1 + carry;
-        let c2 = select(0u, 1u, s2 < carry);
-        r[i] = s2;
-        carry = c1 + c2;
-    }
-    if carry != 0u || gte(r, FIELD_P) {
+    var s: vec2<u32>;
+    s = adc(a[0], b[0], 0u); r[0] = s.x;
+    s = adc(a[1], b[1], s.y); r[1] = s.x;
+    s = adc(a[2], b[2], s.y); r[2] = s.x;
+    s = adc(a[3], b[3], s.y); r[3] = s.x;
+    s = adc(a[4], b[4], s.y); r[4] = s.x;
+    s = adc(a[5], b[5], s.y); r[5] = s.x;
+    s = adc(a[6], b[6], s.y); r[6] = s.x;
+    s = adc(a[7], b[7], s.y); r[7] = s.x;
+    if s.y != 0u || gte(r, FIELD_P) {
         r = sub_raw(r, FIELD_P);
     }
     return r;
