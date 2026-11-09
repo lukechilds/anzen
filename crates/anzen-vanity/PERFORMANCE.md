@@ -81,7 +81,8 @@ Ablating the nonce kernel at the start (8-bit windows): the 32 table additions f
 
 After the third loop's field changes (18-bit signed windows, Q folded in): the 14 additions are
 ~82% of the time (about 5.9% each) and the inversion ~9%. With XYZZ and 13 additions: the
-inversion ~8.5% and the three SHA-256 compressions ~4.5%.
+inversion ~8.5% and the three SHA-256 compressions ~4.5%. With safegcd written out limb by limb
+the inversion is ~3%.
 
 Batch-affine additions (one inversion shared across many candidates per window, as CPU and
 sequential-key GPU engines do) do not pay on a SIMD GPU: they save about 3.5 field products per
@@ -179,6 +180,7 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Candidates per thread 16 / 10 / 6 with the first addition peeled; 4 / 6 after safegcd made the inversion cheap | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40); 0.984 / 0.995 | 8 stays |
 | Fermat inversion with x2 and x3 recomputed late rather than held through the long squaring runs | nonce | 1.001 (31/60) | No spill to relieve; superseded by safegcd |
 | Negative digits negated on the canonical words (p − y with an 8-word borrow chain) instead of `f_neg` | nonce | 1.004 (43/60) | Too small |
+| SHA-256's Ch and Maj in their shorter forms (g ^ (e & (f ^ g)), (a & b) \| (c & (a \| b))) | nonce | 1.000 (31/60) | The compiler already simplifies them |
 | `fe_to_f` and `f_to_fe` written out with constant word indices and shifts | nonce | 1.000 (30/60) | The compiler already unrolls these small loops (unlike safegcd's and `f_canonical`'s) |
 | safegcd's 13 divsteps per batch written out instead of looped | nonce | 0.991 (3/60) | The loop stays |
 | safegcd stopping once g reaches 0 (a per-batch check; later batches only keep d congruent) | nonce | 0.991 (1/60) | The slowest of a SIMD group's lanes runs close to the bound, so the check costs more than it saves |
