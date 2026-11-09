@@ -6,7 +6,7 @@
 use crate::{
     Error, Result,
     crypto::{Crypto, TAPSIGHASH_TAG, tagged_hash},
-    tx::{LOCK_TIME, Transaction, TxOut, VERSION, write_compact_size, write_output},
+    tx::{Transaction, TxOut, VERSION, write_compact_size, write_output},
 };
 use alloc::vec::Vec;
 
@@ -17,6 +17,7 @@ pub struct SighashCache {
     script_pubkeys: [u8; 32],
     sequences: [u8; 32],
     outputs: [u8; 32],
+    lock_time: u32,
 }
 
 impl SighashCache {
@@ -66,6 +67,7 @@ impl SighashCache {
             script_pubkeys,
             sequences,
             outputs,
+            lock_time: transaction.lock_time,
         })
     }
 
@@ -97,7 +99,7 @@ impl SighashCache {
         message.push(0); // Sighash epoch.
         message.push(0); // SIGHASH_DEFAULT.
         message.extend_from_slice(&VERSION.to_le_bytes());
-        message.extend_from_slice(&LOCK_TIME.to_le_bytes());
+        message.extend_from_slice(&self.lock_time.to_le_bytes());
         message.extend_from_slice(&self.prevouts);
         message.extend_from_slice(&self.amounts);
         message.extend_from_slice(&self.script_pubkeys);

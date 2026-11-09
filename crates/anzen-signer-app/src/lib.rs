@@ -62,12 +62,15 @@ pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice
             network: network_name(network).to_owned(),
             mnemonic: mnemonic.clone(),
             vault_key_index: hww.vault_key_index,
+            // Only the phone chooses the recovery locktime.
+            recovery_locktime: anzen_common::DEFAULT_RECOVERY_LOCKTIME,
         },
     )?;
     Ok(InitializedDevice {
         mnemonic,
         vault_pubkey: hww.vault_pubkey.to_string(),
         vault_key_index: hww.vault_key_index,
+        recovery_locktime: anzen_common::DEFAULT_RECOVERY_LOCKTIME,
     })
 }
 

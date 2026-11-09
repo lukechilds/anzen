@@ -103,6 +103,7 @@ fn fixed_config(phone: &DeviceKeys, hww: &DeviceKeys) -> VaultConfig {
         vault_descriptor: policy.descriptor_string(),
         vault_address: policy.address.to_string(),
         hww_recovery_seconds: HWW_RECOVERY_SECONDS,
+        recovery_locktime: anzen_common::DEFAULT_RECOVERY_LOCKTIME,
         monthly_limit_sats: 0,
         emergency_access_limit_sats: 0,
     }

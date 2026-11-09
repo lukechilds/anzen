@@ -353,6 +353,7 @@ impl SignerApplication {
             Signer::new(&mut SoftwareCrypto::new(), &mut SoftwareKeys(&hww)).pair(
                 protocol::config_network(config)?,
                 protocol::vault_keys(config)?.phone,
+                config.recovery_locktime,
             ),
         )?;
         self.save(config, &state)

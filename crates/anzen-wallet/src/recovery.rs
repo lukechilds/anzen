@@ -303,6 +303,7 @@ pub fn rotated_config(
         vault_descriptor: new_policy.descriptor_string(),
         vault_address: new_policy.address.to_string(),
         hww_recovery_seconds: old_config.hww_recovery_seconds,
+        recovery_locktime: new_policy.recovery_locktime()?,
         monthly_limit_sats: old_config.monthly_limit_sats,
         emergency_access_limit_sats: old_config.emergency_access_limit_sats,
     })

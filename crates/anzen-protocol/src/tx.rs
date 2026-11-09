@@ -135,15 +135,16 @@ pub struct TxOut {
     pub script_pubkey: Vec<u8>,
 }
 
-/// Every Anzen transaction is version 2 with a zero lock time.
+/// Every Anzen transaction is version 2. Its lock time is zero, except that vault recovery
+/// spends use the recovery leaf's `after()` value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transaction {
     pub input: Vec<TxIn>,
     pub output: Vec<TxOut>,
+    pub lock_time: u32,
 }
 
 pub const VERSION: i32 = 2;
-pub const LOCK_TIME: u32 = 0;
 
 impl Transaction {
     /// Consensus serialization without witness data.
@@ -161,7 +162,7 @@ impl Transaction {
         for output in &self.output {
             write_output(&mut bytes, output);
         }
-        bytes.extend_from_slice(&LOCK_TIME.to_le_bytes());
+        bytes.extend_from_slice(&self.lock_time.to_le_bytes());
         bytes
     }
 
@@ -215,7 +216,7 @@ impl Transaction {
 pub enum SpendPath {
     /// Vault key path: one MuSig2 signature from both devices together.
     Cooperative,
-    /// Vault `and_v(v:older(4259839),pk(hww))`, the tree's only leaf.
+    /// Vault `and_v(v:after(T),and_v(v:older(4259839),pk(hww)))`, the tree's only leaf.
     HwwRecovery,
     /// Connector `pk(phone)` at depth one.
     ControllerPhone,
@@ -230,7 +231,9 @@ impl SpendPath {
         let control_block = |depth: usize| 33 + 32 * depth;
         match self {
             Self::Cooperative => 1 + item(64),
-            Self::HwwRecovery => 1 + item(64) + item(40) + item(control_block(0)),
+            Self::HwwRecovery => {
+                1 + item(64) + item(crate::script::RECOVERY_SCRIPT_LEN) + item(control_block(0))
+            }
             Self::ControllerPhone | Self::ControllerHww => {
                 1 + item(64) + item(34) + item(control_block(1))
             }

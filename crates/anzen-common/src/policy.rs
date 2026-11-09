@@ -1,4 +1,4 @@
-use super::{HWW_RECOVERY_SEQUENCE, protocol::SoftwareCrypto};
+use super::{DEFAULT_RECOVERY_LOCKTIME, HWW_RECOVERY_SEQUENCE, protocol::SoftwareCrypto};
 use anyhow::{Context, Result, bail};
 use anzen_protocol::script::{VaultKeys, VaultScript, XOnlyKey};
 use bitcoin::{
@@ -39,6 +39,8 @@ pub fn internal_key(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> Result<XOnlyP
     let keys = VaultKeys {
         phone: XOnlyKey(phone.serialize()),
         hww: XOnlyKey(hww.serialize()),
+        // The aggregate depends on the keys alone.
+        recovery_locktime: DEFAULT_RECOVERY_LOCKTIME,
     };
     let aggregate = anzen_protocol::musig::aggregate_key(&mut SoftwareCrypto::new(), &keys)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -83,19 +85,25 @@ pub struct ControllerPolicy {
     hww: XOnlyPublicKey,
 }
 
-/// Vault output keys for many candidate phone keys with one signer, while grinding a vanity
-/// address. It uses the protocol's own script construction, so it cannot drift from
-/// [`VaultPolicy`]; tests check both anyway.
+/// Vault output keys for many candidate phone keys with one signer and recovery locktime, while
+/// grinding a vanity address on the CPU. It uses the protocol's own script construction, so it
+/// cannot drift from [`VaultPolicy`]; tests check both anyway.
 #[derive(Debug, Clone)]
 pub struct VaultAddressTemplate {
     hww_pubkey: XOnlyKey,
+    recovery_locktime: u32,
 }
 
 impl VaultAddressTemplate {
-    pub fn new(hww_pubkey: XOnlyPublicKey) -> Result<Self> {
+    pub fn new(hww_pubkey: XOnlyPublicKey, recovery_locktime: u32) -> Result<Self> {
         Ok(Self {
             hww_pubkey: XOnlyKey(hww_pubkey.serialize()),
+            recovery_locktime,
         })
+    }
+
+    pub fn recovery_locktime(&self) -> u32 {
+        self.recovery_locktime
     }
 
     /// The signer key every candidate vault shares.
@@ -105,7 +113,7 @@ impl VaultAddressTemplate {
 
     /// The script tree root every candidate vault shares.
     pub fn merkle_root(&self, crypto: &mut SoftwareCrypto) -> [u8; 32] {
-        anzen_protocol::script::hww_recovery_leaf(crypto, &self.hww_pubkey)
+        anzen_protocol::script::hww_recovery_leaf(crypto, &self.hww_pubkey, self.recovery_locktime)
     }
 
     pub fn output_key(
@@ -116,6 +124,7 @@ impl VaultAddressTemplate {
         let keys = VaultKeys {
             phone: XOnlyKey(phone_pubkey.serialize()),
             hww: self.hww_pubkey,
+            recovery_locktime: self.recovery_locktime,
         };
         Ok(VaultScript::new(crypto, &keys)
             .map_err(|error| anyhow::anyhow!("{error}"))?
@@ -138,9 +147,12 @@ impl VaultAddressTemplate {
 }
 
 #[cfg(test)]
-fn recovery_script(key: XOnlyPublicKey, sequence: u32) -> ScriptBuf {
-    use bitcoin::opcodes::all::{OP_CSV, OP_VERIFY};
+fn recovery_script(key: XOnlyPublicKey, locktime: u32, sequence: u32) -> ScriptBuf {
+    use bitcoin::opcodes::all::{OP_CLTV, OP_CSV, OP_VERIFY};
     Builder::new()
+        .push_int(i64::from(locktime))
+        .push_opcode(OP_CLTV)
+        .push_opcode(OP_VERIFY)
         .push_int(i64::from(sequence))
         .push_opcode(OP_CSV)
         .push_opcode(OP_VERIFY)
@@ -150,18 +162,24 @@ fn recovery_script(key: XOnlyPublicKey, sequence: u32) -> ScriptBuf {
 }
 
 impl VaultPolicy {
+    /// A regtest vault with the default recovery locktime, for tests.
     pub fn new(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> Result<Self> {
-        Self::new_for_network(phone, hww, Network::Regtest)
+        Self::new_for_network(phone, hww, DEFAULT_RECOVERY_LOCKTIME, Network::Regtest)
     }
 
     pub fn new_for_network(
         phone: XOnlyPublicKey,
         hww: XOnlyPublicKey,
+        recovery_locktime: u32,
         network: Network,
     ) -> Result<Self> {
+        if !super::RECOVERY_LOCKTIMES.contains(&recovery_locktime) {
+            bail!("invalid vault recovery locktime {recovery_locktime}");
+        }
         let internal = internal_key(phone, hww)?;
-        let descriptor_text =
-            format!("tr({internal},and_v(v:older({HWW_RECOVERY_SEQUENCE}),pk({hww})))");
+        let descriptor_text = format!(
+            "tr({internal},and_v(v:after({recovery_locktime}),and_v(v:older({HWW_RECOVERY_SEQUENCE}),pk({hww}))))"
+        );
         let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_text)
             .with_context(|| format!("invalid vault descriptor: {descriptor_text}"))?;
         let address = descriptor
@@ -238,6 +256,16 @@ impl VaultPolicy {
 
     pub fn descriptor_string(&self) -> String {
         self.descriptor.to_string()
+    }
+
+    /// The recovery leaf's `after()` value: its script starts with that four-byte number and
+    /// `OP_CHECKLOCKTIMEVERIFY`.
+    pub fn recovery_locktime(&self) -> Result<u32> {
+        let leaf = self.leaf(SpendPath::HwwRecovery)?;
+        match leaf.script.as_bytes() {
+            [4, a, b, c, d, 0xb1, ..] => Ok(u32::from_le_bytes([*a, *b, *c, *d])),
+            _ => bail!("vault descriptor has no recovery locktime"),
+        }
     }
 }
 
@@ -330,8 +358,14 @@ mod tests {
         assert_eq!(first.address, second.address);
         let text = first.descriptor_string();
         let internal = internal_key(phone.vault_pubkey, hww.vault_pubkey).unwrap();
-        assert!(text.starts_with(&format!("tr({internal},and_v(v:older(4259839),pk(")));
+        assert!(text.starts_with(&format!(
+            "tr({internal},and_v(v:after(500000000),and_v(v:older(4259839),pk("
+        )));
         assert!(!text.contains(&phone.vault_pubkey.to_string()));
+        assert_eq!(
+            first.recovery_locktime().unwrap(),
+            DEFAULT_RECOVERY_LOCKTIME
+        );
         assert!(first.leaf(SpendPath::Cooperative).is_err());
         assert_eq!(first.leaf(SpendPath::HwwRecovery).unwrap().depth, 0);
         // Aggregation is symmetric: it sorts the keys first.
@@ -346,22 +380,55 @@ mod tests {
         let secp = Secp256k1::new();
         let phone = DeviceKeys::generate_for_network(&secp, Network::Bitcoin).unwrap();
         let hww = DeviceKeys::generate_for_network(&secp, Network::Bitcoin).unwrap();
-        let policy =
-            VaultPolicy::new_for_network(phone.vault_pubkey, hww.vault_pubkey, Network::Bitcoin)
-                .unwrap();
+        let policy = VaultPolicy::new_for_network(
+            phone.vault_pubkey,
+            hww.vault_pubkey,
+            DEFAULT_RECOVERY_LOCKTIME,
+            Network::Bitcoin,
+        )
+        .unwrap();
         assert!(policy.address.to_string().starts_with("bc1p"));
+    }
+
+    #[test]
+    fn the_recovery_locktime_changes_the_address_and_must_be_long_past() {
+        let secp = Secp256k1::new();
+        let phone = DeviceKeys::generate(&secp).unwrap();
+        let hww = DeviceKeys::generate(&secp).unwrap();
+        let at = |locktime| {
+            VaultPolicy::new_for_network(
+                phone.vault_pubkey,
+                hww.vault_pubkey,
+                locktime,
+                Network::Regtest,
+            )
+        };
+        assert_ne!(
+            at(DEFAULT_RECOVERY_LOCKTIME).unwrap().address,
+            at(DEFAULT_RECOVERY_LOCKTIME + 1).unwrap().address
+        );
+        for locktime in [0, 1, crate::RECOVERY_LOCKTIMES.end] {
+            assert!(at(locktime).is_err(), "{locktime}");
+        }
     }
 
     #[test]
     fn fast_address_template_matches_the_canonical_miniscript_policy() {
         let secp = Secp256k1::new();
-        for network in [Network::Regtest, Network::Bitcoin] {
+        for (network, locktime) in [
+            (Network::Regtest, DEFAULT_RECOVERY_LOCKTIME),
+            (Network::Bitcoin, 1_234_567_890),
+        ] {
             let phone = DeviceKeys::generate_for_network(&secp, network).unwrap();
             let hww = DeviceKeys::generate_for_network(&secp, network).unwrap();
-            let policy =
-                VaultPolicy::new_for_network(phone.vault_pubkey, hww.vault_pubkey, network)
-                    .unwrap();
-            let template = VaultAddressTemplate::new(hww.vault_pubkey).unwrap();
+            let policy = VaultPolicy::new_for_network(
+                phone.vault_pubkey,
+                hww.vault_pubkey,
+                locktime,
+                network,
+            )
+            .unwrap();
+            let template = VaultAddressTemplate::new(hww.vault_pubkey, locktime).unwrap();
 
             assert_eq!(
                 template
@@ -370,7 +437,7 @@ mod tests {
                 policy.address
             );
             assert_eq!(
-                recovery_script(hww.vault_pubkey, HWW_RECOVERY_SEQUENCE),
+                recovery_script(hww.vault_pubkey, locktime, HWW_RECOVERY_SEQUENCE),
                 policy.leaf(SpendPath::HwwRecovery).unwrap().script
             );
         }

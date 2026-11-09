@@ -280,6 +280,7 @@ mod tests {
             VaultKeys {
                 phone: key(&phone),
                 hww: key(&hww),
+                recovery_locktime: crate::DEFAULT_RECOVERY_LOCKTIME,
             },
             phone.secret_bytes(),
             hww.secret_bytes(),

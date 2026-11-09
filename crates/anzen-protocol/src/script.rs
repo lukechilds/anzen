@@ -1,24 +1,29 @@
 //! The two fixed Taproot policies every vault uses.
 //!
-//! Vault principal: `tr(musig(phone,hww),and_v(v:older(4259839),pk(hww)))`: both devices
-//! together through the key path with one MuSig2 signature, or the hardware wallet alone after
-//! about 388 days (a time-based relative lock). Connectors: `tr(NUMS,{pk(phone),pk(hww)})`.
+//! Vault principal: `tr(musig(phone,hww),and_v(v:after(T),and_v(v:older(4259839),pk(hww))))`:
+//! both devices together through the key path with one MuSig2 signature, or the hardware wallet
+//! alone after about 388 days (a time-based relative lock). `T` is a long-past absolute locktime
+//! that never delays recovery; vanity searches grind it to pick the address.
+//! Connectors: `tr(NUMS,{pk(phone),pk(hww)})`.
 
 use crate::{
     Error, Result,
-    consts::{HWW_RECOVERY_SEQUENCE, NUMS_KEY},
+    consts::{HWW_RECOVERY_SEQUENCE, NUMS_KEY, RECOVERY_LOCKTIMES},
     crypto::{Crypto, TAPBRANCH_TAG, TAPLEAF_TAG, TAPTWEAK_TAG, TweakedKey, tagged_hash},
 };
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 const OP_CHECKSIG: u8 = 0xac;
+const OP_CLTV: u8 = 0xb1;
 const OP_CSV: u8 = 0xb2;
 const OP_VERIFY: u8 = 0x69;
 const TAPSCRIPT_LEAF_VERSION: u8 = 0xc0;
 
 /// Length of every P2TR scriptPubKey.
 pub const P2TR_SCRIPT_LEN: usize = 34;
+/// Length of every vault recovery leaf: its locktime is always a four-byte script number.
+pub const RECOVERY_SCRIPT_LEN: usize = 47;
 
 /// A BIP340 x-only public key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,16 +59,23 @@ impl<'de> Deserialize<'de> for XOnlyKey {
     }
 }
 
-/// The two device keys that define one vault epoch.
+/// The two device keys that define one vault epoch, and the recovery leaf's locktime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultKeys {
     pub phone: XOnlyKey,
     pub hww: XOnlyKey,
+    /// The recovery leaf's `after()` value, from [`RECOVERY_LOCKTIMES`]. Recovery transactions
+    /// use it as their lock time.
+    pub recovery_locktime: u32,
 }
 
-/// `<sequence> OP_CSV OP_VERIFY <key> OP_CHECKSIG` (`and_v(v:older(sequence),pk(key))`).
-pub fn recovery_script(key: &XOnlyKey, sequence: u32) -> Vec<u8> {
-    let mut script = push_script_number(i64::from(sequence));
+/// `<locktime> OP_CLTV OP_VERIFY <sequence> OP_CSV OP_VERIFY <key> OP_CHECKSIG`
+/// (`and_v(v:after(locktime),and_v(v:older(sequence),pk(key)))`).
+pub fn recovery_script(key: &XOnlyKey, locktime: u32, sequence: u32) -> Vec<u8> {
+    let mut script = push_script_number(i64::from(locktime));
+    script.push(OP_CLTV);
+    script.push(OP_VERIFY);
+    script.extend(push_script_number(i64::from(sequence)));
     script.push(OP_CSV);
     script.push(OP_VERIFY);
     script.push(32);
@@ -130,13 +142,23 @@ fn validate_keys<C: Crypto + ?Sized>(crypto: &mut C, keys: &VaultKeys) -> Result
     if !crypto.is_valid_xonly_key(&keys.phone.0) || !crypto.is_valid_xonly_key(&keys.hww.0) {
         return Err(Error::InvalidKey);
     }
+    if !RECOVERY_LOCKTIMES.contains(&keys.recovery_locktime) {
+        return Err(Error::InvalidRecoveryLocktime);
+    }
     Ok(())
 }
 
 /// The hash of the vault's only leaf, the signer's time-locked recovery path. It depends only on
-/// the signer key, so vanity searches over phone keys compute it once.
-pub fn hww_recovery_leaf<C: Crypto + ?Sized>(crypto: &mut C, hww: &XOnlyKey) -> [u8; 32] {
-    tapleaf_hash(crypto, &recovery_script(hww, HWW_RECOVERY_SEQUENCE))
+/// the signer key and the locktime, not the phone key.
+pub fn hww_recovery_leaf<C: Crypto + ?Sized>(
+    crypto: &mut C,
+    hww: &XOnlyKey,
+    locktime: u32,
+) -> [u8; 32] {
+    tapleaf_hash(
+        crypto,
+        &recovery_script(hww, locktime, HWW_RECOVERY_SEQUENCE),
+    )
 }
 
 /// Internal key, leaf, output key and scriptPubKey of the principal-holding vault policy.
@@ -157,7 +179,7 @@ impl VaultScript {
     pub fn new<C: Crypto + ?Sized>(crypto: &mut C, keys: &VaultKeys) -> Result<Self> {
         validate_keys(crypto, keys)?;
         let internal_key = crate::musig::aggregate_key(crypto, keys)?;
-        let hww_recovery_leaf = hww_recovery_leaf(crypto, &keys.hww);
+        let hww_recovery_leaf = hww_recovery_leaf(crypto, &keys.hww, keys.recovery_locktime);
         let output = output_key(crypto, &internal_key, hww_recovery_leaf)?;
         Ok(Self {
             keys: *keys,

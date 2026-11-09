@@ -85,6 +85,7 @@ impl RecoveryPayload {
             self.phone_vault_key_index,
         )?;
         let policy = VaultPolicy::from_descriptor_for_network(&self.vault_descriptor, network)?;
+        let recovery_locktime = policy.recovery_locktime()?;
         let mut keys = std::collections::BTreeSet::new();
         policy.descriptor.for_each_key(|key| {
             keys.insert(key.to_string());
@@ -105,6 +106,7 @@ impl RecoveryPayload {
                 vault_descriptor: self.vault_descriptor.clone(),
                 vault_address: self.vault_address.clone(),
                 hww_recovery_seconds: HWW_RECOVERY_SECONDS,
+                recovery_locktime,
                 // Unknown, not evidence that the old spending policy was disabled.
                 monthly_limit_sats: 0,
                 emergency_access_limit_sats: 0,
@@ -241,8 +243,17 @@ mod tests {
         (config_for(&phone, &hww), phone, hww)
     }
 
+    /// A vanity-style recovery locktime, so restores must carry it rather than assume the default.
+    const LOCKTIME: u32 = 1_234_567_890;
+
     fn config_for(phone: &DeviceKeys, hww: &DeviceKeys) -> VaultConfig {
-        let policy = crate::policy::VaultPolicy::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
+        let policy = crate::policy::VaultPolicy::new_for_network(
+            phone.vault_pubkey,
+            hww.vault_pubkey,
+            LOCKTIME,
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
         let (external, internal) = phone
             .hot_descriptors(&bitcoin::key::Secp256k1::new())
             .unwrap();
@@ -256,6 +267,7 @@ mod tests {
             vault_descriptor: policy.descriptor_string(),
             vault_address: policy.address.to_string(),
             hww_recovery_seconds: crate::HWW_RECOVERY_SECONDS,
+            recovery_locktime: LOCKTIME,
             monthly_limit_sats: 0,
             emergency_access_limit_sats: 0,
         }
@@ -293,6 +305,7 @@ mod tests {
         assert_eq!(reconstructed.vault_address, config.vault_address);
         assert_eq!(reconstructed.hww_vault_pubkey, config.hww_vault_pubkey);
         assert_eq!(reconstructed.phone_vault_pubkey, config.phone_vault_pubkey);
+        assert_eq!(reconstructed.recovery_locktime, LOCKTIME);
         assert_eq!(reconstructed.monthly_limit_sats, 0); // Unknown from this payload.
 
         let mut wrong_key = recovered.clone();

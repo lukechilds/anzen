@@ -4,6 +4,7 @@ use core::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     InvalidKey,
+    InvalidRecoveryLocktime,
     InvalidAddress,
     WrongNetwork,
     UnsupportedDestination,
@@ -47,6 +48,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::InvalidKey => "invalid public key",
+            Self::InvalidRecoveryLocktime => "invalid vault recovery locktime",
             Self::InvalidAddress => "invalid address",
             Self::WrongNetwork => "address belongs to another network",
             Self::UnsupportedDestination => "destination must be a Taproot address",

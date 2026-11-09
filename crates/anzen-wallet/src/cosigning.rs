@@ -284,6 +284,7 @@ mod tests {
         let keys = VaultKeys {
             phone: key(phone.vault_pubkey),
             hww: key(hww.vault_pubkey),
+            recovery_locktime: anzen_common::DEFAULT_RECOVERY_LOCKTIME,
         };
         let root = Scripts::new(&mut SoftwareCrypto::new(), &keys)
             .unwrap()

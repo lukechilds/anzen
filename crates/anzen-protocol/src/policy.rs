@@ -603,6 +603,7 @@ fn build_emergency<C: Crypto + ?Sized>(
             value: amount_sats,
             script_pubkey: hot_script.to_vec(),
         }],
+        lock_time: 0,
     };
     let withdrawal = GraphTransaction::new(
         crypto,
@@ -699,7 +700,11 @@ fn rollover_template(
             script_pubkey: controller_script.clone(),
         });
     }
-    Transaction { input, output }
+    Transaction {
+        input,
+        output,
+        lock_time: 0,
+    }
 }
 
 fn authorization_template(
@@ -733,6 +738,7 @@ fn authorization_template(
             },
         ],
         output,
+        lock_time: 0,
     }
 }
 
@@ -781,6 +787,7 @@ fn emergency_trigger_template(
             },
             connector_txout(scripts),
         ],
+        lock_time: 0,
     }
 }
 
@@ -804,6 +811,7 @@ fn emergency_staging_value(amount_sats: u64, hot_script: &[u8]) -> Result<u64> {
             value: amount_sats,
             script_pubkey: hot_script.to_vec(),
         }],
+        lock_time: 0,
     }
     .fixed_fee(&[SpendPath::Cooperative, SpendPath::ControllerPhone])?;
     amount_sats

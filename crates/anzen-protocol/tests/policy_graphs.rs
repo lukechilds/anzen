@@ -4,6 +4,7 @@
 
 use anzen_protocol::{
     address::{self, Network},
+    consts::DEFAULT_RECOVERY_LOCKTIME,
     crypto::SoftwareCrypto,
     policy::{self, Destinations, Input, Limits, PolicyInputs},
     script::{Scripts, VaultKeys, XOnlyKey},
@@ -36,9 +37,13 @@ fn protocol_reproduces_every_recorded_phone_graph() {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let update = std::env::var_os("ANZEN_UPDATE_VECTORS").is_some();
     let mut crypto = SoftwareCrypto::new();
+    if update {
+        document["keys"]["recovery_locktime"] = DEFAULT_RECOVERY_LOCKTIME.into();
+    }
     let keys = VaultKeys {
         phone: XOnlyKey::from_hex(document["keys"]["phone"].as_str().unwrap()).unwrap(),
         hww: XOnlyKey::from_hex(document["keys"]["hww"].as_str().unwrap()).unwrap(),
+        recovery_locktime: document["keys"]["recovery_locktime"].as_u64().unwrap() as u32,
     };
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     let (mut accepted, mut rejected) = (0, 0);

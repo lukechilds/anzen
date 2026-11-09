@@ -416,6 +416,7 @@ mod tests {
         VaultKeys {
             phone: protocol::key(phone.vault_pubkey),
             hww: protocol::key(hww.vault_pubkey),
+            recovery_locktime: anzen_common::DEFAULT_RECOVERY_LOCKTIME,
         }
     }
 
@@ -494,7 +495,21 @@ mod tests {
         create_policy_psbt(transaction, prevouts, &indexes, &[], policy, &controller)
     }
 
+    /// A one-input vault spend. Recovery spends carry the leaf's lock time, as the protocol
+    /// builds them; joint spends a zero one.
     fn fixture(sequence: Sequence) -> (VaultPolicy, DeviceKeys, DeviceKeys, Psbt) {
+        let lock_time = if sequence == Sequence(HWW_RECOVERY_SEQUENCE) {
+            absolute::LockTime::from_consensus(anzen_common::DEFAULT_RECOVERY_LOCKTIME)
+        } else {
+            absolute::LockTime::ZERO
+        };
+        fixture_at(sequence, lock_time)
+    }
+
+    fn fixture_at(
+        sequence: Sequence,
+        lock_time: absolute::LockTime,
+    ) -> (VaultPolicy, DeviceKeys, DeviceKeys, Psbt) {
         let secp = Secp256k1::new();
         let phone = DeviceKeys::generate(&secp).unwrap();
         let hww = DeviceKeys::generate(&secp).unwrap();
@@ -505,7 +520,7 @@ mod tests {
         };
         let tx = Transaction {
             version: Version::TWO,
-            lock_time: absolute::LockTime::ZERO,
+            lock_time,
             input: vec![TxIn {
                 previous_output: OutPoint::null(),
                 script_sig: ScriptBuf::new(),
@@ -708,6 +723,7 @@ mod tests {
                 value: unsigned.output[0].value.to_sat(),
                 script_pubkey: unsigned.output[0].script_pubkey.to_bytes(),
             }],
+            lock_time: unsigned.lock_time.to_consensus_u32(),
         };
         assert_eq!(
             protocol_tx
@@ -739,6 +755,20 @@ mod tests {
         let tx = finalize_vault_psbt(psbt).unwrap();
         assert_eq!(tx.input[0].sequence, Sequence(HWW_RECOVERY_SEQUENCE));
         assert_eq!(tx.input[0].witness.len(), 3);
+    }
+
+    #[test]
+    fn hww_recovery_cannot_finalize_without_the_leaf_lock_time() {
+        let (policy, _phone, hww, mut psbt) =
+            fixture_at(Sequence(HWW_RECOVERY_SEQUENCE), absolute::LockTime::ZERO);
+        sign_vault_psbt(
+            &mut psbt,
+            &policy,
+            SpendPath::HwwRecovery,
+            &hww.vault_keypair,
+        )
+        .unwrap();
+        assert!(finalize_vault_psbt(psbt).is_err());
     }
 
     #[test]
@@ -821,6 +851,7 @@ mod tests {
             &anzen_protocol::script::VaultKeys {
                 phone: protocol::key(phone.vault_pubkey),
                 hww: protocol::key(hww.vault_pubkey),
+                recovery_locktime: anzen_common::DEFAULT_RECOVERY_LOCKTIME,
             },
         )
         .unwrap();

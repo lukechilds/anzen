@@ -40,13 +40,14 @@ pub fn bitcoin_key(key: XOnlyKey) -> Result<XOnlyPublicKey> {
     XOnlyPublicKey::from_slice(&key.0).context("invalid x-only public key")
 }
 
-/// The two device keys of a validated vault configuration.
+/// The two device keys and recovery locktime of a validated vault configuration.
 pub fn vault_keys(config: &VaultConfig) -> Result<VaultKeys> {
     Ok(VaultKeys {
         phone: key(XOnlyPublicKey::from_str(&config.phone_vault_pubkey)
             .context("invalid configured phone vault key")?),
         hww: key(XOnlyPublicKey::from_str(&config.hww_vault_pubkey)
             .context("invalid configured HWW vault key")?),
+        recovery_locktime: config.recovery_locktime,
     })
 }
 

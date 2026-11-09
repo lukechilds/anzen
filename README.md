@@ -41,11 +41,11 @@ The policy in minimal Taproot Miniscript descriptor notation is:
 ```text
 tr(
   musig(phone,hww),
-  and_v(v:older(4259839),pk(hww))
+  and_v(v:after(T),and_v(v:older(4259839),pk(hww)))
 )
 ```
 
-`musig(phone,hww)` is the BIP327 aggregate of the two keys' even-y points, taken in sorted order. The stored descriptor writes out the resulting x-only key, `tr(<aggregate>,and_v(v:older(4259839),pk(<hww>)))`, so standard tools can derive and watch the address without MuSig2 support. `older(4259839)` is BIP68's time-based flag (`0x400000`) plus 65,535. This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
+`musig(phone,hww)` is the BIP327 aggregate of the two keys' even-y points, taken in sorted order. The stored descriptor writes out the resulting x-only key, `tr(<aggregate>,and_v(v:after(T),and_v(v:older(4259839),pk(<hww>))))`, so standard tools can derive and watch the address without MuSig2 support. `older(4259839)` is BIP68's time-based flag (`0x400000`) plus 65,535. `T` is an absolute Unix-time locktime between 500,000,000 (1985) and 1,700,000,000 (2023), always long past, so it never delays recovery; the recovery transaction just sets its lock time to `T`, which costs 7 witness bytes. Its only job is to choose the address without touching any key: `anzen phone init --vanity` grinds it on the GPU until the address starts with `vault`, and every other vault uses 500,000,000. This is Anzen's only principal-holding script. Monthly allowances and emergency access are implemented with presigned transaction chains using Bitcoin-enforced relative timelocks.
 
 Revocable authorization state lives in separate 1,000-sat connector outputs. They reuse the same device keys under a fixed 1-of-2 Taproot policy:
 
@@ -123,16 +123,16 @@ HWW ready to pair with the phone and wrap its cloud backup key at anzen init
 
 $ anzen init
 Vault initialized (REGTEST ONLY)
-Cold storage descriptor: tr(996786536ee50cc69bb71143d53d452457c16fcb89d92ddeea070e65b611d37f,and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c)))#faue3tv2
-Vault address: bcrt1pw4m2tsjkpe8h4ydq5emmjynvu6kk7uwv3kpj9xvhen3t6ly2q2fsxur74r
+Cold storage descriptor: tr(996786536ee50cc69bb71143d53d452457c16fcb89d92ddeea070e65b611d37f,and_v(v:after(500000000),and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))))#dken297g
+Vault address: bcrt1pwayhsfgr9ptwgw8w3lzphtzxnrq8r3fcuw6dzmacmnmt3p5692nq7a6u07
 HWW alone:      after 33,553,920 seconds (~388 days); renewing the vault restarts it
 Monthly spending: disabled
 Emergency access: disabled
 Cloud recovery backup: phone key + descriptor encrypted to the HWW
 
 $ anzen policy
-Cold storage descriptor: tr(996786536ee50cc69bb71143d53d452457c16fcb89d92ddeea070e65b611d37f,and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c)))#faue3tv2
-Vault address: bcrt1pw4m2tsjkpe8h4ydq5emmjynvu6kk7uwv3kpj9xvhen3t6ly2q2fsxur74r
+Cold storage descriptor: tr(996786536ee50cc69bb71143d53d452457c16fcb89d92ddeea070e65b611d37f,and_v(v:after(500000000),and_v(v:older(4259839),pk(1f6ac05a5a5b6ef31c8ab20fa692e327b43e25532d03853f5563108c6d9da33c))))#dken297g
+Vault address: bcrt1pwayhsfgr9ptwgw8w3lzphtzxnrq8r3fcuw6dzmacmnmt3p5692nq7a6u07
 Policy controller address: bcrt1pxu6dxg6pmryuqtuu39ukf56d5ydqa72gv05z23cyyxc65q9cdn3sxe46p7
 Policy controller reserve: 1000 sats per active chain
 HWW alone:      after 33,553,920 seconds (~388 days); renewing the vault restarts it
@@ -324,8 +324,8 @@ Rotate the vault to the replacement key before using it
 $ anzen phone rotate-key --output phone-rotation.json
 PHONE-KEY ROTATION
 New phone vault key: 04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794
-New cold storage descriptor: tr(b96981905428d81ee3b0e1c1bee9030862d51d57d391da05f22b560b1906ca7a,and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df)))#xrw58jf8
-New vault address: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
+New cold storage descriptor: tr(b96981905428d81ee3b0e1c1bee9030862d51d57d391da05f22b560b1906ca7a,and_v(v:after(500000000),and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))))#4m8xy3u8
+New vault address: bcrt1ps7ntxatqny2l02neaymtezw5r9uny8tgy9u2v6quav0u8ef8qy0qz2mp44
 Inputs: 2
 Sent: 199997591 sats
 Fee: 169 sats (1 sat/vB)
@@ -339,8 +339,8 @@ Phone-key rotation proposal: phone-rotation.json
 $ anzen hww confirm-rotation phone-rotation.json --output approved-phone-rotation.json --yes
 PHONE-KEY ROTATION
 New phone vault key: 04d7b62732a46111b412e445925ecab69570c1c58a036459044d3dd8fc42c794
-New cold storage descriptor: tr(b96981905428d81ee3b0e1c1bee9030862d51d57d391da05f22b560b1906ca7a,and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df)))#xrw58jf8
-New vault address: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
+New cold storage descriptor: tr(b96981905428d81ee3b0e1c1bee9030862d51d57d391da05f22b560b1906ca7a,and_v(v:after(500000000),and_v(v:older(4259839),pk(39e34b45151097baa5bf11460423f84104cc48c033abc95c20d7ce8c392c16df))))#4m8xy3u8
+New vault address: bcrt1ps7ntxatqny2l02neaymtezw5r9uny8tgy9u2v6quav0u8ef8qy0qz2mp44
 Inputs: 2
 Sent: 199997591 sats
 Fee: 169 sats (1 sat/vB)
@@ -356,7 +356,7 @@ $ anzen phone activate-rotation approved-phone-rotation.json
 Phone-key rotation sweep broadcast: af1dfdf75928664ae14064089f8a6f30ce14efc8dbee3b88e98162e2229a5ec1
 Old policy controllers revoked: 87645cff157e4c8d0cce75d82829a5ac13e6b5167741d96ea194e6b2ec277a00
 Old vault address: bcrt1pptj7234wglqrzd6s27q9vquney29cpjavlsqau7eu7a7ukpqt0sqv297vl
-New vault address: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
+New vault address: bcrt1ps7ntxatqny2l02neaymtezw5r9uny8tgy9u2v6quav0u8ef8qy0qz2mp44
 Phone mnemonic: room absurd inject pole depth exit tenant wisdom cook predict net practice dry clarify panther album gossip million else maximum aim use they buyer
 Monthly policy preserved: 10000000 sats
 Policy rollover broadcast: 996bef84a3d995d2f791764f7f6d88987d4f86e8fe371c33996639e3b33cb7ad
@@ -364,7 +364,7 @@ Encrypted allowance authorizations: 12
 Emergency access preserved: 50000000 sats
 
 $ anzen hww adopt-rotation approved-phone-rotation.json
-HWW paired with the rotated vault: bcrt1pnxr9p8an9evzn27g4qe5h39q789h80wvxsrw4v20mgk3avg0kntqgunw7y
+HWW paired with the rotated vault: bcrt1ps7ntxatqny2l02neaymtezw5r9uny8tgy9u2v6quav0u8ef8qy0qz2mp44
 ```
 
 The rotation preserves the HWW key and the active monthly and emergency-access limits. Before installing the new phone key it spends every old controller to replacement-phone change, so no old-key policy authority survives. It then sweeps the old vault cooperatively to a descriptor built from the replacement phone key and writes a new descriptor-bound cloud backup. The same proposal chains a fresh annual policy to that sweep; one HWW prompt approves both, and all replacement artifacts and connectors use the new phone key. A disabled feature remains disabled after rotation.

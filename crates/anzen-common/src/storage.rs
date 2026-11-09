@@ -1,6 +1,8 @@
 //! Persisted device and vault records, plus the storage boundary every application writes through.
 
-use super::{HWW_RECOVERY_SECONDS, keys::DeviceKeys, policy::VaultPolicy};
+use super::{
+    DEFAULT_RECOVERY_LOCKTIME, HWW_RECOVERY_SECONDS, keys::DeviceKeys, policy::VaultPolicy,
+};
 use anyhow::{Context, Result, bail};
 #[cfg(target_arch = "wasm32")]
 pub use anzen_storage::browser;
@@ -21,8 +23,9 @@ pub const PHONE_DEVICE_FILE: &str = "phone/device.json";
 pub const HWW_DEVICE_FILE: &str = "hww/device.json";
 pub const HWW_PUBLIC_FILE: &str = "hww/public.json";
 pub const PHONE_BACKUP_FILE: &str = "cloud/phone-seed-backup.json";
-/// Version 2: both devices, or the hardware wallet alone after [`HWW_RECOVERY_SECONDS`].
-pub const VAULT_CONFIG_VERSION: u8 = 2;
+/// Version 3: both devices, or the hardware wallet alone after [`HWW_RECOVERY_SECONDS`], through a
+/// leaf that also commits to a long-past [`VaultConfig::recovery_locktime`].
+pub const VAULT_CONFIG_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultConfig {
@@ -35,6 +38,8 @@ pub struct VaultConfig {
     pub vault_descriptor: String,
     pub vault_address: String,
     pub hww_recovery_seconds: u32,
+    /// The recovery leaf's `after()` value: ground for a vanity address, or the default.
+    pub recovery_locktime: u32,
     #[serde(default, alias = "hard_limit_sats")]
     pub monthly_limit_sats: u64,
     #[serde(default)]
@@ -58,7 +63,7 @@ impl VaultConfig {
         if phone == hww {
             bail!("phone and hardware wallet must use independent keys");
         }
-        let policy = VaultPolicy::new_for_network(phone, hww, network)?;
+        let policy = VaultPolicy::new_for_network(phone, hww, self.recovery_locktime, network)?;
         if self.hww_recovery_seconds != HWW_RECOVERY_SECONDS
             || self.vault_descriptor != policy.descriptor_string()
             || self.vault_address != policy.address.to_string()
@@ -77,6 +82,14 @@ pub struct DeviceFile {
     pub mnemonic: String,
     #[serde(default)]
     pub vault_key_index: u32,
+    /// The phone's choice of recovery locktime for the vault it will pair into: ground with a
+    /// vanity address, or the default. Signers ignore it.
+    #[serde(default = "default_recovery_locktime")]
+    pub recovery_locktime: u32,
+}
+
+fn default_recovery_locktime() -> u32 {
+    DEFAULT_RECOVERY_LOCKTIME
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +130,7 @@ pub struct InitializedDevice {
     pub mnemonic: String,
     pub vault_pubkey: String,
     pub vault_key_index: u32,
+    pub recovery_locktime: u32,
 }
 
 pub fn load_config(data_dir: &Path) -> Result<VaultConfig> {

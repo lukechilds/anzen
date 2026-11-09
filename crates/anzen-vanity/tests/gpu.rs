@@ -19,7 +19,9 @@ fn setup() -> Option<(GpuSearch, DeviceKeys, VaultAddressTemplate, SearchInputs)
     let secp = Secp256k1::new();
     let phone = DeviceKeys::generate_for_network(&secp, Network::Regtest).unwrap();
     let signer = DeviceKeys::generate_for_network(&secp, Network::Regtest).unwrap();
-    let template = VaultAddressTemplate::new(signer.vault_pubkey).unwrap();
+    let template =
+        VaultAddressTemplate::new(signer.vault_pubkey, anzen_common::DEFAULT_RECOVERY_LOCKTIME)
+            .unwrap();
     let parent = phone.vault_parent_xpriv(&secp).unwrap();
     let parent_public = bitcoin::bip32::Xpub::from_priv(&secp, &parent);
     let inputs = SearchInputs {

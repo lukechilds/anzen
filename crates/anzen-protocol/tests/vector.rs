@@ -19,12 +19,15 @@ fn vector() -> Value {
 }
 
 /// The controller descriptor `tr(NUMS,{pk(phone),pk(hww)})` names both keys; the vault's
-/// internal key is their aggregate, so it does not.
-fn keys_from_descriptor(descriptor: &str) -> VaultKeys {
-    let mut keys = descriptor.split("pk(").skip(1).map(|part| &part[..64]);
+/// internal key is their aggregate, so it does not. The vault descriptor names the recovery
+/// locktime in its `after()`.
+fn keys_from_descriptors(controller: &str, vault: &str) -> VaultKeys {
+    let mut keys = controller.split("pk(").skip(1).map(|part| &part[..64]);
+    let locktime = vault.split("after(").nth(1).unwrap();
     VaultKeys {
         phone: XOnlyKey::from_hex(keys.next().unwrap()).unwrap(),
         hww: XOnlyKey::from_hex(keys.next().unwrap()).unwrap(),
+        recovery_locktime: locktime[..locktime.find(')').unwrap()].parse().unwrap(),
     }
 }
 
@@ -62,7 +65,10 @@ fn assert_matches(expected: &Value, actual: &Transaction, txid: &str, fee: u64) 
 fn reconstructs_every_transaction_in_the_vault_output_vector() {
     let vector = vector();
     let mut crypto = SoftwareCrypto::new();
-    let keys = keys_from_descriptor(vector["controller"]["descriptor"].as_str().unwrap());
+    let keys = keys_from_descriptors(
+        vector["controller"]["descriptor"].as_str().unwrap(),
+        vector["vault"]["descriptor"].as_str().unwrap(),
+    );
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     assert_eq!(
         address::from_script_pubkey(&mut crypto, &scripts.vault.script_pubkey, Network::Regtest)

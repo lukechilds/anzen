@@ -38,7 +38,12 @@ pub fn initialize_vault_with_public_hww(
         phone_file.vault_key_index,
     )?;
     let hww_key = hww.parsed_vault_pubkey()?;
-    let policy = VaultPolicy::new_for_network(phone.vault_pubkey, hww_key, network)?;
+    let policy = VaultPolicy::new_for_network(
+        phone.vault_pubkey,
+        hww_key,
+        phone_file.recovery_locktime,
+        network,
+    )?;
     let (hot_external, hot_internal) = phone.hot_descriptors(&secp)?;
     let config = VaultConfig {
         version: anzen_common::storage::VAULT_CONFIG_VERSION,
@@ -50,6 +55,7 @@ pub fn initialize_vault_with_public_hww(
         vault_descriptor: policy.descriptor_string(),
         vault_address: policy.address.to_string(),
         hww_recovery_seconds: HWW_RECOVERY_SECONDS,
+        recovery_locktime: phone_file.recovery_locktime,
         monthly_limit_sats: 0,
         emergency_access_limit_sats: 0,
     };

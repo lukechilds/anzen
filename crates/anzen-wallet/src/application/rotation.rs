@@ -78,7 +78,7 @@ impl WalletApplication {
         let old_config = self.configuration()?;
         let network = old_config.bitcoin_network()?;
         let pending_key = self.data_dir.join(PENDING_KEY_FILE);
-        let new_phone = if pending_key.storage_exists() {
+        let (new_phone, new_recovery_locktime) = if pending_key.storage_exists() {
             let file: DeviceFile = storage::read_json(&pending_key)?;
             let phone = DeviceKeys::parse_for_network_at_index(
                 &bitcoin::key::Secp256k1::new(),
@@ -90,6 +90,7 @@ impl WalletApplication {
                 let address = VaultPolicy::new_for_network(
                     phone.vault_pubkey,
                     XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
+                    file.recovery_locktime,
                     network,
                 )?
                 .address
@@ -100,20 +101,23 @@ impl WalletApplication {
                     );
                 }
             }
-            phone
+            (phone, file.recovery_locktime)
         } else {
-            let phone = match vanity {
+            let (phone, recovery_locktime) = match vanity {
                 Some(engine) => {
-                    super::super::grind_vanity_phone_key(
+                    let vanity = super::super::grind_vanity_phone_key(
                         network,
                         XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
                         super::super::VANITY_SUFFIX,
                         engine,
                         report_progress,
-                    )?
-                    .phone
+                    )?;
+                    (vanity.phone, vanity.recovery_locktime)
                 }
-                None => DeviceKeys::generate_for_network(&bitcoin::key::Secp256k1::new(), network)?,
+                None => (
+                    DeviceKeys::generate_for_network(&bitcoin::key::Secp256k1::new(), network)?,
+                    anzen_common::DEFAULT_RECOVERY_LOCKTIME,
+                ),
             };
             storage::write_json(
                 &pending_key,
@@ -122,9 +126,10 @@ impl WalletApplication {
                     network: old_config.network.clone(),
                     mnemonic: phone.mnemonic.to_string(),
                     vault_key_index: phone.vault_key_index,
+                    recovery_locktime,
                 },
             )?;
-            phone
+            (phone, recovery_locktime)
         };
         let schedule = super::super::active_schedule(&self.data_dir)?;
         let mut addresses = HotWallet::ephemeral(&new_phone)?;
@@ -135,6 +140,7 @@ impl WalletApplication {
             old_config,
             &old_phone,
             &new_phone,
+            new_recovery_locktime,
             &mut addresses,
             |spent| recovery::allowances_reported_complete(schedule.as_ref(), spent),
         )
@@ -157,6 +163,8 @@ impl WalletApplication {
             bail!("recovery source changed since importing the signed policy");
         }
         let new_phone = load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?;
+        let new_recovery_locktime =
+            storage::load_device(&self.data_dir, PHONE_DEVICE_FILE)?.recovery_locktime;
         let mut addresses = HotWallet::open_or_create(&self.data_dir)?;
         let last_approved = bundle.last_approved_policy;
         let old_phone = self.restored_keys(&old_config)?;
@@ -166,6 +174,7 @@ impl WalletApplication {
             old_config,
             &old_phone,
             &new_phone,
+            new_recovery_locktime,
             &mut addresses,
             |spent| allowances_complete(last_approved.as_ref(), spent),
         )
@@ -179,6 +188,7 @@ impl WalletApplication {
         old_config: VaultConfig,
         old_phone: &DeviceKeys,
         new_phone: &DeviceKeys,
+        new_recovery_locktime: u32,
         addresses: &mut HotWallet,
         previous_complete: impl FnOnce(&[VaultUtxo]) -> Result<bool>,
     ) -> Result<DevicePhoneRotation> {
@@ -186,6 +196,7 @@ impl WalletApplication {
         let policy = VaultPolicy::new_for_network(
             new_phone.vault_pubkey,
             XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
+            new_recovery_locktime,
             network,
         )?;
         let new_config = recovery::rotated_config(&old_config, new_phone, &policy)?;
@@ -234,6 +245,7 @@ impl WalletApplication {
                 network: protocol::config_network(&old_config)?,
                 old_keys: protocol::vault_keys(&old_config)?,
                 new_phone: protocol::key(new_phone.vault_pubkey),
+                new_recovery_locktime,
                 sweep_inputs: protocol::inputs(&inputs),
                 revoke_connectors: protocol::inputs(&connectors),
                 renewed_policy,
@@ -334,14 +346,18 @@ impl WalletApplication {
                 )?;
                 (
                     device_keys(&storage::read_json(&retained)?)?,
-                    device_keys(&pending_key)?,
+                    (device_keys(&pending_key)?, pending_key.recovery_locktime),
                 )
             }
             RotationSource::Restored => (
                 self.restored_keys(old_config)?,
-                load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?,
+                (
+                    load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?,
+                    storage::load_device(&self.data_dir, PHONE_DEVICE_FILE)?.recovery_locktime,
+                ),
             ),
         };
+        let (new_phone, new_recovery_locktime) = new_phone;
         let finalized = crate::device_rotation::finalize(
             &self.data_dir,
             &pending.request,
@@ -352,6 +368,7 @@ impl WalletApplication {
         let policy = VaultPolicy::new_for_network(
             new_phone.vault_pubkey,
             XOnlyPublicKey::from_str(&old_config.hww_vault_pubkey)?,
+            new_recovery_locktime,
             backend.network(),
         )?;
         let new_config = recovery::rotated_config(old_config, &new_phone, &policy)?;

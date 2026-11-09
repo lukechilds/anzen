@@ -86,7 +86,7 @@ pub struct State {
     pub anchor_approved_at: Option<u64>,
 }
 
-pub const STATE_VERSION: u8 = 1;
+pub const STATE_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PolicyReview {
@@ -154,11 +154,18 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         Self { crypto, keys }
     }
 
-    /// Accept a vault with the phone key. Pairing never approves a spending policy.
-    pub fn pair(&mut self, network: Network, phone: XOnlyKey) -> Result<State> {
+    /// Accept a vault with the phone key and the recovery locktime the phone chose. Pairing never
+    /// approves a spending policy.
+    pub fn pair(
+        &mut self,
+        network: Network,
+        phone: XOnlyKey,
+        recovery_locktime: u32,
+    ) -> Result<State> {
         let keys = VaultKeys {
             phone,
             hww: self.keys.vault_key()?,
+            recovery_locktime,
         };
         Scripts::new(self.crypto, &keys)?;
         Ok(State {

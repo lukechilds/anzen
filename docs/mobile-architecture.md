@@ -414,7 +414,8 @@ stores that as a separate watch-only recovery source, without replacing its own 
 It scans the source and packages input outpoints with their complete previous transactions.
 No original phone key or seed backup is needed for this coordination.
 
-The vault is `tr(musig(phone,hww),and_v(v:older(4259839),pk(hww)))`: both devices through the
+The vault is `tr(musig(phone,hww),and_v(v:after(T),and_v(v:older(4259839),pk(hww))))`, where `T`
+is a long-past absolute locktime that picks the address (see the protocol design): both devices through the
 key path with one MuSig2 signature, or the signer alone once the longest BIP68 time lock, 65,535 × 512 seconds (about
 388 days), has passed since a coin confirmed. Each annual renewal moves every coin and so
 restarts it. The phone has no path of its own.

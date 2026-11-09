@@ -107,8 +107,9 @@ fn fixture() -> Fixture {
     let mut crypto = SoftwareCrypto::new();
     let phone = SoftwareKeys::random();
     let mut hww = SoftwareKeys::random();
+    // A vanity-style recovery locktime, so nothing silently assumes the default.
     let state = Signer::new(&mut crypto, &mut hww)
-        .pair(Network::Regtest, phone.xonly())
+        .pair(Network::Regtest, phone.xonly(), 1_234_567_890)
         .unwrap();
     Fixture {
         crypto,
@@ -462,6 +463,11 @@ fn sweeps_and_offline_actions_sign_each_input_through_the_expected_leaf() {
             .approve_offline_action(&state, &request)
             .unwrap();
         let (_, spend, _) = request.build(&mut fixture.crypto).unwrap();
+        let lock_time = match action {
+            OfflineAction::HwwRecovery => 1_234_567_890,
+            OfflineAction::RevokeActions => 0,
+        };
+        assert_eq!(spend.transaction.lock_time, lock_time);
         for (sighash, signature) in spend
             .sighashes(&mut fixture.crypto, &leaf)
             .unwrap()
@@ -487,6 +493,7 @@ fn rotation_preserves_limits_links_the_old_epoch_and_hands_over_new_state() {
     let new_keys = VaultKeys {
         phone: new_phone,
         hww: fixture.keys().hww,
+        recovery_locktime: anzen_protocol::consts::DEFAULT_RECOVERY_LOCKTIME,
     };
     let sweep_inputs = vec![
         Input {
@@ -523,6 +530,7 @@ fn rotation_preserves_limits_links_the_old_epoch_and_hands_over_new_state() {
         network: Network::Regtest,
         old_keys: fixture.keys(),
         new_phone,
+        new_recovery_locktime: new_keys.recovery_locktime,
         sweep_inputs,
         revoke_connectors: vec![
             Input {

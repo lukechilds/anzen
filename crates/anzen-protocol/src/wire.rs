@@ -24,7 +24,7 @@ use crate::{
 use alloc::{collections::BTreeSet, string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
 
 /// A BIP340 signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,6 +287,8 @@ pub struct RotationRequest {
     pub network: Network,
     pub old_keys: VaultKeys,
     pub new_phone: XOnlyKey,
+    /// The new vault's recovery locktime: ground when the new phone key has a vanity address.
+    pub new_recovery_locktime: u32,
     pub sweep_inputs: Vec<Input>,
     /// Old connectors the signer revokes through its own controller leaf.
     #[serde(default)]
@@ -310,10 +312,12 @@ pub struct RotationPlan {
 }
 
 impl RotationRequest {
+    /// The rotated vault keeps the signer key.
     pub fn new_keys(&self) -> VaultKeys {
         VaultKeys {
             phone: self.new_phone,
             hww: self.old_keys.hww,
+            recovery_locktime: self.new_recovery_locktime,
         }
     }
 

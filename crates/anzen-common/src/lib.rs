@@ -21,7 +21,9 @@ pub mod types;
 
 /// The hardware wallet's solo path opens after the longest BIP68 time lock: 65,535 × 512
 /// seconds, about 388 days. Renewing the vault each year restarts it.
-pub use anzen_protocol::consts::{HWW_RECOVERY_SECONDS, HWW_RECOVERY_SEQUENCE};
+pub use anzen_protocol::consts::{
+    DEFAULT_RECOVERY_LOCKTIME, HWW_RECOVERY_SECONDS, HWW_RECOVERY_SEQUENCE, RECOVERY_LOCKTIMES,
+};
 pub const MONTHS_PER_ROLLOVER: usize = 12;
 pub const DEFAULT_MONTHLY_LIMIT_SATS: u64 = 10_000_000;
 pub const DEFAULT_FEE_RATE_SAT_VB: u64 = 1;

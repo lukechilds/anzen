@@ -31,6 +31,15 @@ pub const EMERGENCY_DELAY_SEQUENCE: u32 =
 /// BIP68 time-based sequence for [`HWW_RECOVERY_SECONDS`], and the value its `older()` commits to.
 pub const HWW_RECOVERY_SEQUENCE: u32 = SEQUENCE_TYPE_FLAG | (HWW_RECOVERY_SECONDS / 512);
 
+/// Absolute locktimes the recovery leaf's `after()` may commit to: Unix times, all long past, so
+/// they never delay recovery. A vanity search grinds this value to change the vault address
+/// without changing any key; wallets that do not grind use [`DEFAULT_RECOVERY_LOCKTIME`].
+/// Every value is a four-byte script number, so the leaf always has the same size.
+pub const RECOVERY_LOCKTIMES: core::ops::Range<u32> = 500_000_000..1_700_000_000;
+/// The recovery locktime of a vault without a vanity address: the earliest time-based value
+/// (`after(0)` is not valid Miniscript).
+pub const DEFAULT_RECOVERY_LOCKTIME: u32 = RECOVERY_LOCKTIMES.start;
+
 /// BIP341's provably unspendable internal key.
 pub const NUMS_KEY: [u8; 32] = [
     0x50, 0x92, 0x9b, 0x74, 0xc1, 0xa0, 0x49, 0x54, 0xb7, 0x8b, 0x4b, 0x60, 0x35, 0xe9, 0x7a, 0x5e,

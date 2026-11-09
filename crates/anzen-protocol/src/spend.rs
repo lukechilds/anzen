@@ -66,12 +66,18 @@ pub fn vault_sweep<C: Crypto + ?Sized>(
     if path.is_controller() {
         return Err(Error::UnsupportedDestination);
     }
+    let lock_time = if path == SpendPath::HwwRecovery {
+        scripts.vault.keys.recovery_locktime
+    } else {
+        0
+    };
     single_output(
         crypto,
         inputs,
         &scripts.vault.script_pubkey,
         path,
         vault_sequence(path),
+        lock_time,
         destination,
     )
 }
@@ -93,6 +99,7 @@ pub fn controller_revocation<C: Crypto + ?Sized>(
         &scripts.controller.script_pubkey,
         path,
         SEQUENCE_RBF,
+        0,
         destination,
     )?;
     if spend.amount_sats < minimal_non_dust(destination) {
@@ -107,6 +114,7 @@ fn single_output<C: Crypto + ?Sized>(
     script_pubkey: &[u8],
     path: SpendPath,
     sequence: u32,
+    lock_time: u32,
     destination: &[u8],
 ) -> Result<Spend> {
     if inputs.is_empty() || inputs.len() > MAX_INPUTS {
@@ -132,6 +140,7 @@ fn single_output<C: Crypto + ?Sized>(
             value: input_sats,
             script_pubkey: destination.to_vec(),
         }],
+        lock_time,
     };
     let spends = vec![path; inputs.len()];
     let fee_sats = transaction

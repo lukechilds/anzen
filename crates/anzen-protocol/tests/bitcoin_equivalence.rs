@@ -3,6 +3,7 @@
 
 use anzen_protocol::{
     address::{self, Network},
+    consts::{DEFAULT_RECOVERY_LOCKTIME, RECOVERY_LOCKTIMES},
     crypto::SoftwareCrypto,
     policy::{self, Destinations, Input, Limits, PolicyInputs},
     script::{Scripts, VaultKeys, XOnlyKey},
@@ -33,9 +34,11 @@ fn random_keys() -> VaultKeys {
                 .serialize(),
         )
     };
+    let span = RECOVERY_LOCKTIMES.end - RECOVERY_LOCKTIMES.start;
     VaultKeys {
         phone: key(),
         hww: key(),
+        recovery_locktime: RECOVERY_LOCKTIMES.start + thread_rng().next_u32() % span,
     }
 }
 
@@ -63,7 +66,9 @@ fn descriptors(
     let phone = keys.phone.to_hex();
     let hww = keys.hww.to_hex();
     let aggregate = aggregate_hex(keys);
-    let vault = format!("tr({aggregate},and_v(v:older(4259839),pk({hww})))");
+    let locktime = keys.recovery_locktime;
+    let vault =
+        format!("tr({aggregate},and_v(v:after({locktime}),and_v(v:older(4259839),pk({hww}))))");
     let controller = format!("tr({NUMS},{{pk({phone}),pk({hww})}})");
     (
         Descriptor::from_str(&vault).unwrap(),
@@ -224,6 +229,7 @@ fn serialization_vsize_and_sighashes_match_rust_bitcoin() {
                     script_pubkey: scripts.controller.script_pubkey.clone(),
                 },
             ],
+            lock_time: [0, keys.recovery_locktime][input_count % 2],
         };
         let prevouts = spends
             .iter()
@@ -422,6 +428,66 @@ fn sweeps_pay_exactly_the_fixed_fee_rate() {
 }
 
 #[test]
+fn recovery_sweeps_lock_to_the_leaf_locktime_and_joint_sweeps_do_not() {
+    let mut crypto = SoftwareCrypto::new();
+    let keys = random_keys();
+    let scripts = Scripts::new(&mut crypto, &keys).unwrap();
+    let inputs = [Input {
+        outpoint: OutPoint::new(random_txid(), 0),
+        value_sats: 1_000_000,
+    }];
+    let destination = hot_destination();
+    let mut sweep = |path| spend::vault_sweep(&mut crypto, &scripts, &inputs, path, &destination);
+    let recovery = to_bitcoin(&sweep(SpendPath::HwwRecovery).unwrap().transaction);
+    // CHECKLOCKTIMEVERIFY passes only with a time-based lock time at or past the leaf's, and an
+    // input that is not final, which the relative delay already requires.
+    assert_eq!(
+        recovery.lock_time.to_consensus_u32(),
+        keys.recovery_locktime
+    );
+    assert!(recovery.lock_time.is_block_time());
+    assert!(
+        recovery
+            .input
+            .iter()
+            .all(|input| input.sequence.enables_absolute_lock_time())
+    );
+    let joint = to_bitcoin(&sweep(SpendPath::Cooperative).unwrap().transaction);
+    assert_eq!(joint.lock_time.to_consensus_u32(), 0);
+}
+
+#[test]
+fn recovery_locktimes_outside_the_range_are_rejected() {
+    let mut crypto = SoftwareCrypto::new();
+    let mut keys = random_keys();
+    for locktime in [
+        0,
+        1,
+        RECOVERY_LOCKTIMES.start - 1,
+        RECOVERY_LOCKTIMES.end,
+        u32::MAX,
+    ] {
+        keys.recovery_locktime = locktime;
+        assert_eq!(
+            Scripts::new(&mut crypto, &keys).unwrap_err(),
+            anzen_protocol::Error::InvalidRecoveryLocktime
+        );
+    }
+    keys.recovery_locktime = DEFAULT_RECOVERY_LOCKTIME;
+    let scripts = Scripts::new(&mut crypto, &keys).unwrap();
+    let witness = witness_for(&keys, SpendPath::HwwRecovery);
+    assert_eq!(witness.nth(witness.len() - 2).unwrap().len(), 47);
+    assert_eq!(
+        scripts.vault.hww_recovery_leaf,
+        TapLeafHash::from_script(
+            &ScriptBuf::from_bytes(witness.nth(witness.len() - 2).unwrap().to_vec()),
+            LeafVersion::TapScript
+        )
+        .to_byte_array()
+    );
+}
+
+#[test]
 fn the_internal_key_is_the_bip327_aggregate_and_joint_signatures_verify() {
     use musig2::secp::{Point, Scalar};
     let mut crypto = SoftwareCrypto::new();
@@ -441,6 +507,7 @@ fn the_internal_key_is_the_bip327_aggregate_and_joint_signatures_verify() {
         let keys = VaultKeys {
             phone: XOnlyKey(phone.base_point_mul().serialize_xonly()),
             hww: XOnlyKey(hww.base_point_mul().serialize_xonly()),
+            recovery_locktime: DEFAULT_RECOVERY_LOCKTIME,
         };
         let scripts = Scripts::new(&mut crypto, &keys).unwrap();
         let untweaked: Point = musig_context(&keys).aggregated_pubkey();

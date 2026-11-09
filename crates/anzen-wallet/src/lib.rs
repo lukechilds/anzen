@@ -121,6 +121,7 @@ use std::{
 
 use crate::transactions::{finalize_vault_psbt, sign_controller_psbt_inputs};
 use anzen_common::{
+    DEFAULT_RECOVERY_LOCKTIME,
     keys::DeviceKeys,
     storage::{
         DeviceFile, InitializedDevice, PHONE_DEVICE_FILE, PublicDeviceFile, VaultConfig,
@@ -134,7 +135,7 @@ use anzen_common::{
 pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice> {
     validate_supported_network(network)?;
     let phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
-    persist_phone(data_dir, network, &phone)
+    persist_phone(data_dir, network, &phone, DEFAULT_RECOVERY_LOCKTIME)
 }
 
 pub const VANITY_SUFFIX: &str = "vault";
@@ -161,6 +162,7 @@ pub struct VanityInitialization {
 #[derive(Debug)]
 pub(crate) struct VanityPhoneKey {
     pub(crate) phone: DeviceKeys,
+    pub(crate) recovery_locktime: u32,
     pub(crate) vault_address: String,
     pub(crate) attempts: u64,
     pub(crate) searcher: String,
@@ -209,7 +211,7 @@ where
         engine,
         report_progress,
     )?;
-    let device = persist_phone(data_dir, network, &vanity.phone)?;
+    let device = persist_phone(data_dir, network, &vanity.phone, vanity.recovery_locktime)?;
     Ok(VanityInitialization {
         device,
         vault_address: vanity.vault_address,
@@ -280,7 +282,7 @@ where
 {
     validate_supported_network(network)?;
     let base_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
-    let template = VaultAddressTemplate::new(hww_pubkey)?;
+    let template = VaultAddressTemplate::new(hww_pubkey, DEFAULT_RECOVERY_LOCKTIME)?;
     let inputs = vanity_search_inputs(&base_phone, &template, suffix)?;
     let gpu = anzen_vanity::GpuSearch::open()?;
     let last_report = AtomicU64::new(0);
@@ -329,7 +331,10 @@ where
     let target = VanityTarget::new(suffix)?;
     let base_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
     let parent = base_phone.vault_parent_xpriv(&Secp256k1::new())?;
-    let template = Arc::new(VaultAddressTemplate::new(hww_pubkey)?);
+    let template = Arc::new(VaultAddressTemplate::new(
+        hww_pubkey,
+        DEFAULT_RECOVERY_LOCKTIME,
+    )?);
     let stopped = Arc::new(AtomicBool::new(false));
     let attempts = Arc::new(AtomicU64::new(0));
     let last_report = Arc::new(AtomicU64::new(0));
@@ -427,6 +432,7 @@ fn vanity_phone_key(
     }
     Ok(VanityPhoneKey {
         phone,
+        recovery_locktime: template.recovery_locktime(),
         vault_address: vault_address.to_string(),
         attempts,
         searcher,
@@ -437,6 +443,7 @@ fn persist_phone(
     data_dir: &Path,
     network: Network,
     phone: &DeviceKeys,
+    recovery_locktime: u32,
 ) -> Result<InitializedDevice> {
     ensure_phone_is_uninitialized(data_dir)?;
     let phone_path = data_dir.join(PHONE_DEVICE_FILE);
@@ -448,6 +455,7 @@ fn persist_phone(
             network: network_name(network).to_owned(),
             mnemonic: mnemonic.clone(),
             vault_key_index: phone.vault_key_index,
+            recovery_locktime,
         },
     )?;
     // Only newly generated seeds reach here; restored seeds are never marked.
@@ -456,6 +464,7 @@ fn persist_phone(
         mnemonic,
         vault_pubkey: phone.vault_pubkey.to_string(),
         vault_key_index: phone.vault_key_index,
+        recovery_locktime,
     })
 }
 
@@ -1184,6 +1193,7 @@ mod tests {
                 network: network_name(network).to_owned(),
                 mnemonic: hww.mnemonic.to_string(),
                 vault_key_index: hww.vault_key_index,
+                recovery_locktime: DEFAULT_RECOVERY_LOCKTIME,
             },
         )
         .unwrap();
@@ -1260,7 +1270,8 @@ mod tests {
             grind_vanity_phone_key(network, hww.vault_pubkey, "va", VanityEngine::Gpu, |_| {})
                 .unwrap();
         assert!(result.vault_address.starts_with("tb1pva"));
-        let template = VaultAddressTemplate::new(hww.vault_pubkey).unwrap();
+        let template =
+            VaultAddressTemplate::new(hww.vault_pubkey, DEFAULT_RECOVERY_LOCKTIME).unwrap();
         let address = template
             .address(
                 &mut anzen_common::protocol::SoftwareCrypto::new(),
