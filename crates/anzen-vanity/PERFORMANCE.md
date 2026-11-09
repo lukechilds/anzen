@@ -106,6 +106,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| `f_reduce` ends with a tail to limb 6 and nothing more: only limbs 0..4 exceed 13 bits after its last small fold, so limb 6 takes at most one carry and ends at most 2^13, which the relaxed invariant allows (the branch that crashed Apple's compiler is not needed). The value can pass 2^260 only when limbs 7..19 are all 8191 (the model finds it only for (2^260 − 1)²); `tools/model_canonical.py` and the other models cover such inputs | nonce | 1.0686 (60/60) |
 | Fused add/subtract forms in the mixed addition (4·HH, 2(S2 − Y1), R² − J − 2V and M − 2·Y1J each with one light normalization instead of two or three): five fewer normalizations per addition. `tools/model_light.py` checks every light-normalized form; it also showed the existing ones can leave one limb at exactly 2^13, which every bound allows, so the documented invariant is now limbs at most 2^13 | nonce | 1.0486 (60/60) |
 | A second Karatsuba level on the low and high 5-limb halves (their sums stay below 2^14; the middle product's would not, so it stays schoolbook): 250 limb products per multiply instead of 300 | nonce | 1.0235 (60/60), 1.0229 (79/80) |
 | `f_reduce` carries only the 19 high columns before folding; the low columns stay sums below 2^30.4, below 2^31 with the folded terms, and the next chain carries them (20 carry steps fewer per product, checked by the same model) | nonce | 1.0473 (60/60) |

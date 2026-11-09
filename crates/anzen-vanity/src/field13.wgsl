@@ -2,9 +2,11 @@
 // in 26 bits, so a column of 20 of them sums in a u32 without carry handling: about two ops per
 // limb product, against about twenty for 32-bit limbs built from 16-bit halves.
 //
-// Every function returns a normalized element: limbs at most 2^13 and a value below 2^260, not
-// necessarily below p (the light normalization can leave one limb at exactly 2^13, which every
-// bound here allows). `f_canonical` reduces fully, for comparisons and output.
+// Every function returns a normalized element: limbs at most 2^13, so a value at most
+// (2^260 − 1)·2^13/(2^13 − 1), not necessarily below p. A limb at exactly 2^13 (the light
+// normalization and the product tail can leave one) is allowed by every bound here, and
+// tools/model_*.py check the operations on such inputs. `f_canonical` reduces fully, for
+// comparisons and output.
 
 alias F = array<u32, 20>;
 
@@ -410,32 +412,8 @@ fn f_reduce(c: array<u32, 39>) -> F {
     out[3] += r[21] * 1024u;
     out[2] += carry * 15632u;
     out[4] += carry * 1024u;
-    // Only limbs 0..4 can exceed 13 bits and the value is below 2^260 + 2^63, so one chain
-    // carries out at most 1, and folding it back into the remainder (below 2^63) carries no
-    // further than limb 5. Checked by a model of these exact u32 operations.
-    v = out[0]; out[0] = v & LIMB_MASK;
-    v = out[1] + (v >> 13u); out[1] = v & LIMB_MASK;
-    v = out[2] + (v >> 13u); out[2] = v & LIMB_MASK;
-    v = out[3] + (v >> 13u); out[3] = v & LIMB_MASK;
-    v = out[4] + (v >> 13u); out[4] = v & LIMB_MASK;
-    v = out[5] + (v >> 13u); out[5] = v & LIMB_MASK;
-    v = out[6] + (v >> 13u); out[6] = v & LIMB_MASK;
-    v = out[7] + (v >> 13u); out[7] = v & LIMB_MASK;
-    v = out[8] + (v >> 13u); out[8] = v & LIMB_MASK;
-    v = out[9] + (v >> 13u); out[9] = v & LIMB_MASK;
-    v = out[10] + (v >> 13u); out[10] = v & LIMB_MASK;
-    v = out[11] + (v >> 13u); out[11] = v & LIMB_MASK;
-    v = out[12] + (v >> 13u); out[12] = v & LIMB_MASK;
-    v = out[13] + (v >> 13u); out[13] = v & LIMB_MASK;
-    v = out[14] + (v >> 13u); out[14] = v & LIMB_MASK;
-    v = out[15] + (v >> 13u); out[15] = v & LIMB_MASK;
-    v = out[16] + (v >> 13u); out[16] = v & LIMB_MASK;
-    v = out[17] + (v >> 13u); out[17] = v & LIMB_MASK;
-    v = out[18] + (v >> 13u); out[18] = v & LIMB_MASK;
-    v = out[19] + (v >> 13u); out[19] = v & LIMB_MASK;
-    let top = v >> 13u;
-    out[0] += top * 15632u;
-    out[2] += top * 1024u;
+    // Only limbs 0..4 exceed 13 bits, so a tail to limb 6 leaves limb 6 at most 2^13 and
+    // the rest below it. tools/model_reduce.py checks these exact u32 operations.
     out[1] += out[0] >> 13u;
     out[0] &= LIMB_MASK;
     out[2] += out[1] >> 13u;
@@ -446,6 +424,8 @@ fn f_reduce(c: array<u32, 39>) -> F {
     out[3] &= LIMB_MASK;
     out[5] += out[4] >> 13u;
     out[4] &= LIMB_MASK;
+    out[6] += out[5] >> 13u;
+    out[5] &= LIMB_MASK;
     return out;
 }
 
