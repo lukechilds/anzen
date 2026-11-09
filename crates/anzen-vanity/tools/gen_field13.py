@@ -131,7 +131,20 @@ def reduce() -> list[str]:
         "    out[3] += r[21] * 1024u;",
         "    out[2] += carry * 15632u;",
         "    out[4] += carry * 1024u;",
-        "    return f_normalize(out);",
+        "    // Only limbs 0..4 can exceed 13 bits and the value is below 2^260 + 2^63, so one chain",
+        "    // carries out at most 1, and folding it back into the remainder (below 2^63) carries no",
+        "    // further than limb 5. Checked by a model of these exact u32 operations.",
+    ]
+    lines += carry_chain("out", LIMBS)
+    lines += [
+        "    let top = v >> 13u;",
+        "    out[0] += top * 15632u;",
+        "    out[2] += top * 1024u;",
+    ]
+    for i in range(5):
+        lines += [f"    out[{i + 1}] += out[{i}] >> 13u;", f"    out[{i}] &= LIMB_MASK;"]
+    lines += [
+        "    return out;",
         "}",
         "",
     ]

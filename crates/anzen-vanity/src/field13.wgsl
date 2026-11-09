@@ -322,7 +322,43 @@ fn f_reduce(c: array<u32, 39>) -> F {
     out[3] += r[21] * 1024u;
     out[2] += carry * 15632u;
     out[4] += carry * 1024u;
-    return f_normalize(out);
+    // Only limbs 0..4 can exceed 13 bits and the value is below 2^260 + 2^63, so one chain
+    // carries out at most 1, and folding it back into the remainder (below 2^63) carries no
+    // further than limb 5. Checked by a model of these exact u32 operations.
+    v = out[0]; out[0] = v & LIMB_MASK;
+    v = out[1] + (v >> 13u); out[1] = v & LIMB_MASK;
+    v = out[2] + (v >> 13u); out[2] = v & LIMB_MASK;
+    v = out[3] + (v >> 13u); out[3] = v & LIMB_MASK;
+    v = out[4] + (v >> 13u); out[4] = v & LIMB_MASK;
+    v = out[5] + (v >> 13u); out[5] = v & LIMB_MASK;
+    v = out[6] + (v >> 13u); out[6] = v & LIMB_MASK;
+    v = out[7] + (v >> 13u); out[7] = v & LIMB_MASK;
+    v = out[8] + (v >> 13u); out[8] = v & LIMB_MASK;
+    v = out[9] + (v >> 13u); out[9] = v & LIMB_MASK;
+    v = out[10] + (v >> 13u); out[10] = v & LIMB_MASK;
+    v = out[11] + (v >> 13u); out[11] = v & LIMB_MASK;
+    v = out[12] + (v >> 13u); out[12] = v & LIMB_MASK;
+    v = out[13] + (v >> 13u); out[13] = v & LIMB_MASK;
+    v = out[14] + (v >> 13u); out[14] = v & LIMB_MASK;
+    v = out[15] + (v >> 13u); out[15] = v & LIMB_MASK;
+    v = out[16] + (v >> 13u); out[16] = v & LIMB_MASK;
+    v = out[17] + (v >> 13u); out[17] = v & LIMB_MASK;
+    v = out[18] + (v >> 13u); out[18] = v & LIMB_MASK;
+    v = out[19] + (v >> 13u); out[19] = v & LIMB_MASK;
+    let top = v >> 13u;
+    out[0] += top * 15632u;
+    out[2] += top * 1024u;
+    out[1] += out[0] >> 13u;
+    out[0] &= LIMB_MASK;
+    out[2] += out[1] >> 13u;
+    out[1] &= LIMB_MASK;
+    out[3] += out[2] >> 13u;
+    out[2] &= LIMB_MASK;
+    out[4] += out[3] >> 13u;
+    out[3] &= LIMB_MASK;
+    out[5] += out[4] >> 13u;
+    out[4] &= LIMB_MASK;
+    return out;
 }
 
 // 300 limb products instead of 400 (one level of Karatsuba).
