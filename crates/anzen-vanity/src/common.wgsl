@@ -53,6 +53,11 @@ const P_TARGET_BITS: u32 = 3u;
 const Q_BITS: u32 = 20u;
 const Q_DIGITS: u32 = 1u << (Q_BITS - 1u);
 const G_WINDOWS: u32 = 13u;
+// The search loop steps through the windows with running sums rather than indexing these arrays:
+// the first G_WIDE windows are G_WIDTH + 1 bits, the rest G_WIDTH. The host checks that the
+// arrays agree.
+const G_WIDTH: u32 = 18u;
+const G_WIDE: u32 = 3u;
 const G_WIDTHS = array<u32, 13>(19u, 19u, 19u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u);
 const G_SHIFTS = array<u32, 13>(20u, 39u, 58u, 77u, 95u, 113u, 131u, 149u, 167u, 185u, 203u, 221u, 239u);
 const G_BASES = array<u32, 13>(0u, 262144u, 524288u, 786432u, 917504u, 1048576u, 1179648u, 1310720u, 1441792u, 1572864u, 1703936u, 1835008u, 1966080u);
@@ -87,8 +92,9 @@ fn infinity() -> Jacobian {
     return p;
 }
 
-fn g_point(window: u32, digit: u32) -> Affine {
-    let base = (G_BASES[window] + digit - 1u) * 16u;
+// The table point at `digit` of the window whose entries start at `first`.
+fn g_point(first: u32, digit: u32) -> Affine {
+    let base = (first + digit - 1u) * 16u;
     var q: Affine;
     for (var i = 0u; i < 8u; i++) {
         q.x[i] = g_table[base + i];

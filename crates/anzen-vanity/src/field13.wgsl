@@ -933,8 +933,8 @@ fn jac_add_affine(p: JacF, q: AffF) -> JacF {
     return JacF(x3, y3, z3, false);
 }
 
-fn g_point_f(window: u32, digit: u32) -> AffF {
-    let q = g_point(window, digit);
+fn g_point_f(first: u32, digit: u32) -> AffF {
+    let q = g_point(first, digit);
     return AffF(fe_to_f(q.x), fe_to_f(q.y), false);
 }
 
@@ -955,9 +955,10 @@ fn signed_digit(k: Fe, bit: u32, width: u32, carry: u32) -> Digit {
     return Digit(d, false, 0u);
 }
 
-// ±(magnitude·2^G_SHIFTS[w])·G; the magnitude must be nonzero.
-fn g_point_signed(w: u32, digit: Digit) -> AffF {
-    var q = g_point_f(w, digit.magnitude);
+// ±magnitude times the base of the window whose entries start at `first`; the magnitude must be
+// nonzero.
+fn g_point_signed(first: u32, digit: Digit) -> AffF {
+    var q = g_point_f(first, digit.magnitude);
     if digit.negative {
         q.y = f_neg(q.y);
     }
@@ -969,12 +970,17 @@ fn g_point_signed(w: u32, digit: Digit) -> AffF {
 fn jac_add_mul_g(start: JacF, k: Fe, carry_in: u32) -> JacF {
     var acc = start;
     var carry = carry_in;
+    var shift = Q_BITS;
+    var first = 0u;
     for (var w = 0u; w < G_WINDOWS; w++) {
-        let digit = signed_digit(k, G_SHIFTS[w], G_WIDTHS[w], carry);
+        let width = select(G_WIDTH, G_WIDTH + 1u, w < G_WIDE);
+        let digit = signed_digit(k, shift, width, carry);
         carry = digit.carry;
         if digit.magnitude != 0u {
-            acc = jac_add_affine(acc, g_point_signed(w, digit));
+            acc = jac_add_affine(acc, g_point_signed(first, digit));
         }
+        shift += width;
+        first += 1u << (width - 1u);
     }
     return acc;
 }
