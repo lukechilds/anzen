@@ -169,6 +169,7 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
+| Table loads pointed at a few cached entries (ablation, not a change) | nonce | 1.015 (30/30) | Load latency is only ~1.5% of the time even at low occupancy, so prefetching cannot gain much |
 | XYZZ addition reordered: Y1·PPP right after PPP (V2), R computed after ZZ3 (V3), or Q = X1·PP before ZZ3 | nonce | 0.986 (0/60) / 0.999 (29/60) / 0.990 (1/60) | The madd-2008-s order as written stays best |
 | A negative digit's sign folded into the XYZZ addition (R from y2·ZZZ ± Y1 and the direction of Q − X3, chosen limb by limb with `select`) instead of negating the table point's y | nonce | 0.926 (0/60) | The per-limb selects cost far more than the branch and negation |
 | Workgroup size 32 / 128 under XYZZ | nonce | 1.000 / 0.997 | 64 stays |

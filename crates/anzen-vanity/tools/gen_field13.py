@@ -25,39 +25,6 @@ def carry_chain(name: str, count: int) -> list[str]:
     return lines
 
 
-def normalize() -> list[str]:
-    lines = [
-        "// Carry every limb into the next, then fold what reaches 2^260 back in with",
-        "// 2^260 ≡ 2^36 + 15632 (mod p): 15632 at limb 0 and 2^10 at limb 2 (2^36 = 2^26 · 2^10).",
-        "fn f_normalize(a: F) -> F {",
-        "    var r = a;",
-        "    var v: u32;",
-    ]
-    lines += carry_chain("r", LIMBS)
-    lines += [
-        "    var carry = v >> 13u;",
-        "    r[0] += carry * 15632u;",
-        "    r[2] += carry * 1024u;",
-    ]
-    lines += carry_chain("r", LIMBS)
-    lines += [
-        "    // The second fold leaves r tiny, so this one cannot carry past limb 3.",
-        "    carry = v >> 13u;",
-        "    r[0] += carry * 15632u;",
-        "    r[2] += carry * 1024u;",
-        "    r[1] += r[0] >> 13u;",
-        "    r[0] &= LIMB_MASK;",
-        "    r[2] += r[1] >> 13u;",
-        "    r[1] &= LIMB_MASK;",
-        "    r[3] += r[2] >> 13u;",
-        "    r[2] &= LIMB_MASK;",
-        "    return r;",
-        "}",
-        "",
-    ]
-    return lines
-
-
 def normalize_light() -> list[str]:
     """One carry chain, one fold and a short tail: enough for sums of normalized limbs (below
     2^15), whose carry out of limb 19 is at most 3. Checked by a model of these exact u32
@@ -254,7 +221,6 @@ def square() -> list[str]:
 
 def main() -> None:
     block = []
-    block += normalize()
     block += normalize_light()
     block += limbwise("f_add", "a: F, b: F", "a[{i}] + b[{i}]", "// a + b.")
     block += limbwise("f_sub", "a: F, b: F", "a[{i}] + P13_TIMES_32[{i}] - b[{i}]", "// a − b, as a + 32p − b.")
