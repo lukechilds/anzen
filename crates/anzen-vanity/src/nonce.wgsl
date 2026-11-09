@@ -233,30 +233,36 @@ fn build_table(@builtin(global_invocation_id) id: vec3<u32>) {
 // every ZZ, then peel each ZZ's inverse off it (the output key is X·ZZ⁻¹). Invalid candidates use
 // ZZ = 1.
 fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
-    var points: array<Projective, PER_INVOCATION>;
-    var products: array<F, PER_INVOCATION>;
-    let one = f_one();
+    // Per candidate, keep A = X·(the product of the earlier ZZ) and ZZ: x = A·(the product up to
+    // and including this ZZ)⁻¹, so the prefix products need not be kept.
+    var scaled: array<F, PER_INVOCATION>;
+    var zz: array<F, PER_INVOCATION>;
+    var valid: array<bool, PER_INVOCATION>;
+    var product = f_one();
     for (var j = 0u; j < PER_INVOCATION; j++) {
-        points[j] = projective(first + j);
-        if !points[j].valid {
-            points[j].zz = one;
+        let point = projective(first + j);
+        valid[j] = point.valid;
+        var z = point.zz;
+        if !point.valid {
+            z = f_one();
         }
+        zz[j] = z;
         if j == 0u {
-            products[j] = points[j].zz;
+            scaled[j] = point.x;
+            product = z;
         } else {
-            products[j] = f_mul(products[j - 1u], points[j].zz);
+            scaled[j] = f_mul(point.x, product);
+            product = f_mul(product, z);
         }
     }
-    var inverse = f_inv(products[PER_INVOCATION - 1u]);
+    var inverse = f_inv(product);
     var batch: array<Candidate, PER_INVOCATION>;
     for (var j = PER_INVOCATION - 1u; j < PER_INVOCATION; j--) {
-        var z_inverse = inverse;
+        batch[j].valid = valid[j];
+        batch[j].output_x = f_to_fe(f_canonical(f_mul(scaled[j], inverse)));
         if j > 0u {
-            z_inverse = f_mul(inverse, products[j - 1u]);
-            inverse = f_mul(inverse, points[j].zz);
+            inverse = f_mul(inverse, zz[j]);
         }
-        batch[j].valid = points[j].valid;
-        batch[j].output_x = f_to_fe(f_canonical(f_mul(points[j].x, z_inverse)));
     }
     return batch;
 }

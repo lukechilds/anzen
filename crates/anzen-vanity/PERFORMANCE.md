@@ -120,6 +120,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| The batch inversion keeps X·(the earlier ZZ's product) and ZZ per candidate instead of X, ZZ and the prefix product: x = A·(the prefix through this ZZ)⁻¹. The same four multiplies per candidate, 20 fewer words per candidate held through the inversion | nonce | 1.0142 (59/60), 1.0133 (80/80) |
 | `f_canonical` written out limb by limb: both folds as straight carry chains, then p subtracted with a borrow chain and kept limb by limb when there is no borrow (instead of a comparison loop with an early exit) | nonce | 1.0099 (57/60), 1.0114 (78/80) |
 | safegcd's batch updates written out limb by limb (constant indices), so f, g, d and e stay in registers instead of loop-indexed arrays | nonce | 1.0420 (60/60) |
 | Inversion by Bernstein–Yang safegcd instead of Fermat's 255 squares: libsecp256k1's modinv32 in batches of 13 divsteps over 20 signed 13-bit limbs, so every matrix product stays within an i32 (no 64-bit emulation); 46 batches make 598 divsteps. `tools/model_safegcd.py` checks the exact i32 operations and their bounds over 20,000 inversions; the field test checks it against bignum, including 0 | nonce | 1.0403, 1.0401 (60/60 both) |
