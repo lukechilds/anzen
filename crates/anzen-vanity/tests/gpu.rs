@@ -77,7 +77,9 @@ fn nonce_output_keys_match_across_chunks() {
     };
     let start = 1_500_000_000;
     let count = anzen_vanity::SEARCH_CHUNK + 37;
-    let keys = gpu.nonce_output_keys_blocking(&inputs, start, count).unwrap();
+    let keys = gpu
+        .nonce_output_keys_blocking(&inputs, start, count)
+        .unwrap();
     assert_eq!(keys.len(), count as usize);
     let boundary = anzen_vanity::SEARCH_CHUNK;
     for offset in (0..40).chain(boundary - 40..count) {

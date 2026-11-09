@@ -1337,7 +1337,11 @@ mod tests {
         assert!((one.rate - one.attempts as f64 / one.seconds).abs() < 1e-6);
         // Every thread evaluates at least one run of 64 before checking the clock, so two threads
         // count at least 128 however loaded the machine is (comparing rates would be flaky).
-        assert!(two.attempts >= 128 && two.attempts % 64 == 0, "{}", two.attempts);
+        assert!(
+            two.attempts >= 128 && two.attempts % 64 == 0,
+            "{}",
+            two.attempts
+        );
         assert!(cpu_vanity_benchmark(0.1, 0, clock).is_err());
     }
 
