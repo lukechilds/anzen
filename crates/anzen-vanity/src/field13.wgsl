@@ -205,29 +205,12 @@ fn f_neg(a: F) -> F {
 // Reduce a product's 39 column sums (each below 2^31) to a normalized element, folding
 // with 2^260 ≡ 2^36 + 15632 (mod p).
 fn f_reduce(c: array<u32, 39>) -> F {
+    // Carry only the columns of weight 2^260 and up, which the fold multiplies. The low
+    // columns stay sums below 2^30.4, below 2^31 with the folded terms, and the next chain
+    // carries them.
     var l: array<u32, 40>;
     var v: u32;
-    v = c[0]; l[0] = v & LIMB_MASK;
-    v = c[1] + (v >> 13u); l[1] = v & LIMB_MASK;
-    v = c[2] + (v >> 13u); l[2] = v & LIMB_MASK;
-    v = c[3] + (v >> 13u); l[3] = v & LIMB_MASK;
-    v = c[4] + (v >> 13u); l[4] = v & LIMB_MASK;
-    v = c[5] + (v >> 13u); l[5] = v & LIMB_MASK;
-    v = c[6] + (v >> 13u); l[6] = v & LIMB_MASK;
-    v = c[7] + (v >> 13u); l[7] = v & LIMB_MASK;
-    v = c[8] + (v >> 13u); l[8] = v & LIMB_MASK;
-    v = c[9] + (v >> 13u); l[9] = v & LIMB_MASK;
-    v = c[10] + (v >> 13u); l[10] = v & LIMB_MASK;
-    v = c[11] + (v >> 13u); l[11] = v & LIMB_MASK;
-    v = c[12] + (v >> 13u); l[12] = v & LIMB_MASK;
-    v = c[13] + (v >> 13u); l[13] = v & LIMB_MASK;
-    v = c[14] + (v >> 13u); l[14] = v & LIMB_MASK;
-    v = c[15] + (v >> 13u); l[15] = v & LIMB_MASK;
-    v = c[16] + (v >> 13u); l[16] = v & LIMB_MASK;
-    v = c[17] + (v >> 13u); l[17] = v & LIMB_MASK;
-    v = c[18] + (v >> 13u); l[18] = v & LIMB_MASK;
-    v = c[19] + (v >> 13u); l[19] = v & LIMB_MASK;
-    v = c[20] + (v >> 13u); l[20] = v & LIMB_MASK;
+    v = c[20]; l[20] = v & LIMB_MASK;
     v = c[21] + (v >> 13u); l[21] = v & LIMB_MASK;
     v = c[22] + (v >> 13u); l[22] = v & LIMB_MASK;
     v = c[23] + (v >> 13u); l[23] = v & LIMB_MASK;
@@ -249,26 +232,26 @@ fn f_reduce(c: array<u32, 39>) -> F {
     l[39] = v >> 13u;
     // Limb i + 20 (weight 2^260 and up) adds 15632× at limb i and 2^10× at limb i + 2.
     var r: array<u32, 22>;
-    r[0] = l[0] + l[20] * 15632u;
-    r[1] = l[1] + l[21] * 15632u;
-    r[2] = l[2] + l[22] * 15632u + l[20] * 1024u;
-    r[3] = l[3] + l[23] * 15632u + l[21] * 1024u;
-    r[4] = l[4] + l[24] * 15632u + l[22] * 1024u;
-    r[5] = l[5] + l[25] * 15632u + l[23] * 1024u;
-    r[6] = l[6] + l[26] * 15632u + l[24] * 1024u;
-    r[7] = l[7] + l[27] * 15632u + l[25] * 1024u;
-    r[8] = l[8] + l[28] * 15632u + l[26] * 1024u;
-    r[9] = l[9] + l[29] * 15632u + l[27] * 1024u;
-    r[10] = l[10] + l[30] * 15632u + l[28] * 1024u;
-    r[11] = l[11] + l[31] * 15632u + l[29] * 1024u;
-    r[12] = l[12] + l[32] * 15632u + l[30] * 1024u;
-    r[13] = l[13] + l[33] * 15632u + l[31] * 1024u;
-    r[14] = l[14] + l[34] * 15632u + l[32] * 1024u;
-    r[15] = l[15] + l[35] * 15632u + l[33] * 1024u;
-    r[16] = l[16] + l[36] * 15632u + l[34] * 1024u;
-    r[17] = l[17] + l[37] * 15632u + l[35] * 1024u;
-    r[18] = l[18] + l[38] * 15632u + l[36] * 1024u;
-    r[19] = l[19] + l[39] * 15632u + l[37] * 1024u;
+    r[0] = c[0] + l[20] * 15632u;
+    r[1] = c[1] + l[21] * 15632u;
+    r[2] = c[2] + l[22] * 15632u + l[20] * 1024u;
+    r[3] = c[3] + l[23] * 15632u + l[21] * 1024u;
+    r[4] = c[4] + l[24] * 15632u + l[22] * 1024u;
+    r[5] = c[5] + l[25] * 15632u + l[23] * 1024u;
+    r[6] = c[6] + l[26] * 15632u + l[24] * 1024u;
+    r[7] = c[7] + l[27] * 15632u + l[25] * 1024u;
+    r[8] = c[8] + l[28] * 15632u + l[26] * 1024u;
+    r[9] = c[9] + l[29] * 15632u + l[27] * 1024u;
+    r[10] = c[10] + l[30] * 15632u + l[28] * 1024u;
+    r[11] = c[11] + l[31] * 15632u + l[29] * 1024u;
+    r[12] = c[12] + l[32] * 15632u + l[30] * 1024u;
+    r[13] = c[13] + l[33] * 15632u + l[31] * 1024u;
+    r[14] = c[14] + l[34] * 15632u + l[32] * 1024u;
+    r[15] = c[15] + l[35] * 15632u + l[33] * 1024u;
+    r[16] = c[16] + l[36] * 15632u + l[34] * 1024u;
+    r[17] = c[17] + l[37] * 15632u + l[35] * 1024u;
+    r[18] = c[18] + l[38] * 15632u + l[36] * 1024u;
+    r[19] = c[19] + l[39] * 15632u + l[37] * 1024u;
     r[20] = l[38] * 1024u;
     r[21] = l[39] * 1024u;
     v = r[0]; r[0] = v & LIMB_MASK;

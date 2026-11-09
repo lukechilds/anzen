@@ -102,6 +102,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| `f_reduce` carries only the 19 high columns before folding; the low columns stay sums below 2^30.4, below 2^31 with the folded terms, and the next chain carries them (20 carry steps fewer per product, checked by the same model) | nonce | 1.0473 (60/60) |
 | `f_reduce` ends with one carry chain, a fold and a tail to limb 5 instead of the full two-chain normalization: after the last small fold only limbs 0..4 exceed 13 bits and the value is below 2^260 + 2^63, so the chain carries out at most 1 and its fold cannot pass limb 5. `tools/model_reduce.py` checks the exact u32 operations over 300k random and extreme products | nonce | 1.0605 (60/60) |
 | One level of Karatsuba in `f_mul` and `f_sqr` (300 limb products instead of 400, 165 instead of 210), with Z3 = 2·Z1·H in the mixed addition (a multiply instead of a square and two subtractions, freeing Z1 and Z1Z1 at once). Each alone was ~1% before the addition was reordered; together after it, far more | nonce | 1.0619, 1.0713 (60/60 both) |
 | Mixed addition reordered to end values' lives early (Z3 right after HH frees Z1 and Z1Z1): the same operations, but each field element held is 20 registers and the addition spilled. Register pressure, not arithmetic, is what limits the kernel now | nonce | 1.0345 (56/60), 1.0489 (60/60) |

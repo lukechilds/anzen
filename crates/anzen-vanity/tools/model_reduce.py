@@ -18,17 +18,19 @@ def columns(a, b):
     return c
 
 def reduce(c, short):
+    # Carry only the high columns (weight 2^260 and up), which the fold multiplies; the low
+    # columns stay as sums and the next chain carries them.
     l = [0] * 40
-    v = c[0]; l[0] = v & M
-    for k in range(1, 39):
+    v = c[20]; l[20] = v & M
+    for k in range(21, 39):
         v = (c[k] + (v >> 13)) & U; l[k] = v & M
     l[39] = v >> 13
     r = [0] * 22
     for i in range(22):
         t = 0
-        if i < 20: t += l[i] + l[20 + i] * 15632
+        if i < 20: t += c[i] + l[20 + i] * 15632
         if i >= 2: t += l[18 + i] * 1024
-        assert t < 2**32
+        assert t < 2**32, (i, t)
         r[i] = t
     v = r[0]; r[0] = v & M
     for i in range(1, 22):

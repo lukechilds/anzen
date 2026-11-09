@@ -99,11 +99,14 @@ def reduce() -> list[str]:
         "// Reduce a product's 39 column sums (each below 2^31) to a normalized element, folding",
         "// with 2^260 ≡ 2^36 + 15632 (mod p).",
         "fn f_reduce(c: array<u32, 39>) -> F {",
+        "    // Carry only the columns of weight 2^260 and up, which the fold multiplies. The low",
+        "    // columns stay sums below 2^30.4, below 2^31 with the folded terms, and the next chain",
+        "    // carries them.",
         "    var l: array<u32, 40>;",
         "    var v: u32;",
-        "    v = c[0]; l[0] = v & LIMB_MASK;",
+        "    v = c[20]; l[20] = v & LIMB_MASK;",
     ]
-    for k in range(1, 39):
+    for k in range(21, 39):
         lines.append(f"    v = c[{k}] + (v >> 13u); l[{k}] = v & LIMB_MASK;")
     lines += [
         "    l[39] = v >> 13u;",
@@ -113,7 +116,7 @@ def reduce() -> list[str]:
     for i in range(22):
         terms = []
         if i < LIMBS:
-            terms.append(f"l[{i}] + l[{20 + i}] * 15632u")
+            terms.append(f"c[{i}] + l[{20 + i}] * 15632u")
         if i >= 2:
             terms.append(f"l[{18 + i}] * 1024u")
         lines.append(f"    r[{i}] = " + " + ".join(terms) + ";")
