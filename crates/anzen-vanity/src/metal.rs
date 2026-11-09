@@ -15,10 +15,7 @@ use std::ptr::NonNull;
 
 const COMMON_SOURCE: &str = include_str!("metal/common.metal");
 const KEY_SOURCE: &str = include_str!("metal/key.metal");
-const NONCE_SOURCE: &str = concat!(
-    include_str!("metal/field13.metal"),
-    include_str!("metal/nonce.metal")
-);
+const NONCE_SOURCE: &str = include_str!("metal/nonce.metal");
 const G_WINDOW_BITS: u32 = 16;
 
 type Device = ProtocolObject<dyn MTLDevice>;

@@ -1,6 +1,7 @@
 // Script nonce grinding in Metal Shading Language: the same search as nonce.wgsl, written for
-// Apple GPUs. Point arithmetic uses the 13-bit-limb field from field13.metal, like the wgpu
-// kernel: native 64-bit products were 1.8× slower, since Apple GPUs emulate 64-bit integers.
+// Apple GPUs. Point arithmetic uses the 32-bit-limb field from common.metal (mul + mulhi with
+// 32-bit carries), which beat the 13-bit field from field13.metal by 14% here; wgpu has no mulhi,
+// so its nonce kernel keeps the 13-bit field.
 //
 // One thread evaluates PER_INVOCATION consecutive recovery locktimes T and shares one field
 // inversion across them. For each T: the leaf hash, the Taproot tweak t, then Q_even + t·G from
@@ -21,7 +22,7 @@
 // The candidate
 
 // Q + t·G in Jacobian coordinates for one locktime; `valid` is false when t >= n.
-inline JacF projective(uint locktime, device const uint *params, device const uint *g_table, thread bool &valid) {
+inline Jacobian projective(uint locktime, device const uint *params, device const uint *g_table, thread bool &valid) {
     // 1. The leaf: T is pushed as four little-endian bytes at block bytes 3..7.
     uint block[16];
     #pragma unroll
@@ -52,12 +53,13 @@ inline JacF projective(uint locktime, device const uint *params, device const ui
     for (int i = 0; i < 8; i++) tweak.v[7 - i] = tweak_state[i];
     valid = !gte_const(tweak, ORDER_N);
 
-    // 3. Q_even + t·G, in the 13-bit field.
-    AffF internal;
-    internal.x = fe_to_f(read_fe(params, P_INTERNAL_X));
-    internal.y = fe_to_f(read_fe(params, P_INTERNAL_Y));
-    internal.infinity = false;
-    JacF p = jac_add_mul_g(jac_from_affine(internal), tweak, g_table);
+    // 3. Q_even + t·G, in the 32-bit field.
+    Jacobian start;
+    start.x = read_fe(params, P_INTERNAL_X);
+    start.y = read_fe(params, P_INTERNAL_Y);
+    start.z = Fe{{1, 0, 0, 0, 0, 0, 0, 0}};
+    start.infinity = false;
+    Jacobian p = add_mul_g(start, tweak, g_table);
     valid = valid && !p.infinity;
     return p;
 }
@@ -65,23 +67,24 @@ inline JacF projective(uint locktime, device const uint *params, device const ui
 // The batch's output keys with one field inversion (Montgomery's trick). Invalid candidates use
 // Z = 1. Writes each output key's x, or marks it invalid.
 inline void candidates(uint first, device const uint *params, device const uint *g_table, thread Fe *xs, thread bool *valid) {
-    JacF points[PER_INVOCATION];
-    F products[PER_INVOCATION];
+    Jacobian points[PER_INVOCATION];
+    Fe products[PER_INVOCATION];
+    const Fe one = Fe{{1, 0, 0, 0, 0, 0, 0, 0}};
     for (int j = 0; j < PER_INVOCATION; j++) {
         bool ok;
         points[j] = projective(first + j, params, g_table, ok);
         valid[j] = ok;
-        if (!ok) points[j].z = f_one();
-        products[j] = j == 0 ? points[j].z : f_mul(products[j - 1], points[j].z);
+        if (!ok) points[j].z = one;
+        products[j] = j == 0 ? points[j].z : fe_mul(products[j - 1], points[j].z);
     }
-    F inverse = f_inv(products[PER_INVOCATION - 1]);
+    Fe inverse = fe_inv(products[PER_INVOCATION - 1]);
     for (int j = PER_INVOCATION - 1; j >= 0; j--) {
-        F z_inverse = inverse;
+        Fe z_inverse = inverse;
         if (j > 0) {
-            z_inverse = f_mul(inverse, products[j - 1]);
-            inverse = f_mul(inverse, points[j].z);
+            z_inverse = fe_mul(inverse, products[j - 1]);
+            inverse = fe_mul(inverse, points[j].z);
         }
-        xs[j] = f_to_fe(f_canonical(f_mul(points[j].x, f_sqr(z_inverse))));
+        xs[j] = fe_mul(points[j].x, fe_sqr(z_inverse));
     }
 }
 

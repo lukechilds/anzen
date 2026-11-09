@@ -1,4 +1,6 @@
-// The field modulo p in 20 limbs of 13 bits, ported from field13.wgsl for point arithmetic.
+// The field modulo p in 20 limbs of 13 bits, ported from field13.wgsl for point arithmetic. No
+// Metal kernel uses it at the moment: the 32-bit field with native mulhi is 14% faster for the
+// nonce kernel, and this field hung the GPU in the key kernel. Kept, generated, for comparison.
 // Products of 13-bit limbs fit in 26 bits, so a column of 20 of them sums in a uint without
 // carry handling. Apple GPUs emulate 64-bit integer operations with several 32-bit ones, so this
 // beats 32-bit limbs with 64-bit products.
