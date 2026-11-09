@@ -168,6 +168,14 @@ impl GpuSearch {
             })
             .await
             .context("could not open the GPU device")?;
+        // Browsers report a rejected shader or pipeline asynchronously, never by failing the
+        // call, and dispatches through it then do nothing. Catch that here instead of timing it.
+        // (wgpu's WebGPU backend cannot convert internal errors, so they are not scoped.)
+        let scopes = [
+            wgpu::ErrorFilter::Validation,
+            wgpu::ErrorFilter::OutOfMemory,
+        ]
+        .map(|filter| device.push_error_scope(filter));
         let entry = |binding, read_only| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -248,6 +256,11 @@ impl GpuSearch {
         let key = kernel("key", key_shader, tunings[0], key_table)?;
         let nonce = kernel("nonce", nonce_shader, tunings[1], nonce_table)?;
         let empty = upload(&device, "no key tables", &[0; 4]);
+        for scope in scopes.into_iter().rev() {
+            if let Some(error) = scope.pop().await {
+                bail!("the GPU rejected the vanity search: {error}");
+            }
+        }
         Ok(Self {
             device,
             queue,

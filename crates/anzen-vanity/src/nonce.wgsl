@@ -33,9 +33,10 @@ fn projective(locktime: u32) -> Projective {
         block[i] = params[P_LEAF_BLOCK + i];
     }
     block[0] |= locktime & 0xffu;
-    block[1] |= ((locktime >> 8u) & 0xffu) << 24u
-        | ((locktime >> 16u) & 0xffu) << 16u
-        | (locktime >> 24u) << 8u;
+    // WGSL requires parentheses between << and |; naga accepts them without, browsers do not.
+    block[1] |= (((locktime >> 8u) & 0xffu) << 24u)
+        | (((locktime >> 16u) & 0xffu) << 16u)
+        | ((locktime >> 24u) << 8u);
     let leaf = sha256_compress(read_state256(P_LEAF_MID), block);
 
     // 2. The tweak over Q || leaf, then the padding block for 128 bytes after the tag prefix.

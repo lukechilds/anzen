@@ -63,7 +63,8 @@ const WARMUP_SECONDS: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
-    /// One small dispatch that pays the first use's setup costs, untimed but guarded.
+    /// One minimal dispatch that pays the first use's costs, untimed: browsers compile the
+    /// shader then, which takes seconds. The same count is then timed under the guard.
     Prime,
     Ramp,
     Warmup,
@@ -113,13 +114,7 @@ impl Plan {
         // Stay well inside each kernel's candidate range.
         self.offset = (self.offset + count) % (1 << 29);
         match self.phase {
-            Phase::Prime => {
-                ensure!(
-                    seconds < MAX_DISPATCH_SECONDS,
-                    "{count} candidates took {seconds:.2} s; not queuing more"
-                );
-                self.phase = Phase::Ramp;
-            }
+            Phase::Prime => self.phase = Phase::Ramp,
             Phase::Ramp => {
                 ensure!(
                     seconds < MAX_DISPATCH_SECONDS,
@@ -331,6 +326,7 @@ mod tests {
     #[test]
     fn stops_on_a_slow_dispatch() {
         let mut plan = Plan::new(Kernel::Key, 1.0);
+        plan.record(3.0).unwrap();
         assert!(plan.record(3.0).is_err());
     }
 }
