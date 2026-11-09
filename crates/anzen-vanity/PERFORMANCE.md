@@ -32,6 +32,19 @@ kernels by up to ~25% within a minute, and by up to ~2× after long runs:
 
 The CPU path (16 threads, library code) does about 118k/s of key grinding.
 
+The same wgpu kernels in Chrome's WebGPU on the same Mac, from the app's settings benchmark
+(5-second window): key **4.53M/s**, nonce **19.3M/s**. Chrome compiles the key kernel better than
+naga does natively (3.4M/s); the nonce kernel is level. Building the point tables in single-thread
+WASM takes ~13 s for key grinding and ~4 s for nonce grinding before the first dispatch.
+
+The app benchmark (`bench::Plan`, also `examples/benchmark.rs run <wgpu|metal> <key|nonce>`)
+uses the ramp guard and caps each dispatch at ~0.25 s, so a phone's GPU stays responsive.
+
+Browser notes: WGSL requires parentheses between `<<` and `|`. naga accepted the nonce shader
+without them, but Chrome rejected it, and every dispatch through the rejected pipeline then did
+nothing, at an impossible rate. wgpu 30 also panics popping an empty error scope on WebGPU, so
+the browser benchmark checks the kernel's output keys before timing instead.
+
 How the backends differ: the fastest field is not the same on each. Metal has `mulhi`, so its
 32-bit field gets each 64-bit product in two instructions and keeps carries in 32-bit words;
 both Metal kernels use it. WGSL has no `mulhi`, so wgpu builds products from 16-bit halves:
