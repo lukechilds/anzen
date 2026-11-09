@@ -4,7 +4,9 @@
 // varies the address.
 //   1. The leaf hash: TaggedHash("TapLeaf", 0xc0 || 47 || script), where only T's four bytes vary.
 //   2. The Taproot tweak t = TaggedHash("TapTweak", Q || leaf), the leaf being the only one.
-//   3. output = Q_even + t·G.
+//   3. output = Q_even + t·G: window 0 of t from the search's table of Q + d·G, then one addition
+//      per generator-table window in XYZZ coordinates (the first affine plus affine), and the
+//      output key x = X·ZZ⁻¹ with one safegcd inversion per PER_INVOCATION candidates.
 
 // The leaf's message block with T's bytes zero: 0xc0, 47, then the script
 // <T> OP_CLTV OP_VERIFY <4259839> OP_CSV OP_VERIFY <hww> OP_CHECKSIG, then SHA-256 padding.
@@ -228,7 +230,8 @@ fn build_table(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // The batch's output keys with one field inversion (Montgomery's trick): invert the product of
-// every Z, then peel each Z's inverse off it. Invalid candidates use Z = 1.
+// every ZZ, then peel each ZZ's inverse off it (the output key is X·ZZ⁻¹). Invalid candidates use
+// ZZ = 1.
 fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
     var points: array<Projective, PER_INVOCATION>;
     var products: array<F, PER_INVOCATION>;
