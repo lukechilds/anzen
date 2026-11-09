@@ -816,31 +816,7 @@ impl GpuSearch {
     #[doc(hidden)]
     pub fn generator_tables_blocking(&self) -> Result<(Vec<u32>, Vec<u32>)> {
         let cpu = point_table(generator(), &self.tuning)?;
-        let bytes = cpu.len() as u64 * 4;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("table readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(&self.g_table, 0, &readback, 0, bytes);
-        self.queue.submit([encoder.finish()]);
-        readback.map_async(wgpu::MapMode::Read, .., |_| {});
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .context("table readback failed")?;
-        let gpu = bytemuck::cast_slice(
-            &readback
-                .get_mapped_range(..)
-                .map_err(|error| anyhow!("table readback failed: {error:?}"))?,
-        )
-        .to_vec();
+        let gpu = self.read_buffer(&self.g_table, cpu.len() as u64 * 4)?;
         Ok((gpu, cpu))
     }
 

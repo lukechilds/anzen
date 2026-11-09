@@ -172,7 +172,7 @@ limits by patching `G_WINDOW_BITS` before compiling.
 |---|---|---|---|
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
 | The last addition peeled out of the loop computing only X3 and ZZ3 (6M + 2S) | nonce | 1.0055 (56/60) | Too small for the extra code |
-| Candidates per thread 16 with the first addition peeled | nonce | 1.001 (24/40) | 8 stays |
+| Candidates per thread 16 / 10 / 6 with the first addition peeled | nonce | 1.001 (24/40) / 1.003 (27/40) / 0.974 (2/40) | 8 stays |
 | One inversion shared by partner invocations in the two halves of a workgroup (separate SIMD groups on Apple GPUs; products exchanged through workgroup memory, so the second group skips the inversion) | nonce | 0.972 (0/60) | The idle group waits at the barrier, and at this kernel's register-limited occupancy nothing fills it |
 | Subtractive two-level Karatsuba for squares only ((low − high)² takes a second level: 135 limb products instead of 145) | nonce | 1.002 (45/60) | Too small to matter |
 | Table loads pointed at a few cached entries (ablation, not a change) | nonce | 1.015 (30/30) | Load latency is only ~1.5% of the time even at low occupancy, so prefetching cannot gain much |
