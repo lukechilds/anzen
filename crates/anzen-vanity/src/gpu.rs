@@ -238,7 +238,9 @@ impl GpuSearch {
             .map_err(|error| anyhow!("no GPU adapter is available: {error}"))?;
         let info = adapter.get_info();
         let limits = adapter.limits();
-        let table_bytes = u64::from(tuning.entries()).max(u64::from(tuning.q_points())) * 64;
+        // The largest buffer: a table, or the search's scratch with smaller tables.
+        let table_bytes = (u64::from(tuning.entries()).max(u64::from(tuning.q_points())) * 64)
+            .max(u64::from(SEARCH_CHUNK) * SCRATCH_BYTES);
         ensure!(
             limits.max_storage_buffer_binding_size >= table_bytes
                 && limits.max_buffer_size >= table_bytes,
