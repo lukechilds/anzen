@@ -69,6 +69,8 @@ kernel's peak register count. Variants tried on both phones against the current 
 |---|---|---|
 | One Karatsuba level (`KARATSUBA_LEVELS=1 tools/gen_field13.py`) | −7% | +5% |
 | Workgroup size 32 / 128 | −1% / 0% | +1% / −15% |
+| One Karatsuba level in `f_sqr` only | 0% | 0% |
+| Y1 and ZZZ1 held packed through the addition's middle products (20 registers fewer at the peak; the M4 Max: 0.944, 0/40) | −3% | −21% |
 | Tables of 36 MB (window 0 16 bits, 15 additions) | | 0.93× (the M4 Max: 0.886×, the arithmetic's 13/15) |
 
 The CPU path grinds the same locktimes with the library code: **831k/s** on the M4 Max's 16
