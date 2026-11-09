@@ -17,10 +17,8 @@ const NONCE_PARAM_WORDS: usize = 60;
 /// inversion, so a chunk takes a few milliseconds on a desktop and tens on an old phone, well
 /// inside the watchdog that ends long GPU work when the display needs the GPU.
 const SETUP_CHUNK: u32 = 1 << 17;
-/// Words per point in the setup passes' scratch, as SETUP_WORDS in the shader; setup borrows the
-/// search's scratch buffer.
-const SETUP_WORDS: u64 = 40;
-const _: () = assert!(SETUP_CHUNK as u64 * SETUP_WORDS * 4 <= SEARCH_CHUNK as u64 * SCRATCH_BYTES);
+// Setup borrows the search's scratch buffer, 40 words per point (SETUP_WORDS in the shader).
+const _: () = assert!(SETUP_CHUNK as u64 * 40 * 4 <= SEARCH_CHUNK as u64 * SCRATCH_BYTES);
 /// The table build's split of each digit into hi·2^SPLIT_BITS + lo, as in the shader.
 const SPLIT_BITS: u32 = 9;
 /// Candidates per dispatch to start with; the search adapts it towards `TARGET_BATCH_TIME`.
