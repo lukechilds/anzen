@@ -27,15 +27,15 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 ## Current speed
 
 M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benchmark.rs run`):
-**~34.2M/s**, so `vault` takes ~1.0 s on average, after ~0.15 s of setup (compiling the kernel and
+**~35M/s**, so `vault` takes ~1.0 s on average, after ~0.15 s of setup (compiling the kernel and
 building the 128 MiB generator table on the GPU); `anzen phone init --vanity` on regtest finds one
 in ~1.4 s end to end. Sustained load throttles by up to ~25% within a minute, and much further
 after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~33M/s**.
 
-The third loop took the kernel from ~19.5M/s to ~34.2M/s (1.75×): Q folded into window 0, signed
+The third loop took the kernel from ~19.5M/s to ~35M/s (1.79×): Q folded into window 0, signed
 and then varying window widths (16 additions to 13), the generator table built on the GPU, a
-reordered mixed addition, Karatsuba products, shorter reductions, fused normalizations and XYZZ
-coordinates. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
+reordered mixed addition, Karatsuba products, shorter reductions, fused normalizations, XYZZ
+coordinates and an affine first addition. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
 generator table of about 2^22.2 points.
 
 Phones, from the app's settings benchmark (5 s, cool; measured while the key kernel still existed,
@@ -170,6 +170,8 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
+| The last addition peeled out of the loop computing only X3 and ZZ3 (6M + 2S) | nonce | 1.0055 (56/60) | Too small for the extra code |
+| Candidates per thread 16 with the first addition peeled | nonce | 1.001 (24/40) | 8 stays |
 | One inversion shared by partner invocations in the two halves of a workgroup (separate SIMD groups on Apple GPUs; products exchanged through workgroup memory, so the second group skips the inversion) | nonce | 0.972 (0/60) | The idle group waits at the barrier, and at this kernel's register-limited occupancy nothing fills it |
 | Subtractive two-level Karatsuba for squares only ((low − high)² takes a second level: 135 limb products instead of 145) | nonce | 1.002 (45/60) | Too small to matter |
 | Table loads pointed at a few cached entries (ablation, not a change) | nonce | 1.015 (30/30) | Load latency is only ~1.5% of the time even at low occupancy, so prefetching cannot gain much |
