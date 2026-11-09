@@ -243,7 +243,7 @@ inline Fe fe_sqr_n(Fe a, int n) {
 }
 
 // a^(p-2) with libsecp256k1's addition chain.
-inline Fe fe_inv(Fe a) {
+__attribute__((noinline)) Fe fe_inv(Fe a) {
     Fe x2 = fe_mul(fe_sqr(a), a);
     Fe x3 = fe_mul(fe_sqr(x2), a);
     Fe x6 = fe_mul(fe_sqr_n(x3, 3), x3);
@@ -288,7 +288,7 @@ inline Jacobian point_double(Jacobian p) {
 }
 
 // Jacobian plus affine (madd-2007-bl), with the special cases.
-inline Jacobian point_add_affine(Jacobian p, Fe qx, Fe qy) {
+__attribute__((noinline)) Jacobian point_add_affine(Jacobian p, Fe qx, Fe qy) {
     if (p.infinity) {
         Jacobian r;
         r.x = qx;

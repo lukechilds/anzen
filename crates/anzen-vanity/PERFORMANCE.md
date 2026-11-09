@@ -68,6 +68,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Metal: point addition and field inversion `noinline` (smaller code, better instruction cache; matches the research) | metal key / metal nonce | 1.039 / 1.108 |
 | Metal nonce: back to the 32-bit field now that it uses mulhi and 32-bit carries (from the 13-bit field) | metal nonce | 1.143 |
 | Metal key: the 32-bit field with 32-bit carries and native `mulhi` for products (it used 64-bit accumulators, which Apple GPUs emulate) | metal key | 2.48 |
 | wgpu key: the 32-bit field functions (mul_wide, fe_sqr, fe_add, sub_raw, gte) unrolled straight-line by `tools/gen_field32.py`, so every limb index is constant | key | 2.29 |
@@ -86,6 +87,9 @@ What other secp256k1 GPU engines do, and whether it applies here:
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | Candidates per thread 4 / 16 (from 8) on the 13-bit nonce kernels | nonce / metal nonce | 0.98 / 0.95 at 4; 0.99 / 0.99 at 16 | 8 stays best after the field change |
+| wgpu nonce on the unrolled 32-bit field instead of 13-bit | nonce | 0.89 | Without mulhi the 13-bit field still wins on wgpu |
+| Metal kernels: candidates per thread 4 / 16 after the field change (from 8) | metal key / metal nonce | 0.93 / 0.90 at 4; 0.65 / 0.99 at 16 | 8 stays best |
+| Metal key: stage functions inlined (only the hashes kept `noinline`) | metal key | 0.82 | `noinline` helps on Apple GPUs; see the kept row |
 | wgpu key: 8 candidates per thread after the table change (from 4) | key | 0.97 | 4 stays best on wgpu, unlike Metal |
 | Thread-group size 32 / 128 / 256 (from 64) | metal key, metal nonce, nonce | 0.96–0.99; wgpu nonce 0.95 at 256 | 64 stays best on every kernel and backend |
 | Workgroup size 32 / 128 / 256 (from 64) | both | 1.01 / 0.93 / 0.83 key; 0.98 / 1.00 / 0.92 nonce | 64 is best; bigger groups lower occupancy |
