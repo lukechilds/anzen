@@ -120,6 +120,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Those two held elements packed two limbs per word (limbs are at most 2^13, so 16 bits each): 20 words per candidate instead of 40, for about 30 shifts and masks | nonce | 1.0104 (59/60), 1.0100 (76/80) |
 | The batch inversion keeps X·(the earlier ZZ's product) and ZZ per candidate instead of X, ZZ and the prefix product: x = A·(the prefix through this ZZ)⁻¹. The same four multiplies per candidate, 20 fewer words per candidate held through the inversion | nonce | 1.0142 (59/60), 1.0133 (80/80) |
 | `f_canonical` written out limb by limb: both folds as straight carry chains, then p subtracted with a borrow chain and kept limb by limb when there is no borrow (instead of a comparison loop with an early exit) | nonce | 1.0099 (57/60), 1.0114 (78/80) |
 | safegcd's batch updates written out limb by limb (constant indices), so f, g, d and e stay in registers instead of loop-indexed arrays | nonce | 1.0420 (60/60) |
