@@ -87,6 +87,43 @@ fn f_normalize(a: F) -> F {
     return r;
 }
 
+// Normalize limbs below 2^15 (sums and differences of normalized elements): one carry
+// chain, then the fold of at most a few times 2^260 only reaches limbs 0..3.
+fn f_normalize_light(a: F) -> F {
+    var r = a;
+    var v: u32;
+    v = r[0]; r[0] = v & LIMB_MASK;
+    v = r[1] + (v >> 13u); r[1] = v & LIMB_MASK;
+    v = r[2] + (v >> 13u); r[2] = v & LIMB_MASK;
+    v = r[3] + (v >> 13u); r[3] = v & LIMB_MASK;
+    v = r[4] + (v >> 13u); r[4] = v & LIMB_MASK;
+    v = r[5] + (v >> 13u); r[5] = v & LIMB_MASK;
+    v = r[6] + (v >> 13u); r[6] = v & LIMB_MASK;
+    v = r[7] + (v >> 13u); r[7] = v & LIMB_MASK;
+    v = r[8] + (v >> 13u); r[8] = v & LIMB_MASK;
+    v = r[9] + (v >> 13u); r[9] = v & LIMB_MASK;
+    v = r[10] + (v >> 13u); r[10] = v & LIMB_MASK;
+    v = r[11] + (v >> 13u); r[11] = v & LIMB_MASK;
+    v = r[12] + (v >> 13u); r[12] = v & LIMB_MASK;
+    v = r[13] + (v >> 13u); r[13] = v & LIMB_MASK;
+    v = r[14] + (v >> 13u); r[14] = v & LIMB_MASK;
+    v = r[15] + (v >> 13u); r[15] = v & LIMB_MASK;
+    v = r[16] + (v >> 13u); r[16] = v & LIMB_MASK;
+    v = r[17] + (v >> 13u); r[17] = v & LIMB_MASK;
+    v = r[18] + (v >> 13u); r[18] = v & LIMB_MASK;
+    v = r[19] + (v >> 13u); r[19] = v & LIMB_MASK;
+    let carry = v >> 13u;
+    r[0] += carry * 15632u;
+    r[2] += carry * 1024u;
+    r[1] += r[0] >> 13u;
+    r[0] &= LIMB_MASK;
+    r[2] += r[1] >> 13u;
+    r[1] &= LIMB_MASK;
+    r[3] += r[2] >> 13u;
+    r[2] &= LIMB_MASK;
+    return r;
+}
+
 // a + b.
 fn f_add(a: F, b: F) -> F {
     var r: F;
@@ -110,7 +147,7 @@ fn f_add(a: F, b: F) -> F {
     r[17] = a[17] + b[17];
     r[18] = a[18] + b[18];
     r[19] = a[19] + b[19];
-    return f_normalize(r);
+    return f_normalize_light(r);
 }
 
 // a − b, as a + 32p − b.
@@ -136,7 +173,7 @@ fn f_sub(a: F, b: F) -> F {
     r[17] = a[17] + P13_TIMES_32[17] - b[17];
     r[18] = a[18] + P13_TIMES_32[18] - b[18];
     r[19] = a[19] + P13_TIMES_32[19] - b[19];
-    return f_normalize(r);
+    return f_normalize_light(r);
 }
 
 // −a, as 32p − a.
@@ -162,7 +199,7 @@ fn f_neg(a: F) -> F {
     r[17] = P13_TIMES_32[17] - a[17];
     r[18] = P13_TIMES_32[18] - a[18];
     r[19] = P13_TIMES_32[19] - a[19];
-    return f_normalize(r);
+    return f_normalize_light(r);
 }
 
 // Reduce a product's 39 column sums (each below 2^31) to a normalized element, folding

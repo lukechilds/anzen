@@ -59,10 +59,39 @@ def normalize() -> list[str]:
     return lines
 
 
+def normalize_light() -> list[str]:
+    """One carry chain, one fold and a short tail: enough for sums of normalized limbs (below
+    2^15), whose carry out of limb 19 is at most 3. Checked by a model of these exact u32
+    operations over 600k random and edge inputs."""
+    lines = [
+        "// Normalize limbs below 2^15 (sums and differences of normalized elements): one carry",
+        "// chain, then the fold of at most a few times 2^260 only reaches limbs 0..3.",
+        "fn f_normalize_light(a: F) -> F {",
+        "    var r = a;",
+        "    var v: u32;",
+    ]
+    lines += carry_chain("r", LIMBS)
+    lines += [
+        "    let carry = v >> 13u;",
+        "    r[0] += carry * 15632u;",
+        "    r[2] += carry * 1024u;",
+        "    r[1] += r[0] >> 13u;",
+        "    r[0] &= LIMB_MASK;",
+        "    r[2] += r[1] >> 13u;",
+        "    r[1] &= LIMB_MASK;",
+        "    r[3] += r[2] >> 13u;",
+        "    r[2] &= LIMB_MASK;",
+        "    return r;",
+        "}",
+        "",
+    ]
+    return lines
+
+
 def limbwise(name: str, params: str, expression: str, comment: str) -> list[str]:
     lines = [comment, f"fn {name}({params}) -> F {{", "    var r: F;"]
     lines += [f"    r[{i}] = {expression.format(i=i)};" for i in range(LIMBS)]
-    lines += ["    return f_normalize(r);", "}", ""]
+    lines += ["    return f_normalize_light(r);", "}", ""]
     return lines
 
 
@@ -167,6 +196,7 @@ def to_msl(lines: list[str]) -> list[str]:
 def main() -> None:
     block = []
     block += normalize()
+    block += normalize_light()
     block += limbwise("f_add", "a: F, b: F", "a[{i}] + b[{i}]", "// a + b.")
     block += limbwise("f_sub", "a: F, b: F", "a[{i}] + P13_TIMES_32[{i}] - b[{i}]", "// a − b, as a + 32p − b.")
     block += limbwise("f_neg", "a: F", "P13_TIMES_32[{i}] - a[{i}]", "// −a, as 32p − a.")
