@@ -93,7 +93,6 @@ fn nonce_search_finds_the_first_match_miniscript_agrees_with() {
 #[test]
 fn a_zero_first_window_digit_starts_from_q() {
     use bitcoin::{
-        ScriptBuf,
         hashes::Hash,
         taproot::{LeafVersion, TapLeafHash, TapNodeHash, TapTweakHash},
     };
@@ -111,7 +110,7 @@ fn a_zero_first_window_digit_starts_from_q() {
             .push_x_only_key(&signer)
             .push_opcode(bitcoin::opcodes::all::OP_CHECKSIG)
             .into_script();
-        TapLeafHash::from_script(&ScriptBuf::from(script), LeafVersion::TapScript)
+        TapLeafHash::from_script(&script, LeafVersion::TapScript)
     };
     // The tweak is a big-endian scalar, so window 0 is its last two bytes.
     let locktime = (anzen_vanity::NONCE_LOCKTIMES.start..)
