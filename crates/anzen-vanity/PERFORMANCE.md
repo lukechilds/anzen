@@ -27,14 +27,16 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 ## Current speed
 
 M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benchmark.rs run`):
-**~32.8M/s**, so `vault` takes ~1.0 s on average, after ~0.15 s of setup (compiling the kernel and
-building the 128 MiB generator table on the GPU). Sustained load throttles by up to ~25% within
-a minute, and much further after hours of benchmarking. Chrome's WebGPU on the same Mac runs the
-same kernel at **~28–31M/s** (runs vary).
+**~34.2M/s**, so `vault` takes ~1.0 s on average, after ~0.15 s of setup (compiling the kernel and
+building the 128 MiB generator table on the GPU); `anzen phone init --vanity` on regtest finds one
+in ~1.4 s end to end. Sustained load throttles by up to ~25% within a minute, and much further
+after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~33M/s**.
 
-The third loop took the kernel from ~19.5M/s to ~32.8M/s (1.68×): Q folded into window 0,
-signed and then varying window widths (16 additions to 13), the generator table built on the GPU,
-a reordered mixed addition, Karatsuba products, shorter reductions and fused normalizations.
+The third loop took the kernel from ~19.5M/s to ~34.2M/s (1.75×): Q folded into window 0, signed
+and then varying window widths (16 additions to 13), the generator table built on the GPU, a
+reordered mixed addition, Karatsuba products, shorter reductions, fused normalizations and XYZZ
+coordinates. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
+generator table of about 2^22.2 points.
 
 Phones, from the app's settings benchmark (5 s, cool; measured while the key kernel still existed,
 so setup then also compiled it):
@@ -167,7 +169,9 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
-| XYZZ addition reordered: Y1·PPP right after PPP (V2), or R computed after ZZ3 (V3) | nonce | 0.986 (0/60) / 0.999 (29/60) | The madd-2008-s order as written stays best |
+| XYZZ addition reordered: Y1·PPP right after PPP (V2), R computed after ZZ3 (V3), or Q = X1·PP before ZZ3 | nonce | 0.986 (0/60) / 0.999 (29/60) / 0.990 (1/60) | The madd-2008-s order as written stays best |
+| A negative digit's sign folded into the XYZZ addition (R from y2·ZZZ ± Y1 and the direction of Q − X3, chosen limb by limb with `select`) instead of negating the table point's y | nonce | 0.926 (0/60) | The per-limb selects cost far more than the branch and negation |
+| Workgroup size 32 / 128 under XYZZ | nonce | 1.000 / 0.997 | 64 stays |
 | Candidates per thread 16 / 12 under XYZZ | nonce | 1.000 / 0.982 | 8 stays |
 | Subtractions folded into the preceding products' columns (`f_mul_sub`, `f_sqr_sub_sub_double`: four fewer normalizations per addition; the model passes) | nonce | 0.896 (0/60) | Two more copies of the large product body cost far more than the normalizations; code size matters here |
 | The window loop's trip count hidden from the compiler (to stop any unrolling) | nonce | 1.000 (19/40) | It was not being unrolled |
