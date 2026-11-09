@@ -533,27 +533,9 @@ fn jac_from_affine(q: AffF) -> JacF {
     return JacF(q.x, q.y, f_one(), q.infinity);
 }
 
-// dbl-2009-l.
-fn jac_double(p: JacF) -> JacF {
-    if p.infinity || f_is_zero(p.y) {
-        return jac_infinity();
-    }
-    let a = f_sqr(p.x);
-    let b = f_sqr(p.y);
-    let c = f_sqr(b);
-    var d = f_sub(f_sub(f_sqr(f_add(p.x, b)), a), c);
-    d = f_add(d, d);
-    let e = f_add(f_add(a, a), a);
-    let x3 = f_sub(f_sqr(e), f_add(d, d));
-    var c8 = f_add(c, c);
-    c8 = f_add(c8, c8);
-    c8 = f_add(c8, c8);
-    let y3 = f_sub(f_mul(e, f_sub(d, x3)), c8);
-    let yz = f_mul(p.y, p.z);
-    return JacF(x3, y3, f_add(yz, yz), false);
-}
-
-// Jacobian plus affine (madd-2007-bl), with the special cases.
+// Jacobian plus affine (madd-2007-bl) without the P = ±Q cases, which need two full reductions per addition
+// and happen with probability about 2^-256 here. If one ever did, that candidate's output would
+// be wrong, and the host re-derives every match with the library code before trusting it.
 fn jac_add_affine(p: JacF, q: AffF) -> JacF {
     if q.infinity {
         return p;
@@ -566,12 +548,6 @@ fn jac_add_affine(p: JacF, q: AffF) -> JacF {
     let s2 = f_mul(q.y, f_mul(p.z, z1z1));
     let h = f_sub(u2, p.x);
     let s_diff = f_sub(s2, p.y);
-    if f_is_zero(h) {
-        if f_is_zero(s_diff) {
-            return jac_double(p);
-        }
-        return jac_infinity();
-    }
     let hh = f_sqr(h);
     var i = f_add(hh, hh);
     i = f_add(i, i);

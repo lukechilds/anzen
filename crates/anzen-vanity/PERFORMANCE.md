@@ -68,6 +68,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Nonce: 13-bit mixed addition without the P = ±Q checks, which cost two full reductions per addition and happen with probability ~2^-256; the host re-verifies every match on the CPU | nonce / metal nonce | 1.129 / 1.051 |
 | Key: signer and parent tables with 16-bit windows (KeyAgg's table additions 32 → 16; 134 MB of tables per search) | key / metal key | 1.20 / 1.18 |
 | Nonce: lighter normalization after add, sub and neg (one carry chain, fold, short tail; their limbs stay below 2^15 so the carry out is at most 3, checked by a model of the exact u32 operations) | nonce / metal nonce | 1.086 / 1.055 |
 | Metal nonce: the 13-bit field instead of 32-bit limbs with 64-bit products (9.1 → 17.1M/s) | metal nonce | 1.88× |
