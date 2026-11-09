@@ -39,6 +39,32 @@ test('native config is idempotent, retains unrelated properties, and never lower
   expect(await applyProperties([property('android.minSdkVersion', '24')])).toContainEqual(property('android.minSdkVersion', '26'));
 });
 
+test('iOS adopts the scene lifecycle that iOS 27 requires at launch', async () => {
+  const config = await compileModsAsync(withAnzenRuntime({ ...base }), {
+    projectRoot, platforms: ['ios'], introspect: true, ignoreExistingNativeFiles: true,
+  });
+  const configuration = config.ios!.infoPlist!.UIApplicationSceneManifest.UISceneConfigurations.UIWindowSceneSessionRoleApplication[0];
+  expect(configuration.UISceneDelegateClassName).toBe('$(PRODUCT_MODULE_NAME).SceneDelegate');
+
+  // The window block from Expo SDK 57's AppDelegate.swift template.
+  const template = `  ) -> Bool {
+#if os(iOS) || os(tvOS)
+    window = UIWindow(frame: UIScreen.main.bounds)
+    factory.startReactNative(
+      withModuleName: "main",
+      in: window,
+      launchOptions: launchOptions)
+#endif
+
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+`;
+  const adopted = withAnzenRuntime.adoptSceneLifecycle(template);
+  expect(adopted).not.toContain('UIScreen.main.bounds');
+  expect(adopted).toContain('class SceneDelegate: UIResponder, UIWindowSceneDelegate');
+  expect(withAnzenRuntime.adoptSceneLifecycle(adopted)).toBe(adopted);
+  expect(() => withAnzenRuntime.adoptSceneLifecycle('class AppDelegate {}')).toThrow('no longer matches the Expo template');
+});
+
 test('native config rejects malformed Android API levels', async () => {
   for (const value of ['invalid', '26.5', '-1', '0']) {
     await expect(applyProperties([property('android.minSdkVersion', value)])).rejects.toThrow('Invalid android.minSdkVersion');
