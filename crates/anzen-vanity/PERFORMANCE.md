@@ -193,7 +193,7 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | A negative digit's sign folded into the XYZZ addition (R from y2·ZZZ ± Y1 and the direction of Q − X3, chosen limb by limb with `select`) instead of negating the table point's y | nonce | 0.926 (0/60) | The per-limb selects cost far more than the branch and negation |
 | Workgroup size 32 / 128 under XYZZ | nonce | 1.000 / 0.997 | 64 stays |
 | Candidates per thread 16 / 12 under XYZZ | nonce | 1.000 / 0.982 | 8 stays |
-| Subtractions folded into the preceding products' columns (`f_mul_sub`, `f_sqr_sub_sub_double`: four fewer normalizations per addition; the model passes) | nonce | 0.896 (0/60) | Two more copies of the large product body cost far more than the normalizations; code size matters here |
+| Subtractions folded into the preceding products' columns (`f_mul_sub`, `f_sqr_sub_sub_double`: four fewer normalizations per addition; the model passes) | nonce | 0.896 (0/60) | The subtrahend's 20 limbs stay live through the whole product, since Karatsuba assembles the columns at the end: 20 more registers at the product's peak, where pressure is worst. Any fused form has this cost |
 | The window loop's trip count hidden from the compiler (to stop any unrolling) | nonce | 1.000 (19/40) | It was not being unrolled |
 | SHA-256 written straight-line (constant indices, rolling 16-word schedule, inlined constants) | nonce | 1.004 (55/60) | The compiler already unrolls the loops |
 | `f_reduce` splitting each high column into three 13-bit pieces instead of a 19-step carry chain (no dependent steps; the model passes) | nonce | 0.927 (0/60) | More operations; the kernel is throughput-bound, not latency-bound |
