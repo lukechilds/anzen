@@ -28,20 +28,27 @@ const P_TARGET_BITS: u32 = 3u;
 
 @group(0) @binding(0) var<storage, read> params: array<u32>;
 // Affine multiples of G: entry (window w, digit d) is d·2^(G_WINDOW_BITS·w)·G, for d in
-// 1..2^G_WINDOW_BITS.
+// 1..=G_DIGITS. Digits are signed, so negative ones use the entry for their magnitude with −y.
 @group(0) @binding(1) var<storage, read> g_table: array<u32>;
 @group(0) @binding(2) var<storage, read_write> found: array<atomic<u32>, 1>;
 // Debug only: per candidate, a validity word then the output key's x limbs.
 @group(0) @binding(3) var<storage, read_write> debug_out: array<u32>;
-// Q + d·G for every digit d of window 0 (Q itself at d = 0), as affine 8-limb x then y. One
-// search's setup pass writes it, so candidates start from it and skip one addition.
+// Q + d·G for every digit d of window 0, at index G_DIGITS + d (Q itself in the middle), as
+// affine 8-limb x then y. One search's setup pass writes it, so candidates start from it and
+// skip one addition.
 @group(0) @binding(4) var<storage, read_write> q_table: array<u32>;
+// The generator table again, writable, for the setup pass that builds it. WebGPU forbids binding
+// one buffer both ways at once, so searches bind a placeholder here.
+@group(0) @binding(5) var<storage, read_write> table_out: array<u32>;
 
 // Tuning. The host reads these constants from the shader source to build tables and size
 // dispatches to match, so a shader change can vary them on its own. The kernel file defines
 // WORKGROUP_SIZE and PER_INVOCATION.
-const G_WINDOW_BITS: u32 = 16u;
-const G_DIGITS: u32 = (1u << G_WINDOW_BITS) - 1u;
+// Signed digits from −2^(G_WINDOW_BITS − 1) to 2^(G_WINDOW_BITS − 1): 18-bit windows need 15 of
+// them for 256 bits with a table of 2^17 points per window, 126 MB, under browsers' 128 MiB.
+const G_WINDOW_BITS: u32 = 18u;
+const G_SIGNED: u32 = 1u;
+const G_DIGITS: u32 = 1u << (G_WINDOW_BITS - 1u);
 const G_WINDOWS: u32 = (256u + G_WINDOW_BITS - 1u) / G_WINDOW_BITS;
 
 const ORDER_N = Fe(0xD0364141u, 0xBFD25E8Cu, 0xAF48A03Bu, 0xBAAEDCE6u, 0xFFFFFFFEu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu);

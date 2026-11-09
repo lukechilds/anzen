@@ -102,6 +102,8 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| Signed 18-bit windows: digits from −2^17 to 2^17 (negative ones negate y), 15 windows instead of 16, so 14 additions with Q folded in; the table is 15 × 2^17 points, 126 MB, under browsers' 128 MiB default. Built on the GPU (next row) so setup does not double | nonce | 1.0458 (60/60) |
+| Generator table built on the GPU: the CPU computes lo·B and (hi·512)·B per window (~11,000 points) and each GPU thread adds one pair and inverts it, in 32,768-thread submissions. Setup on the M4 Max 0.45 → 0.14 s warm; in Chrome the single-thread WASM table build of ~4 s is gone. A test compares all 2M entries with the CPU's table | nonce | setup only |
 | Q folded into window 0: each search's setup pass writes Q + d·G for every window-0 digit (Q at d = 0) on the GPU, one addition and inversion per thread, in milliseconds; candidates start from that entry and make 15 additions instead of 16 | nonce | 1.0575 (60/60) |
 | Metal: point addition and field inversion `noinline` (smaller code, better instruction cache; matches the research) | metal key / metal nonce | 1.039 / 1.108 |
 | Metal nonce: back to the 32-bit field now that it uses mulhi and 32-bit carries (from the 13-bit field) | metal nonce | 1.143 |

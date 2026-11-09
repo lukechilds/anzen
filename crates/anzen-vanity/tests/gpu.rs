@@ -27,10 +27,12 @@ fn library_nonce_output_key(
 fn nonce_setup() -> Option<(GpuSearch, XOnlyPublicKey, XOnlyPublicKey, NonceInputs)> {
     let gpu = match GpuSearch::open() {
         Ok(gpu) => gpu,
-        Err(error) => {
+        // Only a machine without a GPU skips; a rejected shader or pipeline must fail.
+        Err(error) if error.to_string().contains("no GPU adapter") => {
             eprintln!("skipping: {error:#}");
             return None;
         }
+        Err(error) => panic!("{error:#}"),
     };
     let secp = Secp256k1::new();
     let phone = DeviceKeys::generate_for_network(&secp, Network::Regtest).unwrap();
@@ -89,7 +91,8 @@ fn nonce_search_finds_the_first_match_miniscript_agrees_with() {
 }
 
 /// A locktime whose tweak has a zero window-0 digit starts from Q itself, not a table entry with
-/// a multiple of G added: about one candidate in 65,536, so find one on the CPU and check it.
+/// a multiple of G added: with 18-bit windows, about one candidate in 262,144, so find one on the
+/// CPU and check it.
 #[test]
 fn a_zero_first_window_digit_starts_from_q() {
     use bitcoin::{
@@ -112,12 +115,12 @@ fn a_zero_first_window_digit_starts_from_q() {
             .into_script();
         TapLeafHash::from_script(&script, LeafVersion::TapScript)
     };
-    // The tweak is a big-endian scalar, so window 0 is its last two bytes.
+    // The tweak is a big-endian scalar, so window 0 is its low 18 bits.
     let locktime = (anzen_vanity::NONCE_LOCKTIMES.start..)
         .find(|&locktime| {
             let root = TapNodeHash::from(leaf(locktime));
             let tweak = TapTweakHash::from_key_and_tweak(internal, Some(root)).to_byte_array();
-            tweak[30] == 0 && tweak[31] == 0
+            tweak[29] & 0x03 == 0 && tweak[30] == 0 && tweak[31] == 0
         })
         .unwrap();
     let keys = gpu
@@ -127,4 +130,18 @@ fn a_zero_first_window_digit_starts_from_q() {
         keys[0],
         Some(library_nonce_output_key(&internal, &signer, locktime))
     );
+}
+
+/// The GPU builds the generator table from a small CPU one; every entry must match the table
+/// the CPU builds directly.
+#[test]
+fn the_gpu_builds_the_same_generator_table_as_the_cpu() {
+    let Some((gpu, ..)) = nonce_setup() else {
+        return;
+    };
+    let (on_gpu, on_cpu) = gpu.generator_tables_blocking().unwrap();
+    assert_eq!(on_gpu.len(), on_cpu.len());
+    if let Some(word) = on_gpu.iter().zip(&on_cpu).position(|(a, b)| a != b) {
+        panic!("table entry {} differs", word / 16);
+    }
 }

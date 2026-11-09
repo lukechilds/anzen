@@ -1355,8 +1355,10 @@ mod tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn gpu_vanity_search_finds_a_locktime_the_library_confirms() {
-        if anzen_vanity::GpuSearch::open().is_err() {
-            eprintln!("skipping: no GPU adapter");
+        // Only a machine without a GPU skips; a rejected shader must fail.
+        if let Err(error) = anzen_vanity::GpuSearch::open() {
+            assert!(error.to_string().contains("no GPU adapter"), "{error:#}");
+            eprintln!("skipping: {error:#}");
             return;
         }
         let network = Network::Signet;

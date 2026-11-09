@@ -25,10 +25,12 @@ fn from_words(words: &[u32]) -> BigUint {
 fn field_operations_match_bignum_arithmetic() {
     let gpu = match GpuSearch::open() {
         Ok(gpu) => gpu,
-        Err(error) => {
+        // Only a machine without a GPU skips; a rejected shader or pipeline must fail.
+        Err(error) if error.to_string().contains("no GPU adapter") => {
             eprintln!("skipping: {error:#}");
             return;
         }
+        Err(error) => panic!("{error:#}"),
     };
     let p = p();
     let one = BigUint::from(1_u8);

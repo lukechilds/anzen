@@ -54,14 +54,15 @@ fn projective(locktime: u32) -> Projective {
     }
 
     // 3. output = Q_even + t·G: window 0 with Q already added, then the other windows.
-    let start = q_point(window_digit(tweak, 0u, G_WINDOW_BITS));
-    result.point = jac_add_mul_g(jac_from_affine(start), tweak, 1u);
+    let window0 = signed_digit(tweak, 0u, 0u);
+    result.point = jac_add_mul_g(jac_from_affine(q_point(window0)), tweak, window0.carry);
     result.valid = !result.point.infinity;
     return result;
 }
 
-fn q_point(digit: u32) -> AffF {
-    let base = digit * 16u;
+fn q_point(digit: Digit) -> AffF {
+    let index = select(G_DIGITS + digit.magnitude, G_DIGITS - digit.magnitude, digit.negative);
+    let base = index * 16u;
     var x: Fe;
     var y: Fe;
     for (var i = 0u; i < 8u; i++) {
@@ -71,27 +72,91 @@ fn q_point(digit: u32) -> AffF {
     return AffF(fe_to_f(x), fe_to_f(y), false);
 }
 
-// The setup pass: q_table[d] = Q + d·G for d in 0..2^G_WINDOW_BITS, each made affine with its
-// own inversion. Q = ±d·G happens with probability about 2^-240; the host re-derives any match.
+// The setup pass: q_table[G_DIGITS + d] = Q + d·G for d in −G_DIGITS..=G_DIGITS, each made
+// affine with its own inversion. Q = ±d·G happens with probability about 2^-237; the host
+// re-derives any match.
 @compute @workgroup_size(64)
 fn fold_q(@builtin(global_invocation_id) id: vec3<u32>) {
-    let digit = id.x;
-    if digit > G_DIGITS {
+    // The host runs this in chunks and passes each chunk's first index in params[0].
+    let index = params[0] + id.x;
+    if index > 2u * G_DIGITS {
         return;
     }
     var x = read_fe(P_INTERNAL_X);
     var y = read_fe(P_INTERNAL_Y);
-    if digit != 0u {
+    if index != G_DIGITS {
+        let negative = index < G_DIGITS;
+        let digit = Digit(select(index - G_DIGITS, G_DIGITS - index, negative), negative, 0u);
         let q = AffF(fe_to_f(x), fe_to_f(y), false);
-        let sum = jac_add_affine(jac_from_affine(q), g_point_f(0u, digit));
+        let sum = jac_add_affine(jac_from_affine(q), g_point_signed(0u, digit));
         let z_inverse = f_inv(sum.z);
         let z_inverse2 = f_sqr(z_inverse);
         x = f_to_fe(f_canonical(f_mul(sum.x, z_inverse2)));
         y = f_to_fe(f_canonical(f_mul(sum.y, f_mul(z_inverse2, z_inverse))));
     }
     for (var i = 0u; i < 8u; i++) {
-        q_table[digit * 16u + i] = x[i];
-        q_table[digit * 16u + 8u + i] = y[i];
+        q_table[index * 16u + i] = x[i];
+        q_table[index * 16u + 8u + i] = y[i];
+    }
+}
+
+// The generator table's setup pass. The host sends, per window, lo·B for lo in 1..512 then
+// (hi·512)·B for hi in 1..=G_DIGITS/512, where B = 2^(G_WINDOW_BITS·w)·G; each thread writes one
+// entry d·B = (hi·512)·B + lo·B with one addition and one inversion. hi·512 = ±lo never holds,
+// so the addition needs no special cases. The host runs it in chunks, passing each chunk's first
+// entry in params[0].
+const SPLIT_BITS: u32 = 9u;
+const LO_POINTS: u32 = (1u << SPLIT_BITS) - 1u;
+const HI_POINTS: u32 = G_DIGITS >> SPLIT_BITS;
+
+fn small_point(index: u32) -> array<u32, 16> {
+    var words: array<u32, 16>;
+    for (var i = 0u; i < 16u; i++) {
+        words[i] = params[4u + index * 16u + i];
+    }
+    return words;
+}
+
+fn words_to_affine(words: array<u32, 16>) -> AffF {
+    var x: Fe;
+    var y: Fe;
+    for (var i = 0u; i < 8u; i++) {
+        x[i] = words[i];
+        y[i] = words[8u + i];
+    }
+    return AffF(fe_to_f(x), fe_to_f(y), false);
+}
+
+@compute @workgroup_size(64)
+fn build_table(@builtin(global_invocation_id) id: vec3<u32>) {
+    let entry = params[0] + id.x;
+    if entry >= G_WINDOWS * G_DIGITS {
+        return;
+    }
+    let window = (entry / G_DIGITS) * (LO_POINTS + HI_POINTS);
+    let digit = entry % G_DIGITS + 1u;
+    let hi = digit >> SPLIT_BITS;
+    let lo = digit & LO_POINTS;
+    var words: array<u32, 16>;
+    if hi == 0u {
+        words = small_point(window + lo - 1u);
+    } else if lo == 0u {
+        words = small_point(window + LO_POINTS + hi - 1u);
+    } else {
+        let low = words_to_affine(small_point(window + lo - 1u));
+        let high = words_to_affine(small_point(window + LO_POINTS + hi - 1u));
+        let sum = jac_add_affine(jac_from_affine(high), low);
+        let z_inverse = f_inv(sum.z);
+        let z_inverse2 = f_sqr(z_inverse);
+        let x = f_to_fe(f_canonical(f_mul(sum.x, z_inverse2)));
+        let y = f_to_fe(f_canonical(f_mul(sum.y, f_mul(z_inverse2, z_inverse))));
+        for (var i = 0u; i < 8u; i++) {
+            words[i] = x[i];
+            words[8u + i] = y[i];
+        }
+    }
+    for (var i = 0u; i < 16u; i++) {
+        table_out[entry * 16u + i] = words[i];
     }
 }
 
