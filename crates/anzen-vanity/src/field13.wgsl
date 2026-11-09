@@ -938,24 +938,24 @@ fn g_point_f(window: u32, digit: u32) -> AffF {
     return AffF(fe_to_f(q.x), fe_to_f(q.y), false);
 }
 
-// Window w's digit of k as a magnitude and sign: its bits plus the carry from the window below,
-// less 2^G_WINDOW_BITS (carrying one up) when above G_DIGITS. The top window holds only k's top
-// bits, so it never carries out.
+// The digit of k's bits bit..bit + width as a magnitude and sign: those bits plus the carry from
+// the window below, less 2^width (carrying one up) when above 2^(width − 1). The top window
+// reaches past k's top bit, so it never carries out.
 struct Digit {
     magnitude: u32,
     negative: bool,
     carry: u32,
 }
 
-fn signed_digit(k: Fe, w: u32, carry: u32) -> Digit {
-    let d = window_digit(k, w * G_WINDOW_BITS, G_WINDOW_BITS) + carry;
-    if d > G_DIGITS {
-        return Digit((1u << G_WINDOW_BITS) - d, true, 1u);
+fn signed_digit(k: Fe, bit: u32, width: u32, carry: u32) -> Digit {
+    let d = window_digit(k, bit, width) + carry;
+    if d > (1u << (width - 1u)) {
+        return Digit((1u << width) - d, true, 1u);
     }
     return Digit(d, false, 0u);
 }
 
-// ±(magnitude·2^(G_WINDOW_BITS·w))·G; the magnitude must be nonzero.
+// ±(magnitude·2^G_SHIFTS[w])·G; the magnitude must be nonzero.
 fn g_point_signed(w: u32, digit: Digit) -> AffF {
     var q = g_point_f(w, digit.magnitude);
     if digit.negative {
@@ -964,13 +964,13 @@ fn g_point_signed(w: u32, digit: Digit) -> AffF {
     return q;
 }
 
-// acc + k·G from the table from window 1 up, with window 0's carry: one mixed addition per
+// acc + k·G from the generator table's windows, with window 0's carry: one mixed addition per
 // nonzero window.
 fn jac_add_mul_g(start: JacF, k: Fe, carry_in: u32) -> JacF {
     var acc = start;
     var carry = carry_in;
-    for (var w = 1u; w < G_WINDOWS; w++) {
-        let digit = signed_digit(k, w, carry);
+    for (var w = 0u; w < G_WINDOWS; w++) {
+        let digit = signed_digit(k, G_SHIFTS[w], G_WIDTHS[w], carry);
         carry = digit.carry;
         if digit.magnitude != 0u {
             acc = jac_add_affine(acc, g_point_signed(w, digit));

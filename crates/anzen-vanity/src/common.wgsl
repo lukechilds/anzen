@@ -27,15 +27,16 @@ const P_TARGET_VALUE: u32 = 2u;
 const P_TARGET_BITS: u32 = 3u;
 
 @group(0) @binding(0) var<storage, read> params: array<u32>;
-// Affine multiples of G: entry (window w, digit d) is d·2^(G_WINDOW_BITS·w)·G, for d in
-// 1..=G_DIGITS. Digits are signed, so negative ones use the entry for their magnitude with −y.
+// Affine multiples of G: window w's entries, from G_BASES[w], are d·2^G_SHIFTS[w]·G for d in
+// 1..=2^(G_WIDTHS[w] − 1). Digits are signed, so negative ones use their magnitude's entry
+// with −y.
 @group(0) @binding(1) var<storage, read> g_table: array<u32>;
 @group(0) @binding(2) var<storage, read_write> found: array<atomic<u32>, 1>;
 // Debug only: per candidate, a validity word then the output key's x limbs.
 @group(0) @binding(3) var<storage, read_write> debug_out: array<u32>;
-// Q + d·G for every digit d of window 0, at index G_DIGITS + d (Q itself in the middle), as
-// affine 8-limb x then y. One search's setup pass writes it, so candidates start from it and
-// skip one addition.
+// Q + d·G for every digit d of window 0 (bits 0..Q_BITS), at index Q_DIGITS + d (Q itself in the
+// middle), as affine 8-limb x then y. One search's setup pass writes it, so candidates start
+// from it and skip one addition.
 @group(0) @binding(4) var<storage, read_write> q_table: array<u32>;
 // The generator table again, writable, for the setup pass that builds it. WebGPU forbids binding
 // one buffer both ways at once, so searches bind a placeholder here.
@@ -44,12 +45,18 @@ const P_TARGET_BITS: u32 = 3u;
 // Tuning. The host reads these constants from the shader source to build tables and size
 // dispatches to match, so a shader change can vary them on its own. The kernel file defines
 // WORKGROUP_SIZE and PER_INVOCATION.
-// Signed digits from −2^(G_WINDOW_BITS − 1) to 2^(G_WINDOW_BITS − 1): 18-bit windows need 15 of
-// them for 256 bits with a table of 2^17 points per window, 126 MB, under browsers' 128 MiB.
-const G_WINDOW_BITS: u32 = 18u;
-const G_SIGNED: u32 = 1u;
-const G_DIGITS: u32 = 1u << (G_WINDOW_BITS - 1u);
-const G_WINDOWS: u32 = (256u + G_WINDOW_BITS - 1u) / G_WINDOW_BITS;
+// Signed digits in windows of varying width. Window 0, 20 bits, folds into each search's
+// q_table (2^20 + 1 points, 64 MB); the generator table's 13 windows cover bits 20..256 (one bit
+// to spare for the top window's carry) in exactly 2^21 points, 128 MiB, browsers' default
+// limit. 13 additions per candidate. The host reads Q_BITS and G_WIDTHS and checks the derived
+// G_SHIFTS and G_BASES against its own.
+const Q_BITS: u32 = 20u;
+const Q_DIGITS: u32 = 1u << (Q_BITS - 1u);
+const G_WINDOWS: u32 = 13u;
+const G_WIDTHS = array<u32, 13>(19u, 19u, 19u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u, 18u);
+const G_SHIFTS = array<u32, 13>(20u, 39u, 58u, 77u, 95u, 113u, 131u, 149u, 167u, 185u, 203u, 221u, 239u);
+const G_BASES = array<u32, 13>(0u, 262144u, 524288u, 786432u, 917504u, 1048576u, 1179648u, 1310720u, 1441792u, 1572864u, 1703936u, 1835008u, 1966080u);
+const G_ENTRIES: u32 = 2097152u;
 
 const ORDER_N = Fe(0xD0364141u, 0xBFD25E8Cu, 0xAF48A03Bu, 0xBAAEDCE6u, 0xFFFFFFFEu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu);
 
@@ -81,7 +88,7 @@ fn infinity() -> Jacobian {
 }
 
 fn g_point(window: u32, digit: u32) -> Affine {
-    let base = (window * G_DIGITS + digit - 1u) * 16u;
+    let base = (G_BASES[window] + digit - 1u) * 16u;
     var q: Affine;
     for (var i = 0u; i < 8u; i++) {
         q.x[i] = g_table[base + i];

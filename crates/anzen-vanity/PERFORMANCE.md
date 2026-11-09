@@ -72,8 +72,8 @@ Chrome's WebGPU compiled the key kernel better than naga did natively (4.53M/s a
 Ablating the nonce kernel at the start (8-bit windows): the 32 table additions for `t·G` were
 ~67% of its time, the final inversion ~32%, and its three SHA-256 compressions under 1%.
 
-After the third loop's field changes (18-bit signed windows, Q folded in): the 13 additions are
-~82% of the time (6.3% each) and the inversion ~9%.
+After the third loop's field changes (18-bit signed windows, Q folded in): the 14 additions are
+~82% of the time (about 5.9% each) and the inversion ~9%.
 
 With 16-bit windows and 8 candidates per inversion (early in the third loop, paired against the
 kernel itself): the 16 table additions are **~85%** of the time (removing them runs 6.6× faster), about
@@ -106,6 +106,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| 13 additions instead of 14 with varying window widths that fill both per-binding limits: window 0 is 20 bits (its Q table is 2^20 + 1 points, 64 MB), and the generator table's 13 windows of 19, 19, 19 and ten 18 bits hold exactly 2^21 points (128 MiB), covering 257 bits. Setup builds the same number of points, plus a million-point Q fold per search. Measured in alternating whole runs (the host changed): 1.0738 over 10 rounds. While building it, a version computing a split multiple with point arithmetic in several branches came out of Apple's compiler wrong; the arithmetic now appears once and new tests check every table entry | nonce | 1.0738 |
 | `f_reduce` ends with a tail to limb 6 and nothing more: only limbs 0..4 exceed 13 bits after its last small fold, so limb 6 takes at most one carry and ends at most 2^13, which the relaxed invariant allows (the branch that crashed Apple's compiler is not needed). The value can pass 2^260 only when limbs 7..19 are all 8191 (the model finds it only for (2^260 − 1)²); `tools/model_canonical.py` and the other models cover such inputs | nonce | 1.0686 (60/60) |
 | Fused add/subtract forms in the mixed addition (4·HH, 2(S2 − Y1), R² − J − 2V and M − 2·Y1J each with one light normalization instead of two or three): five fewer normalizations per addition. `tools/model_light.py` checks every light-normalized form; it also showed the existing ones can leave one limb at exactly 2^13, which every bound allows, so the documented invariant is now limbs at most 2^13 | nonce | 1.0486 (60/60) |
 | A second Karatsuba level on the low and high 5-limb halves (their sums stay below 2^14; the middle product's would not, so it stays schoolbook): 250 limb products per multiply instead of 300 | nonce | 1.0235 (60/60), 1.0229 (79/80) |
