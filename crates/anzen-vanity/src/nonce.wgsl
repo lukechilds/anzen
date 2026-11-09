@@ -19,9 +19,11 @@ const P_INTERNAL_Y: u32 = 52u;
 const PER_INVOCATION: u32 = 8u;
 const WORKGROUP_SIZE: u32 = 64u;
 
-// Q + t·G in Jacobian coordinates for one locktime; `valid` is false when t >= n.
+// X and ZZ of Q + t·G in XYZZ coordinates for one locktime (the output key's x is X/ZZ); `valid`
+// is false when t >= n.
 struct Projective {
-    point: JacF,
+    x: F,
+    zz: F,
     valid: bool,
 }
 
@@ -55,8 +57,10 @@ fn projective(locktime: u32) -> Projective {
 
     // 3. output = Q_even + t·G: window 0 with Q already added, then the other windows.
     let window0 = signed_digit(tweak, 0u, Q_BITS, 0u);
-    result.point = jac_add_mul_g(jac_from_affine(q_point(window0)), tweak, window0.carry);
-    result.valid = !result.point.infinity;
+    let point = xyzz_add_mul_g(q_point(window0), tweak, window0.carry);
+    result.x = point.x;
+    result.zz = point.zz;
+    result.valid = true;
     return result;
 }
 
@@ -206,12 +210,12 @@ fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
     for (var j = 0u; j < PER_INVOCATION; j++) {
         points[j] = projective(first + j);
         if !points[j].valid {
-            points[j].point.z = one;
+            points[j].zz = one;
         }
         if j == 0u {
-            products[j] = points[j].point.z;
+            products[j] = points[j].zz;
         } else {
-            products[j] = f_mul(products[j - 1u], points[j].point.z);
+            products[j] = f_mul(products[j - 1u], points[j].zz);
         }
     }
     var inverse = f_inv(products[PER_INVOCATION - 1u]);
@@ -220,10 +224,10 @@ fn candidates(first: u32) -> array<Candidate, PER_INVOCATION> {
         var z_inverse = inverse;
         if j > 0u {
             z_inverse = f_mul(inverse, products[j - 1u]);
-            inverse = f_mul(inverse, points[j].point.z);
+            inverse = f_mul(inverse, points[j].zz);
         }
         batch[j].valid = points[j].valid;
-        batch[j].output_x = f_to_fe(f_canonical(f_mul(points[j].point.x, f_sqr(z_inverse))));
+        batch[j].output_x = f_to_fe(f_canonical(f_mul(points[j].x, z_inverse)));
     }
     return batch;
 }

@@ -965,6 +965,49 @@ fn g_point_signed(first: u32, digit: Digit) -> AffF {
     return q;
 }
 
+// A point in XYZZ coordinates: x = X/ZZ and y = Y/ZZZ, with ZZ³ = ZZZ².
+struct XyzzF {
+    x: F,
+    y: F,
+    zz: F,
+    zzz: F,
+}
+
+// XYZZ plus affine (madd-2008-s, 8M + 2S), without the P = ±Q cases, as jac_add_affine.
+fn xyzz_add_affine(p: XyzzF, q: AffF) -> XyzzF {
+    let pp_base = f_sub(f_mul(q.x, p.zz), p.x);
+    let r = f_sub(f_mul(q.y, p.zzz), p.y);
+    let pp = f_sqr(pp_base);
+    let ppp = f_mul(pp_base, pp);
+    let zz3 = f_mul(p.zz, pp);
+    let zzz3 = f_mul(p.zzz, ppp);
+    let q_term = f_mul(p.x, pp);
+    let x3 = f_sub_sub_double(f_sqr(r), ppp, q_term);
+    let y3 = f_sub(f_mul(r, f_sub(q_term, x3)), f_mul(p.y, ppp));
+    return XyzzF(x3, y3, zz3, zzz3);
+}
+
+// start + k·G from the generator table's windows, with window 0's carry: one mixed addition per
+// nonzero window, in XYZZ coordinates.
+fn xyzz_add_mul_g(start: AffF, k: Fe, carry_in: u32) -> XyzzF {
+    let one = f_one();
+    var acc = XyzzF(start.x, start.y, one, one);
+    var carry = carry_in;
+    var shift = Q_BITS;
+    var first = 0u;
+    for (var w = 0u; w < G_WINDOWS; w++) {
+        let width = select(G_WIDTH, G_WIDTH + 1u, w < G_WIDE);
+        let digit = signed_digit(k, shift, width, carry);
+        carry = digit.carry;
+        if digit.magnitude != 0u {
+            acc = xyzz_add_affine(acc, g_point_signed(first, digit));
+        }
+        shift += width;
+        first += 1u << (width - 1u);
+    }
+    return acc;
+}
+
 // acc + k·G from the generator table's windows, with window 0's carry: one mixed addition per
 // nonzero window.
 fn jac_add_mul_g(start: JacF, k: Fe, carry_in: u32) -> JacF {
