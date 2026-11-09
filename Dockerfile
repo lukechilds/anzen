@@ -1,27 +1,25 @@
 FROM rust:1.88-bookworm AS base
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libsqlite3-dev pkg-config \
+    && apt-get install -y --no-install-recommends jq libsqlite3-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
 # Reduce the workspace to its manifests plus placeholder targets. Only this stage's output is
 # copied into the dependency stages, so their layers stay cached while application code changes.
+# Cargo lists every target it would build, declared or discovered, so each gets a placeholder
+# and new crates, binaries, tests or examples need no change here.
 FROM base AS manifests
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN find crates -type f ! -name Cargo.toml -delete \
-    && for crate in crates/*; do \
-        mkdir -p "$crate/src" && printf '' > "$crate/src/lib.rs"; \
-    done \
-    && printf 'fn main() {}\n' > crates/anzen-cli/src/main.rs \
-    && printf 'fn main() {}\n' > crates/anzen-playground/src/main.rs \
-    && mkdir -p crates/anzen-vanity/examples crates/anzen-vanity/tests \
-    && printf 'fn main() {}\n' > crates/anzen-vanity/examples/benchmark.rs \
-    && printf '' > crates/anzen-vanity/tests/gpu.rs \
-    && rm crates/anzen-cli/src/lib.rs crates/anzen-playground/src/lib.rs
+RUN cargo metadata --no-deps --format-version 1 --locked \
+        | jq -r '.packages[].targets[].src_path' > /tmp/targets \
+    && find crates -type f ! -name Cargo.toml -delete \
+    && while read -r target; do \
+        mkdir -p "$(dirname "$target")" && printf 'fn main() {}\n' > "$target"; \
+    done < /tmp/targets
 
 FROM base AS release-dependencies
 
