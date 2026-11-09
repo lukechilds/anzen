@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import Svg, { Defs, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 import AnzenApp, { Button } from './AnzenApp';
 import { DeviceTransport, JsonObject, ProtocolMessage, Role, Tap, TapAnswer } from './transport';
 import { colors, formatBtc, styles as s } from './theme';
@@ -57,6 +58,39 @@ async function request(path: string, capability: string, body: JsonObject): Prom
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
   return result;
+}
+
+// A phone in the signer's finish: an anodised metal body with a bright machined edge, lit from
+// the top left, a two-layer shadow, and black glass inset behind a thin bezel. `on` false (the
+// signer, which draws its own body) leaves the children as they are.
+function PhoneBody({ id, on, children }: { id: number; on: boolean; children: React.ReactNode }) {
+  if (!on) return <>{children}</>;
+  return <View style={{ flex: 1, borderRadius: 58, padding: 11, backgroundColor: '#16161a',
+    boxShadow: [
+      'inset 0 0 0 1.5px rgba(255,255,255,.2)', // the machined edge
+      'inset 0 2px 1px -1px rgba(255,255,255,.3)', // its highlight along the top
+      'inset 0 -3px 4px rgba(0,0,0,.45)', // and its shade along the bottom
+      '0 30px 34px rgba(0,0,0,.55)', '0 8px 10px rgba(0,0,0,.4)',
+    ].join(', ') } as object}>
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderRadius: 58, overflow: 'hidden' }]}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <LinearGradient id={`phone-metal-${id}`} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#26262c"/><Stop offset=".5" stopColor="#17171b"/><Stop offset="1" stopColor="#0f0f12"/>
+          </LinearGradient>
+          <RadialGradient id={`phone-glare-${id}`} cx="22%" cy="6%" r="70%">
+            <Stop offset="0" stopColor="#fff" stopOpacity={.06}/><Stop offset=".6" stopColor="#fff" stopOpacity={0}/>
+          </RadialGradient>
+        </Defs>
+        <Rect width="100%" height="100%" fill={`url(#phone-metal-${id})`}/>
+        <Rect width="100%" height="100%" fill={`url(#phone-glare-${id})`}/>
+      </Svg>
+    </View>
+    {/* The glass: black, with a faint edge where it meets the bezel. */}
+    <View style={{ flex: 1, borderRadius: 47, overflow: 'hidden', backgroundColor: '#000', boxShadow: '0 0 0 1px rgba(0,0,0,.9), 0 0 0 1.5px rgba(255,255,255,.05)' } as object}>
+      {children}
+    </View>
+  </View>;
 }
 
 // The playground's stand-in for the Bluetooth link between phone and signer: always in range,
@@ -258,11 +292,12 @@ export default function Playground() {
             {/* Phones get a phone frame; the hardware signer is shown on its own. */}
             <View testID={`device-${transport.role}`} style={transport.role === 'signer'
               ? { width: 375, height: sideBySide ? 812 : 450, maxWidth: width - 64 }
-              : { width: 375, height: 812, maxWidth: width - 64, borderRadius: 58, overflow: 'hidden', padding: 10, backgroundColor: '#0a0a0c',
-                boxShadow: '0 34px 80px rgba(20,18,14,.30)' }}>
-              {switchingIndex === index ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Text style={s.tiny}>Opening…</Text></View> : <AnzenApp key={deviceIds[index] || transport.role} transport={transport} network={network!} incoming={inboxes[index]} dismissIncoming={() => setInboxes(current => current.map((item, i) => i === index ? null : item))}
-                saveBackup={index === 0 ? saveBackup : undefined} cloudBackup={index === 0 ? cloudBackup : null}
-                tap={link} deliver={message => deliverFrom(index, message)} benchmark={index === 0 ? browserBenchmark : undefined} />}
+              : { width: 375, height: 812, maxWidth: width - 64 }}>
+              <PhoneBody id={index} on={transport.role !== 'signer'}>
+                {switchingIndex === index ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Text style={s.tiny}>Opening…</Text></View> : <AnzenApp key={deviceIds[index] || transport.role} transport={transport} network={network!} incoming={inboxes[index]} dismissIncoming={() => setInboxes(current => current.map((item, i) => i === index ? null : item))}
+                  saveBackup={index === 0 ? saveBackup : undefined} cloudBackup={index === 0 ? cloudBackup : null}
+                  tap={link} deliver={message => deliverFrom(index, message)} benchmark={index === 0 ? browserBenchmark : undefined} />}
+              </PhoneBody>
             </View>
             {/* Simulate losing a device: the new one takes its place. */}
             {!mainnet && <View style={{ width: 375, maxWidth: width - 64, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', columnGap: 14, paddingTop: 10 }}>
