@@ -168,8 +168,8 @@ pub(crate) struct VanityPhoneKey {
     pub(crate) searcher: String,
 }
 
-/// Find a vault address that begins with the vanity prefix: on the GPU by grinding the recovery
-/// leaf's locktime for a fresh phone key, or on the CPU by grinding the phone vault-key index.
+/// Find a vault address that begins with the vanity prefix by grinding the recovery leaf's
+/// locktime for a fresh phone key, on the GPU or on every CPU thread.
 pub fn initialize_vanity<F>(
     data_dir: &Path,
     signer: &PublicDeviceFile,
@@ -220,10 +220,86 @@ where
     })
 }
 
-pub(crate) fn available_worker_count() -> usize {
+/// Threads a CPU vanity search uses: every one the system reports.
+pub fn available_worker_count() -> usize {
     thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(1)
+}
+
+/// A finished CPU vanity benchmark.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CpuBenchmark {
+    pub threads: usize,
+    /// Candidates evaluated across every thread.
+    pub attempts: u64,
+    pub seconds: f64,
+    /// Candidates per second.
+    pub rate: f64,
+}
+
+/// The CPU vanity search's throughput on fixed public inputs: `threads` workers grinding recovery
+/// locktimes with the library code, exactly as [`VanityEngine::Cpu`] does, for about `seconds`.
+/// `now` is a clock in seconds: browsers have no `std::time::Instant`, so they pass
+/// `performance.now()`. A single thread runs on the caller's, so it needs no thread support.
+pub fn cpu_vanity_benchmark(
+    seconds: f64,
+    threads: usize,
+    now: impl Fn() -> f64 + Sync,
+) -> Result<CpuBenchmark> {
+    use bitcoin::secp256k1::XOnlyPublicKey;
+    use std::str::FromStr;
+    if threads == 0 {
+        bail!("the benchmark requires at least one thread");
+    }
+    // G and 2G: any valid keys will do.
+    let template = VaultAddressTemplate::new(
+        XOnlyPublicKey::from_str(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )?,
+        XOnlyPublicKey::from_str(
+            "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        )?,
+    )?;
+    let locktimes = anzen_common::RECOVERY_LOCKTIMES;
+    let started = now();
+    let worker = |offset: usize| -> Result<u64> {
+        let mut crypto = anzen_common::protocol::SoftwareCrypto::new();
+        let mut attempts = 0_u64;
+        while now() - started < seconds {
+            for _ in 0..64 {
+                let locktime = locktimes.start
+                    + ((attempts * threads as u64 + offset as u64)
+                        % u64::from(locktimes.len() as u32)) as u32;
+                template.output_key(&mut crypto, locktime)?;
+                attempts += 1;
+            }
+        }
+        Ok(attempts)
+    };
+    let attempts = if threads == 1 {
+        worker(0)?
+    } else {
+        thread::scope(|scope| {
+            let workers = (0..threads)
+                .map(|offset| scope.spawn(move || worker(offset)))
+                .collect::<Vec<_>>();
+            workers.into_iter().try_fold(0_u64, |sum, handle| {
+                Ok::<_, anyhow::Error>(
+                    sum + handle
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("a benchmark thread panicked"))??,
+                )
+            })
+        })?
+    };
+    let elapsed = now() - started;
+    Ok(CpuBenchmark {
+        threads,
+        attempts,
+        seconds: elapsed,
+        rate: attempts as f64 / elapsed.max(f64::MIN_POSITIVE),
+    })
 }
 
 pub(crate) fn grind_vanity_phone_key<F>(
@@ -293,7 +369,8 @@ where
     verified_vanity(
         phone,
         network,
-        &VaultAddressTemplate::new(hww_pubkey, locktime)?,
+        hww_pubkey,
+        locktime,
         suffix,
         result.attempts,
         gpu.adapter_name().to_owned(),
@@ -325,18 +402,15 @@ where
         bail!("vanity search requires at least one worker thread");
     }
     let target = VanityTarget::new(suffix)?;
-    let base_phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
-    let parent = base_phone.vault_parent_xpriv(&Secp256k1::new())?;
-    let template = Arc::new(VaultAddressTemplate::new(
-        hww_pubkey,
-        DEFAULT_RECOVERY_LOCKTIME,
-    )?);
+    let phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
+    let template = Arc::new(VaultAddressTemplate::new(phone.vault_pubkey, hww_pubkey)?);
+    let locktimes = anzen_common::RECOVERY_LOCKTIMES;
     let stopped = Arc::new(AtomicBool::new(false));
     let attempts = Arc::new(AtomicU64::new(0));
     let last_report = Arc::new(AtomicU64::new(0));
     let (sender, receiver) = mpsc::channel::<Result<u32>>();
 
-    let winning_index = thread::scope(|scope| -> Result<u32> {
+    let winning_locktime = thread::scope(|scope| -> Result<u32> {
         for worker in 0..worker_count {
             let sender = sender.clone();
             let template = Arc::clone(&template);
@@ -346,20 +420,17 @@ where
             let report_progress = &report_progress;
             scope.spawn(move || {
                 let result = (|| -> Result<()> {
-                    let secp = Secp256k1::new();
                     let mut crypto = anzen_common::protocol::SoftwareCrypto::new();
-                    let mut index = worker as u64;
+                    let mut locktime = u64::from(locktimes.start) + worker as u64;
                     let stride = worker_count as u64;
                     let mut pending_attempts = 0_u64;
-                    while index < (1_u64 << 31) && !stopped.load(Ordering::Relaxed) {
-                        let (_, _, phone_pubkey) =
-                            DeviceKeys::derive_vault_key_from_parent(&secp, &parent, index as u32)?;
+                    while locktime < u64::from(locktimes.end) && !stopped.load(Ordering::Relaxed) {
                         pending_attempts += 1;
-                        let output_key = template.output_key(&mut crypto, phone_pubkey)?;
+                        let output_key = template.output_key(&mut crypto, locktime as u32)?;
                         if target.matches(&output_key) {
                             attempts.fetch_add(pending_attempts, Ordering::Relaxed);
                             if !stopped.swap(true, Ordering::Relaxed) {
-                                let _ = sender.send(Ok(index as u32));
+                                let _ = sender.send(Ok(locktime as u32));
                             }
                             return Ok(());
                         }
@@ -369,7 +440,7 @@ where
                             pending_attempts = 0;
                             maybe_report_progress(total, &last_report, report_progress);
                         }
-                        index += stride;
+                        locktime += stride;
                     }
                     if pending_attempts != 0 {
                         attempts.fetch_add(pending_attempts, Ordering::Relaxed);
@@ -386,34 +457,38 @@ where
         drop(sender);
         receiver
             .recv()
-            .context("vanity search ended without finding a matching key")?
+            .context("vanity search tried every recovery locktime without a match")?
     })?;
 
     verified_vanity(
-        base_phone.with_vault_key_index(&Secp256k1::new(), winning_index)?,
+        phone,
         network,
-        &template,
+        hww_pubkey,
+        winning_locktime,
         suffix,
         attempts.load(Ordering::Relaxed),
         format!("{worker_count} CPU threads"),
     )
 }
 
-/// A search's winning phone key and recovery locktime, after re-deriving the address with the
-/// library code: a search result is never trusted on its own.
+/// A search's winning recovery locktime, after re-deriving the address through the canonical
+/// Miniscript policy: a search result is never trusted on its own.
 fn verified_vanity(
     phone: DeviceKeys,
     network: Network,
-    template: &VaultAddressTemplate,
+    hww_pubkey: bitcoin::secp256k1::XOnlyPublicKey,
+    recovery_locktime: u32,
     suffix: &str,
     attempts: u64,
     searcher: String,
 ) -> Result<VanityPhoneKey> {
-    let vault_address = template.address(
-        &mut anzen_common::protocol::SoftwareCrypto::new(),
+    let vault_address = anzen_common::policy::VaultPolicy::new_for_network(
         phone.vault_pubkey,
+        hww_pubkey,
+        recovery_locktime,
         network,
-    )?;
+    )?
+    .address;
     let expected_prefix = match network {
         Network::Bitcoin => format!("bc1p{suffix}"),
         Network::Signet => format!("tb1p{suffix}"),
@@ -425,7 +500,7 @@ fn verified_vanity(
     }
     Ok(VanityPhoneKey {
         phone,
-        recovery_locktime: template.recovery_locktime(),
+        recovery_locktime,
         vault_address: vault_address.to_string(),
         attempts,
         searcher,
@@ -1247,6 +1322,26 @@ mod tests {
         assert!(result.vault_address.starts_with("bc1pv"));
         assert_eq!(result.searcher, "4 CPU threads");
         assert!(result.attempts > 0);
+        assert_eq!(result.phone.vault_key_index, 0);
+        assert!(anzen_common::RECOVERY_LOCKTIMES.contains(&result.recovery_locktime));
+    }
+
+    #[test]
+    fn the_cpu_benchmark_counts_candidates_on_every_thread() {
+        let epoch = std::time::Instant::now();
+        let clock = || epoch.elapsed().as_secs_f64();
+        let one = cpu_vanity_benchmark(0.2, 1, clock).unwrap();
+        let two = cpu_vanity_benchmark(0.2, 2, clock).unwrap();
+        assert_eq!((one.threads, two.threads), (1, 2));
+        assert!(one.attempts > 0 && one.seconds >= 0.2);
+        assert!((one.rate - one.attempts as f64 / one.seconds).abs() < 1e-6);
+        assert!(
+            two.attempts > one.attempts,
+            "{} vs {}",
+            two.attempts,
+            one.attempts
+        );
+        assert!(cpu_vanity_benchmark(0.1, 0, clock).is_err());
     }
 
     #[test]
@@ -1274,11 +1369,11 @@ mod tests {
         assert_eq!(result.phone.vault_key_index, 0);
         assert!(anzen_common::RECOVERY_LOCKTIMES.contains(&result.recovery_locktime));
         let template =
-            VaultAddressTemplate::new(hww.vault_pubkey, result.recovery_locktime).unwrap();
+            VaultAddressTemplate::new(result.phone.vault_pubkey, hww.vault_pubkey).unwrap();
         let address = template
             .address(
                 &mut anzen_common::protocol::SoftwareCrypto::new(),
-                result.phone.vault_pubkey,
+                result.recovery_locktime,
                 network,
             )
             .unwrap();

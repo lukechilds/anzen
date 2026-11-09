@@ -161,6 +161,21 @@ pub fn hww_recovery_leaf<C: Crypto + ?Sized>(
     )
 }
 
+/// The vault's output key from its internal key, signer key and recovery locktime. Vanity
+/// searches compute the internal key once and call this per locktime.
+pub fn vault_output_key<C: Crypto + ?Sized>(
+    crypto: &mut C,
+    internal_key: &[u8; 32],
+    hww: &XOnlyKey,
+    recovery_locktime: u32,
+) -> Result<TweakedKey> {
+    if !RECOVERY_LOCKTIMES.contains(&recovery_locktime) {
+        return Err(Error::InvalidRecoveryLocktime);
+    }
+    let leaf = hww_recovery_leaf(crypto, hww, recovery_locktime);
+    output_key(crypto, internal_key, leaf)
+}
+
 /// Internal key, leaf, output key and scriptPubKey of the principal-holding vault policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultScript {

@@ -80,8 +80,7 @@ enum PhoneCommand {
         /// bcrt1pvault.
         #[arg(long)]
         vanity: bool,
-        /// Grind phone vault-key indexes on every CPU thread with the library code instead of
-        /// recovery locktimes on the GPU.
+        /// Grind on every CPU thread with the library code instead of the GPU.
         #[arg(long, requires = "vanity")]
         cpu: bool,
     },
@@ -142,8 +141,7 @@ enum PhoneCommand {
         /// Grind until the new vault address begins with bc1pvault, tb1pvault or bcrt1pvault.
         #[arg(long)]
         vanity: bool,
-        /// Grind phone vault-key indexes on every CPU thread with the library code instead of
-        /// recovery locktimes on the GPU.
+        /// Grind on every CPU thread with the library code instead of the GPU.
         #[arg(long, requires = "vanity")]
         cpu: bool,
         #[arg(long)]
@@ -1362,7 +1360,7 @@ fn vanity_engine(cpu: bool) -> hot_wallet::VanityEngine {
 fn engine_label(engine: hot_wallet::VanityEngine) -> &'static str {
     match engine {
         hot_wallet::VanityEngine::Gpu => "recovery locktimes on the GPU",
-        hot_wallet::VanityEngine::Cpu => "phone vault keys across all available CPU threads",
+        hot_wallet::VanityEngine::Cpu => "recovery locktimes across all available CPU threads",
     }
 }
 

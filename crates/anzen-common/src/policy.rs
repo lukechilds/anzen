@@ -1,6 +1,6 @@
 use super::{DEFAULT_RECOVERY_LOCKTIME, HWW_RECOVERY_SEQUENCE, protocol::SoftwareCrypto};
 use anyhow::{Context, Result, bail};
-use anzen_protocol::script::{VaultKeys, VaultScript, XOnlyKey};
+use anzen_protocol::script::{VaultKeys, XOnlyKey};
 use bitcoin::{
     Address, Network, ScriptBuf,
     key::TweakedPublicKey,
@@ -85,50 +85,45 @@ pub struct ControllerPolicy {
     hww: XOnlyPublicKey,
 }
 
-/// Vault output keys for many candidate phone keys with one signer and recovery locktime, while
-/// grinding a vanity address on the CPU. It uses the protocol's own script construction, so it
-/// cannot drift from [`VaultPolicy`]; tests check both anyway.
+/// Vault output keys for one phone and signer key across many recovery locktimes, while grinding
+/// a vanity address on the CPU. The internal key is aggregated once. It uses the protocol's own
+/// script construction, so it cannot drift from [`VaultPolicy`]; tests check both anyway.
 #[derive(Debug, Clone)]
 pub struct VaultAddressTemplate {
+    internal_key: [u8; 32],
     hww_pubkey: XOnlyKey,
-    recovery_locktime: u32,
 }
 
 impl VaultAddressTemplate {
-    pub fn new(hww_pubkey: XOnlyPublicKey, recovery_locktime: u32) -> Result<Self> {
+    pub fn new(phone_pubkey: XOnlyPublicKey, hww_pubkey: XOnlyPublicKey) -> Result<Self> {
         Ok(Self {
+            internal_key: internal_key(phone_pubkey, hww_pubkey)?.serialize(),
             hww_pubkey: XOnlyKey(hww_pubkey.serialize()),
-            recovery_locktime,
         })
-    }
-
-    pub fn recovery_locktime(&self) -> u32 {
-        self.recovery_locktime
     }
 
     pub fn output_key(
         &self,
         crypto: &mut SoftwareCrypto,
-        phone_pubkey: XOnlyPublicKey,
+        recovery_locktime: u32,
     ) -> Result<[u8; 32]> {
-        let keys = VaultKeys {
-            phone: XOnlyKey(phone_pubkey.serialize()),
-            hww: self.hww_pubkey,
-            recovery_locktime: self.recovery_locktime,
-        };
-        Ok(VaultScript::new(crypto, &keys)
-            .map_err(|error| anyhow::anyhow!("{error}"))?
-            .output
-            .output_key)
+        Ok(anzen_protocol::script::vault_output_key(
+            crypto,
+            &self.internal_key,
+            &self.hww_pubkey,
+            recovery_locktime,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?
+        .output_key)
     }
 
     pub fn address(
         &self,
         crypto: &mut SoftwareCrypto,
-        phone_pubkey: XOnlyPublicKey,
+        recovery_locktime: u32,
         network: Network,
     ) -> Result<Address> {
-        let output = XOnlyPublicKey::from_slice(&self.output_key(crypto, phone_pubkey)?)?;
+        let output = XOnlyPublicKey::from_slice(&self.output_key(crypto, recovery_locktime)?)?;
         Ok(Address::p2tr_tweaked(
             TweakedPublicKey::dangerous_assume_tweaked(output),
             network,
@@ -418,11 +413,11 @@ mod tests {
                 network,
             )
             .unwrap();
-            let template = VaultAddressTemplate::new(hww.vault_pubkey, locktime).unwrap();
+            let template = VaultAddressTemplate::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
 
             assert_eq!(
                 template
-                    .address(&mut SoftwareCrypto::new(), phone.vault_pubkey, network)
+                    .address(&mut SoftwareCrypto::new(), locktime, network)
                     .unwrap(),
                 policy.address
             );

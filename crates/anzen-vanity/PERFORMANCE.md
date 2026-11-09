@@ -39,7 +39,9 @@ so setup then also compiled it):
 | iPhone 15 Pro (A17 Pro) | 2.67M/s | ~13 s | 262,144 |
 | iPhone 12 mini (A14) | 1.30M/s | ~26 s | 65,536 |
 
-The CPU path (16 threads, library code) grinds phone keys at about 118k/s.
+The CPU path grinds the same locktimes with the library code: **831k/s** on the M4 Max's 16
+threads (`vault` in ~40 s on average) and 76k/s on one; one thread of browser WASM manages
+~12k/s. Grinding phone keys instead, as it once did, ran at about 118k/s on 16 threads.
 
 The app benchmark (`bench::Plan`) uses the ramp guard and caps each dispatch at ~0.25 s, so a
 phone's GPU stays responsive.
