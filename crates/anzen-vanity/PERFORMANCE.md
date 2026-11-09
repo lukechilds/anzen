@@ -27,13 +27,12 @@ baseline shaders cannot run with, use `--binaries` with more rounds.
 ## Current speed
 
 M4 Max (40-core GPU), cool, 5-second window of the app benchmark (`examples/benchmark.rs run`):
-**~38M/s**, so `vault` takes ~0.9 s on average, after ~0.15 s of setup (compiling the kernel and
+**~40M/s**, so `vault` takes ~0.85 s on average, after ~0.1 s of setup (compiling the kernel and
 building the 128 MiB generator table on the GPU); `anzen phone init --vanity` on regtest finds one
 in ~1.4 s end to end. Sustained load throttles by up to ~25% within a minute, and much further
-after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~36M/s** (measured before the last
-safegcd change).
+after hours of benchmarking. Chrome's WebGPU on the same Mac runs the same kernel at **~36.4M/s**.
 
-The third loop took the kernel from ~19.5M/s to ~38M/s (1.95×): Q folded into window 0, signed
+The third loop took the kernel from ~19.5M/s to ~40M/s (2.05×): Q folded into window 0, signed
 and then varying window widths (16 additions to 13), the generator table built on the GPU, a
 reordered mixed addition, Karatsuba products, shorter reductions, fused normalizations, XYZZ
 coordinates, an affine first addition and safegcd inversion. Under browsers' 128 MiB per-binding limit 13 additions is the floor: 12 would need a
