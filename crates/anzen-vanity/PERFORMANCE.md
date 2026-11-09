@@ -147,6 +147,7 @@ What other secp256k1 GPU engines do, and whether it applies here:
 
 | Change | Kernel | Speedup |
 |---|---|---|
+| The generator table's small CPU tables (~10,000 points from libsecp256k1) built one window per thread on native hosts: 20 → 3.3 ms of the M4 Max's warm 69 ms to open the GPU (the rest: ~11 ms device and pipelines, ~40 ms the GPU's table build) | nonce | setup only |
 | The search split into two passes per chunk of 2^19 candidates: one thread per candidate computes X and ZZ and writes them packed to a 40 MB scratch buffer, then a second pass inverts 16 at a time. Holding a batch's state through the next candidates' point arithmetic cost ~11% (ablations: no inversion at 8 per thread 1.04, at 1 per thread 1.15); the scratch traffic is ~3 GB/s. Both passes for every chunk go in one submission. Measured in alternating whole runs (the host changed) | nonce | 1.0612 (10/10 rounds) |
 | Those two held elements packed two limbs per word (limbs are at most 2^13, so 16 bits each): 20 words per candidate instead of 40, for about 30 shifts and masks | nonce | 1.0104 (59/60), 1.0100 (76/80) |
 | The batch inversion keeps X·(the earlier ZZ's product) and ZZ per candidate instead of X, ZZ and the prefix product: x = A·(the prefix through this ZZ)⁻¹. The same four multiplies per candidate, 20 fewer words per candidate held through the inversion | nonce | 1.0142 (59/60), 1.0133 (80/80) |

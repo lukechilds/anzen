@@ -367,10 +367,31 @@ impl GpuSearch {
     /// window base B, about 11,000 points, and each GPU thread adds one pair. On native hosts
     /// this waits for the GPU, so setup timings include it.
     fn build_generator_table(&self, pipeline: &wgpu::ComputePipeline) -> Result<()> {
+        let windows: Vec<(u32, u32)> = self
+            .tuning
+            .shifts()
+            .into_iter()
+            .zip(self.tuning.widths.iter().copied())
+            .collect();
+        // Each window's small tables are independent: one thread each where there are threads.
+        #[cfg(not(target_arch = "wasm32"))]
+        let tables = std::thread::scope(|scope| {
+            let threads: Vec<_> = windows
+                .iter()
+                .map(|&(shift, width)| scope.spawn(move || split_table(generator(), shift, width)))
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().expect("a small-table thread panicked"))
+                .collect::<Result<Vec<_>>>()
+        })?;
+        #[cfg(target_arch = "wasm32")]
+        let tables = windows
+            .iter()
+            .map(|&(shift, width)| split_table(generator(), shift, width))
+            .collect::<Result<Vec<_>>>()?;
         let mut params = vec![0_u32; 4];
-        for (shift, width) in self.tuning.shifts().into_iter().zip(&self.tuning.widths) {
-            params.extend(split_table(generator(), shift, *width)?);
-        }
+        params.extend(tables.into_iter().flatten());
         let params = self.params_buffer(&params);
         let bind_group = self.bind_group(&[
             (0, &params),
