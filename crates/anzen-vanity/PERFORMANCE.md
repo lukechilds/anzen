@@ -77,7 +77,14 @@ Ablating the nonce kernel at the start (8-bit windows): the 32 table additions f
 ~67% of its time, the final inversion ~32%, and its three SHA-256 compressions under 1%.
 
 After the third loop's field changes (18-bit signed windows, Q folded in): the 14 additions are
-~82% of the time (about 5.9% each) and the inversion ~9%.
+~82% of the time (about 5.9% each) and the inversion ~9%. With XYZZ and 13 additions: the
+inversion ~8.5% and the three SHA-256 compressions ~4.5%.
+
+Batch-affine additions (one inversion shared across many candidates per window, as CPU and
+sequential-key GPU engines do) do not pay on a SIMD GPU: they save about 3.5 field products per
+candidate-addition, roughly 0.11 SIMD issue slots across 32 lanes, while each shared inversion runs
+on one lane for ~270 slots, so a batch would need more than ~2,400 candidates per inversion, and
+their state traffic at that size approaches the memory bandwidth.
 
 With 16-bit windows and 8 candidates per inversion (early in the third loop, paired against the
 kernel itself): the 16 table additions are **~85%** of the time (removing them runs 6.6× faster), about
@@ -160,6 +167,11 @@ limits by patching `G_WINDOW_BITS` before compiling.
 | Idea | Kernel | Result | Why |
 |---|---|---|---|
 | Subtractive Karatsuba at the first level, (low − high)(high' − low') with wrapping u32 limbs, so the middle product takes a second level too: 225 limb products instead of 250 | nonce | 0.997 (20/80) | Multiplies are no longer the cost |
+| XYZZ addition reordered: Y1·PPP right after PPP (V2), or R computed after ZZ3 (V3) | nonce | 0.986 (0/60) / 0.999 (29/60) | The madd-2008-s order as written stays best |
+| Candidates per thread 16 / 12 under XYZZ | nonce | 1.000 / 0.982 | 8 stays |
+| Subtractions folded into the preceding products' columns (`f_mul_sub`, `f_sqr_sub_sub_double`: four fewer normalizations per addition; the model passes) | nonce | 0.896 (0/60) | Two more copies of the large product body cost far more than the normalizations; code size matters here |
+| The window loop's trip count hidden from the compiler (to stop any unrolling) | nonce | 1.000 (19/40) | It was not being unrolled |
+| SHA-256 written straight-line (constant indices, rolling 16-word schedule, inlined constants) | nonce | 1.004 (55/60) | The compiler already unrolls the loops |
 | `f_reduce` splitting each high column into three 13-bit pieces instead of a 19-step carry chain (no dependent steps; the model passes) | nonce | 0.927 (0/60) | More operations; the kernel is throughput-bound, not latency-bound |
 | `f_reduce`'s last chain replaced by a tail to limb 6 plus a rarely taken branch (limb 6 overflows about once in 10^4 products) that finishes the chain; the model passes | nonce | Did not compile | Apple's compiler service crashes (XPC_ERROR_CONNECTION_INTERRUPTED) with the branch inlined into every product. A branch-free version runs the full chain anyway |
 | Schoolbook squaring (doubled cross products) instead of Karatsuba squaring, after the reduction changes | nonce | 0.981 (0/60) | Karatsuba squaring stays |
