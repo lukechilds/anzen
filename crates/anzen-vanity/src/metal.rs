@@ -20,7 +20,6 @@ const NONCE_SOURCE: &str = concat!(
     include_str!("metal/nonce.metal")
 );
 const G_WINDOW_BITS: u32 = 16;
-const THREADS_PER_GROUP: usize = 64;
 
 type Device = ProtocolObject<dyn MTLDevice>;
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
@@ -40,6 +39,7 @@ struct Kernel {
     search: Pipeline,
     debug: Pipeline,
     per_invocation: u32,
+    threads_per_group: usize,
 }
 
 /// A search's parameter block, and the key kernel's signer and parent tables.
@@ -81,7 +81,9 @@ impl MetalSearch {
             Ok(Kernel {
                 search: pipeline("search")?,
                 debug: pipeline("debug")?,
-                per_invocation: per_invocation(source)?,
+                per_invocation: define(source, "PER_INVOCATION")?,
+                // Older kernel sources predate the constant and used 64.
+                threads_per_group: define(source, "THREADS_PER_GROUP").unwrap_or(64) as usize,
             })
         };
         let key = kernel(key_source)?;
@@ -284,12 +286,12 @@ impl MetalSearch {
         let threads = count.div_ceil(kernel.per_invocation) as usize;
         encoder.dispatchThreadgroups_threadsPerThreadgroup(
             MTLSize {
-                width: threads.div_ceil(THREADS_PER_GROUP),
+                width: threads.div_ceil(kernel.threads_per_group),
                 height: 1,
                 depth: 1,
             },
             MTLSize {
-                width: THREADS_PER_GROUP,
+                width: kernel.threads_per_group,
                 height: 1,
                 depth: 1,
             },
@@ -320,14 +322,17 @@ fn buffer(device: &Device, words: &[u32]) -> Result<Buffer> {
     .context("Metal buffer allocation failed")
 }
 
-fn per_invocation(source: &str) -> Result<u32> {
-    let prefix = "#define PER_INVOCATION ";
+/// A `#define NAME <integer>` from a kernel's source.
+fn define(source: &str, name: &str) -> Result<u32> {
+    let prefix = format!("#define {name} ");
     let at = source
-        .find(prefix)
-        .context("kernel has no PER_INVOCATION")?;
+        .find(&prefix)
+        .with_context(|| format!("kernel has no {name}"))?;
     let digits: String = source[at + prefix.len()..]
         .chars()
         .take_while(char::is_ascii_digit)
         .collect();
-    digits.parse().context("PER_INVOCATION is not a literal")
+    digits
+        .parse()
+        .with_context(|| format!("{name} is not a literal"))
 }

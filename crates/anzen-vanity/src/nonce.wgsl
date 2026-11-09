@@ -17,6 +17,7 @@ const P_INTERNAL_X: u32 = 44u;
 const P_INTERNAL_Y: u32 = 52u;
 
 const PER_INVOCATION: u32 = 8u;
+const WORKGROUP_SIZE: u32 = 64u;
 
 // Q + t·G in Jacobian coordinates for one locktime; `valid` is false when t >= n.
 struct Projective {

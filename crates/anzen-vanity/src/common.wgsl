@@ -36,9 +36,9 @@ const P_TARGET_BITS: u32 = 3u;
 @group(0) @binding(3) var<storage, read_write> debug_out: array<u32>;
 
 // Tuning. The host reads these constants from the shader source to build tables and size
-// dispatches to match, so a shader change can vary them on its own.
+// dispatches to match, so a shader change can vary them on its own. Each kernel file defines
+// its own WORKGROUP_SIZE and PER_INVOCATION.
 const G_WINDOW_BITS: u32 = 16u;
-const WORKGROUP_SIZE: u32 = 64u;
 const G_DIGITS: u32 = (1u << G_WINDOW_BITS) - 1u;
 const G_WINDOWS: u32 = (256u + G_WINDOW_BITS - 1u) / G_WINDOW_BITS;
 

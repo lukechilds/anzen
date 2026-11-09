@@ -80,6 +80,7 @@ fn put_key(data: ptr<function, array<u32, 128>>, offset: u32, x: Fe) {
 }
 
 const PER_INVOCATION: u32 = 4u;
+const WORKGROUP_SIZE: u32 = 64u;
 
 // Stage 1: the child vault key parent + I_L·G, in Jacobian coordinates.
 fn child_key(index: u32, tweak: Fe) -> Jacobian {

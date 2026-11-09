@@ -7,6 +7,7 @@
 // a table of 16-bit windows, comparing the output key's top bits with the target.
 
 #define PER_INVOCATION 8
+#define THREADS_PER_GROUP 64
 
 // Parameter offsets: the same block as the wgpu nonce kernel.
 #define P_LEAF_BLOCK 4
