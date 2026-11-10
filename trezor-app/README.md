@@ -115,7 +115,7 @@ That is a development build, which a retail Safe 7 runs only once its bootloader
 
 The phone app carries the device image inside it and uploads it when it connects (`mobile/rust/build.rs`), so build the app before building the phone app. From a Mac, `cargo run -p anzen-link --example trezor -- policy` does the same over Bluetooth with no phone.
 
-Tried once on hardware: a Safe 7 flashed with this firmware, driven from a Mac with the `trezor` example over Bluetooth, paired by code, loaded the app, set a vault up and signed a two-deposit policy (16 signatures, all valid, 18 seconds including the review). The phone app's path to a device, larger policies, and the confirmations a Trezor asks of a paired host it no longer remembers as recent have not been tried.
+Tried once on hardware: a Safe 7 flashed with this firmware, driven from a Mac with the `trezor` example over Bluetooth, paired by code, loaded the app, set a vault up and signed a two-deposit policy (16 signatures, all valid, 18 seconds including the review). The phone app has done the same against that Safe 7: set a vault up and had a policy approved. Larger policies, the signer's other actions on a device, and the confirmations a Trezor asks of a paired host it no longer remembers as recent have not been tried.
 
 ## Protocol
 

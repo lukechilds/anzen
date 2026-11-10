@@ -2,8 +2,8 @@
 //! over it, and the app's requests on top.
 //!
 //! Proof of concept. It is exercised end to end against the Trezor emulator. Against a real
-//! Safe 7 it has been run by hand from a Mac over Bluetooth: pairing by code, loading the app,
-//! and a vault setup and policy.
+//! Safe 7 it has been run by hand over Bluetooth, from a Mac and from the phone app: pairing by
+//! code, loading the app, and a vault setup and policy.
 
 mod app;
 mod ble;
