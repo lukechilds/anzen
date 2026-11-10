@@ -1,0 +1,17 @@
+[package]
+name = "anzen-link"
+description = "Links from a phone or computer to a hardware signer: Bluetooth to a Ledger"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+btleplug = "0.13"
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+uuid = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "time", "macros", "rt-multi-thread"] }
