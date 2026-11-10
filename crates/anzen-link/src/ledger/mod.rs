@@ -2,8 +2,23 @@
 
 mod ble;
 mod frame;
+mod signer;
+mod speculos;
 
 pub use ble::{Ledger, LedgerFound, find, scan};
+pub use signer::{HardwareSigner, Rejected};
+pub use speculos::Speculos;
+
+use std::time::Duration;
+
+/// Anything that carries one APDU to a Ledger app and brings back its answer.
+pub trait Exchange {
+    fn exchange(
+        &mut self,
+        apdu: &[u8],
+        timeout: Duration,
+    ) -> impl Future<Output = anyhow::Result<Answer>> + Send;
+}
 
 /// What a Ledger answered: the data, then a two-byte status word (`0x9000` is success).
 #[derive(Debug, Clone, PartialEq, Eq)]

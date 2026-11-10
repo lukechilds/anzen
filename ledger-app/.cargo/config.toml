@@ -23,3 +23,8 @@ lto = true
 [unstable]
 build-std = ["core", "alloc"]
 build-std-features = ["compiler-builtins-mem"]
+
+# The signer rebuilds a year of transactions in memory. Stax and Flex have 36 KB of RAM for the
+# heap, the stack and the app's own data.
+[env]
+HEAP_SIZE = "stax: 23552, flex: 23552"

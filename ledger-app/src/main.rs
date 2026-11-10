@@ -4,8 +4,13 @@
 extern crate alloc;
 
 mod benchmark;
+mod bolos;
+mod memory;
+mod signer;
+mod storage;
 
 use alloc::format;
+use anzen_signer::hardware;
 use anzen_signer::{PROTOCOL_NAME, benchmark::WorkloadSummary};
 use benchmark::{BenchmarkContext, BenchmarkError};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +22,13 @@ use ledger_device_sdk::nbgl::{
 };
 use ledger_device_sdk::sys;
 
-ledger_device_sdk::set_panic!(ledger_device_sdk::exiting_panic);
+ledger_device_sdk::set_panic!(panicked);
+
+/// Debug builds say where in the emulator's log; every build answers the host and exits.
+fn panicked(info: &core::panic::PanicInfo) -> ! {
+    memory::note(info);
+    ledger_device_sdk::exiting_panic(info)
+}
 ledger_device_sdk::define_comm!(COMM);
 
 const APP_NAME: &str = PROTOCOL_NAME;
@@ -41,6 +52,12 @@ static START_LOCAL_BENCHMARK: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" fn start_local_benchmark() {
     START_LOCAL_BENCHMARK.store(true, Ordering::Release);
+}
+
+static REDRAW_HOME: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" fn redraw_home() {
+    REDRAW_HOME.store(true, Ordering::Release);
 }
 
 unsafe extern "C" fn quit_app() {
@@ -79,15 +96,13 @@ impl TryFrom<ApduHeader> for BenchmarkInstruction {
     }
 }
 
-/// Show Ledger's standard home-and-settings use case with a primary action. APDUs are also
-/// accepted while this screen is active so the host benchmark can initiate the same review.
-fn show_home(comm: &mut Comm) {
+/// Show Ledger's standard home-and-settings use case with a primary action, and answer commands
+/// while it is up. Returns when something else was shown, so the home screen needs drawing again.
+#[inline(never)]
+fn show_home(comm: &mut Comm, session: &mut signer::Session) {
     let icon: sys::nbgl_icon_details_t = (&APP_ICON).into();
     let info_names = [c"Version".as_ptr(), c"Developer".as_ptr()];
-    let info_values = [
-        c"0.1.0 signing benchmark".as_ptr(),
-        c"Anzen developers".as_ptr(),
-    ];
+    let info_values = [c"0.1.0".as_ptr(), c"Anzen developers".as_ptr()];
     let info_list = sys::nbgl_contentInfoList_t {
         infoTypes: info_names.as_ptr(),
         infoContents: info_values.as_ptr(),
@@ -120,6 +135,9 @@ fn show_home(comm: &mut Comm) {
             run_local_benchmark(comm);
             return;
         }
+        if REDRAW_HOME.swap(false, Ordering::AcqRel) {
+            return;
+        }
         match comm.try_next_event().into_type() {
             DecodedEventType::Apdu {
                 header,
@@ -127,8 +145,26 @@ fn show_home(comm: &mut Comm) {
                 length,
             } => {
                 let command = Command::new(comm, header, offset, length);
-                handle_host_command(command);
-                return;
+                if header.cla != hardware::CLA {
+                    let _ = command.reply(&[], StatusWords::BadCla);
+                } else if (PREPARE_INS..=COMPLETE_INS).contains(&header.ins) {
+                    handle_host_command(command);
+                    return;
+                } else {
+                    let data = command.get_data().to_vec();
+                    let comm = command.into_comm();
+                    let reply = session.handle(comm, header.ins, header.p1, header.p2, &data);
+                    let _ = comm.send(&reply.data, Reply(reply.status));
+                    match reply.notice {
+                        // Shown without waiting, so the host's next command is still answered.
+                        // The home screen comes back when the notice goes.
+                        Some(notice) => unsafe {
+                            sys::nbgl_useCaseStatus(notice.as_ptr(), true, Some(redraw_home));
+                        },
+                        None if reply.redraw => return,
+                        None => {}
+                    }
+                }
             }
             DecodedEventType::ApduError(_) => {
                 let _ = comm.send(&[], StatusWords::BadLen);
@@ -138,6 +174,7 @@ fn show_home(comm: &mut Comm) {
     }
 }
 
+#[inline(never)]
 fn run_local_benchmark(comm: &mut Comm) {
     let mut spinner = NbglSpinner::new();
     spinner.show("Preparing deterministic vault");
@@ -174,6 +211,7 @@ fn run_local_benchmark(comm: &mut Comm) {
     show_benchmark_complete(comm, context.summary().signature_jobs, None);
 }
 
+#[inline(never)]
 fn show_local_run_error(comm: &mut Comm, error: BenchmarkError) {
     let message = match error {
         BenchmarkError::SignatureCreation => "Hardware signing failed",
@@ -185,6 +223,7 @@ fn show_local_run_error(comm: &mut Comm, error: BenchmarkError) {
     NbglStatus::new().text(message).show(comm, false);
 }
 
+#[inline(never)]
 fn handle_host_command(command: Command<'_>) {
     if !command.get_data().is_empty() {
         let _ = command.reply(&[], StatusWords::BadLen);
@@ -389,6 +428,7 @@ fn next_expected_command<'a>(
     }
 }
 
+#[inline(never)]
 fn review_benchmark_policy(comm: &mut Comm) -> bool {
     let fields = [
         Field {
@@ -428,6 +468,7 @@ struct BenchmarkTimings {
     signing_ms: u32,
 }
 
+#[inline(never)]
 fn show_benchmark_complete(comm: &mut Comm, signatures: u8, timings: Option<BenchmarkTimings>) {
     let message = match timings {
         Some(timings) => {
@@ -455,7 +496,9 @@ fn show_benchmark_complete(comm: &mut Comm, signatures: u8, timings: Option<Benc
 extern "C" fn sample_main() {
     let comm = init_comm(&COMM);
     let _ = (APP_NAME, APP_TAGLINE);
+    let mut session = signer::Session::default();
+    memory::paint();
     loop {
-        show_home(comm);
+        show_home(comm, &mut session);
     }
 }

@@ -1,7 +1,7 @@
 //! Find a Ledger over Bluetooth and ask it which app is open.
 //! `cargo run -p anzen-link --example ledger`
 
-use anzen_link::ledger::{self, apdu};
+use anzen_link::ledger::{self, Exchange, apdu};
 use std::time::Duration;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]

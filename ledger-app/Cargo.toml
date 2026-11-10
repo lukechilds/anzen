@@ -7,7 +7,11 @@ license = "MIT"
 description = "Anzen cold-signer app for Ledger devices"
 
 [dependencies]
+anzen-protocol = { path = "../crates/anzen-protocol" }
 anzen-signer = { path = "../crates/anzen-signer" }
+# The compact form requests and answers travel in.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 ledger_device_sdk = { version = "=1.36.1", features = ["io_new", "sys"] }
 
 [features]

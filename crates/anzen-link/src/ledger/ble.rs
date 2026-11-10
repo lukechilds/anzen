@@ -165,7 +165,7 @@ impl LedgerFound {
 }
 
 impl Ledger {
-    async fn send(&self, frame: &[u8]) -> Result<()> {
+    async fn send(&mut self, frame: &[u8]) -> Result<()> {
         self.peripheral
             .write(&self.write, frame, WriteType::WithResponse)
             .await
@@ -199,8 +199,15 @@ impl Ledger {
         self.mtu
     }
 
+    pub async fn disconnect(self) -> Result<()> {
+        self.peripheral.disconnect().await?;
+        Ok(())
+    }
+}
+
+impl super::Exchange for Ledger {
     /// Send one APDU to the open app and wait up to `timeout` for its answer.
-    pub async fn exchange(&mut self, apdu: &[u8], timeout: Duration) -> Result<Answer> {
+    async fn exchange(&mut self, apdu: &[u8], timeout: Duration) -> Result<Answer> {
         for frame in frame::frames(apdu, self.mtu)? {
             self.send(&frame).await?;
         }
@@ -211,11 +218,6 @@ impl Ledger {
                 return Answer::parse(answer);
             }
         }
-    }
-
-    pub async fn disconnect(self) -> Result<()> {
-        self.peripheral.disconnect().await?;
-        Ok(())
     }
 }
 
