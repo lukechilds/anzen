@@ -6,14 +6,25 @@ rust-version = "1.85"
 license = "MIT"
 description = "Auditable, platform-independent Anzen cold-signer: review and sign protocol requests"
 
+[features]
+default = []
+# Pure-Rust curve arithmetic and keys (`software`), for signers whose key lives in a general-purpose
+# microcontroller with memory to spare: a Trezor app, or tests. A secure-element signer supplies
+# its own `Crypto`, `Arithmetic` and `Keys` instead and leaves this off.
+k256 = ["dep:k256", "dep:sha2", "dep:zeroize"]
+
 [dependencies]
 anzen-protocol = { path = "../anzen-protocol" }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+k256 = { version = "0.13.4", default-features = false, features = ["arithmetic", "schnorr"], optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
+zeroize = { version = "1.8", default-features = false, optional = true }
 
 [dev-dependencies]
 # The host MuSig2 code, so these tests use the same signing the software signer and phone do.
 anzen-common = { path = "../anzen-common" }
 anzen-protocol = { path = "../anzen-protocol", features = ["software"] }
+anzen-signer = { path = ".", features = ["k256"] }
 bitcoin = { version = "0.32.9", features = ["rand-std"] }
 hex-literal = "1.1"
 # Scalar arithmetic for the software `Arithmetic` the hardware MuSig2 code is tested with.

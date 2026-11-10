@@ -243,12 +243,15 @@ version = "0.1.0"
 dependencies = [
  "anzen-common",
  "anzen-protocol",
+ "anzen-signer",
  "bitcoin",
  "hex-literal",
+ "k256",
  "musig2",
  "serde",
  "serde_json",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]
@@ -1057,6 +1060,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
+ "const-oid",
  "crypto-common",
  "subtle",
 ]
@@ -1096,6 +1100,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee27f32b5c5292967d2d4a9d7f1e0b0aed2c15daded5a60300e4abb9d8020bca"
 dependencies = [
  "der",
+ "digest",
  "elliptic-curve",
  "signature",
  "spki",
@@ -1759,6 +1764,8 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "once_cell",
+ "sha2",
+ "signature",
 ]
 
 [[package]]
@@ -2714,6 +2721,7 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
+ "digest",
  "rand_core 0.6.4",
 ]
 

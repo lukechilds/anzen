@@ -16,6 +16,8 @@ extern crate alloc;
 pub mod benchmark;
 pub mod hardware;
 pub mod musig;
+#[cfg(feature = "k256")]
+pub mod software;
 
 /// Name presented by hardware-wallet implementations of the protocol.
 pub const PROTOCOL_NAME: &str = "Anzen";

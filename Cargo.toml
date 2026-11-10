@@ -1,6 +1,8 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["ledger-app", "mobile/rust", "mobile/wasm"]
+# Each of these is its own workspace. `trezor-firmware` is a submodule with several; left out of
+# this list, Cargo takes this file for their workspace root.
+exclude = ["ledger-app", "mobile/rust", "mobile/wasm", "trezor-app", "trezor-firmware"]
 resolver = "3"
 
 [workspace.package]
