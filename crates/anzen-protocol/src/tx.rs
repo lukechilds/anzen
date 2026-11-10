@@ -48,7 +48,12 @@ impl Serialize for Txid {
         &self,
         serializer: S,
     ) -> core::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_hex())
+        // Text is the usual reversed hex; the compact form is the bytes as transactions carry them.
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_hex())
+        } else {
+            hex::serialize(&self.0, serializer)
+        }
     }
 }
 
@@ -56,8 +61,12 @@ impl<'de> Deserialize<'de> for Txid {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> core::result::Result<Self, D::Error> {
-        let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
-        text.parse().map_err(serde::de::Error::custom)
+        if deserializer.is_human_readable() {
+            let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+            text.parse().map_err(serde::de::Error::custom)
+        } else {
+            hex::deserialize(deserializer).map(Self)
+        }
     }
 }
 
@@ -110,7 +119,11 @@ impl Serialize for OutPoint {
         &self,
         serializer: S,
     ) -> core::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format!("{self}"))
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&format!("{self}"))
+        } else {
+            (self.txid, self.vout).serialize(serializer)
+        }
     }
 }
 
@@ -118,8 +131,13 @@ impl<'de> Deserialize<'de> for OutPoint {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> core::result::Result<Self, D::Error> {
-        let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
-        text.parse().map_err(serde::de::Error::custom)
+        if deserializer.is_human_readable() {
+            let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+            text.parse().map_err(serde::de::Error::custom)
+        } else {
+            let (txid, vout) = <(Txid, u32)>::deserialize(deserializer)?;
+            Ok(Self { txid, vout })
+        }
     }
 }
 

@@ -14,6 +14,7 @@
 extern crate alloc;
 
 pub mod benchmark;
+pub mod musig;
 
 /// Name presented by hardware-wallet implementations of the protocol.
 pub const PROTOCOL_NAME: &str = "Anzen";

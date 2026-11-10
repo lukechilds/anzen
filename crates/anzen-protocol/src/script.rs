@@ -47,7 +47,7 @@ impl Serialize for XOnlyKey {
         &self,
         serializer: S,
     ) -> core::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_hex())
+        crate::hex::serialize(&self.0, serializer)
     }
 }
 
@@ -55,8 +55,7 @@ impl<'de> Deserialize<'de> for XOnlyKey {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> core::result::Result<Self, D::Error> {
-        let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
-        Self::from_hex(&text).map_err(serde::de::Error::custom)
+        crate::hex::deserialize(deserializer).map(Self)
     }
 }
 

@@ -16,5 +16,7 @@ anzen-common = { path = "../anzen-common" }
 anzen-protocol = { path = "../anzen-protocol", features = ["software"] }
 bitcoin = { version = "0.32.9", features = ["rand-std"] }
 hex-literal = "1.1"
+# Scalar arithmetic for the software `Arithmetic` the hardware MuSig2 code is tested with.
+musig2 = { version = "0.3.1", default-features = false, features = ["k256"] }
 serde_json = "1.0"
 sha2 = "0.10"

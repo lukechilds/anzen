@@ -23,4 +23,6 @@ anzen-protocol = { path = ".", features = ["software"] }
 bitcoin = { version = "0.32.9", features = ["rand-std"] }
 miniscript = "12.3.5"
 musig2 = { version = "0.3.1", default-features = false, features = ["k256"] }
+# The compact form hardware signers receive.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde_json = "1.0"

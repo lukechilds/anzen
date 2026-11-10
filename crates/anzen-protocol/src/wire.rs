@@ -30,26 +30,6 @@ pub const VERSION: u8 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Signature(pub [u8; 64]);
 
-impl Serialize for Signature {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> core::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&hex::encode(&self.0))
-    }
-}
-
-impl<'de> Deserialize<'de> for Signature {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> core::result::Result<Self, D::Error> {
-        let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
-        hex::decode_array(&text)
-            .map(Self)
-            .map_err(serde::de::Error::custom)
-    }
-}
-
 /// A MuSig2 public nonce: two compressed points (BIP327 `PubNonce`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PubNonce(pub [u8; 66]);
@@ -65,7 +45,7 @@ macro_rules! hex_serde {
                 &self,
                 serializer: S,
             ) -> core::result::Result<S::Ok, S::Error> {
-                serializer.serialize_str(&hex::encode(&self.0))
+                hex::serialize(&self.0, serializer)
             }
         }
 
@@ -73,14 +53,12 @@ macro_rules! hex_serde {
             fn deserialize<D: serde::Deserializer<'de>>(
                 deserializer: D,
             ) -> core::result::Result<Self, D::Error> {
-                let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
-                hex::decode_array(&text)
-                    .map(Self)
-                    .map_err(serde::de::Error::custom)
+                hex::deserialize(deserializer).map(Self)
             }
         }
     };
 }
+hex_serde!(Signature);
 hex_serde!(PubNonce);
 hex_serde!(PartialSignature);
 
