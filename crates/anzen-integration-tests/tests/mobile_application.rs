@@ -1487,3 +1487,77 @@ fn recovery_phrases_import_only_before_vault_setup_and_keep_the_replaced_keys() 
     assert_eq!(phone.recovery_phrase().unwrap(), words);
     assert_eq!(signer.recovery_phrase().unwrap(), signer_words);
 }
+
+#[test]
+fn a_phone_forgets_its_vault_keeps_its_keys_and_sets_one_up_again() {
+    let phone_dir = tempfile::tempdir().unwrap();
+    let phone = WalletApplication::new(phone_dir.path().into(), false);
+    let signer_dir = tempfile::tempdir().unwrap();
+    let signer = SignerApplication::new(signer_dir.path().into(), false);
+    let identity = phone.initialize(Network::Regtest).unwrap();
+    let words = phone.recovery_phrase().unwrap();
+
+    // With no vault there is nothing to forget.
+    let error = phone.forget_vault().unwrap_err();
+    assert!(format!("{error:#}").contains("no vault to forget"));
+
+    let first = phone
+        .pair_signer(&signer.initialize(Network::Regtest).unwrap())
+        .unwrap();
+    signer.accept_vault(&first).unwrap();
+    assert!(phone.configuration().is_ok());
+
+    // The app asks for it by name.
+    let request: anzen_wallet::application::WalletRequest =
+        serde_json::from_value(serde_json::json!({ "method": "forget_vault" })).unwrap();
+    assert!(!request.requires_chain());
+    let after = phone.forget_vault().unwrap();
+
+    // The phone is the same phone, with no vault.
+    assert_eq!(after.vault_pubkey, identity.vault_pubkey);
+    assert_eq!(phone.recovery_phrase().unwrap(), words);
+    assert!(phone.configuration().is_err());
+    // What it forgot is set aside, not deleted: the vault's records, its configuration and the
+    // signer's public key.
+    let replaced = phone_dir.path().join("replaced");
+    for kept in ["phone-1/device.json", "anzen.json-1", "hww/public.json-1"] {
+        assert!(replaced.join(kept).exists(), "{kept} was not kept");
+    }
+    assert!(!phone_dir.path().join("anzen.json").exists());
+    assert!(!phone_dir.path().join("hww/public.json").exists());
+    assert!(phone.forget_vault().is_err());
+
+    // It sets a vault up again, here with another signer.
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = SignerApplication::new(other_dir.path().into(), false);
+    let second = phone
+        .pair_signer(&other.initialize(Network::Regtest).unwrap())
+        .unwrap();
+    other.accept_vault(&second).unwrap();
+    assert_eq!(second.phone_vault_pubkey, first.phone_vault_pubkey);
+    assert_ne!(second.hww_vault_pubkey, first.hww_vault_pubkey);
+    assert_ne!(second.vault_address, first.vault_address);
+    // Forgetting twice keeps both.
+    phone.forget_vault().unwrap();
+    assert!(replaced.join("phone-2/device.json").exists());
+    assert!(replaced.join("anzen.json-2").exists());
+}
+
+#[test]
+fn a_mainnet_vault_is_never_forgotten() {
+    let phone_dir = tempfile::tempdir().unwrap();
+    let phone = WalletApplication::new(phone_dir.path().into(), true);
+    let signer_dir = tempfile::tempdir().unwrap();
+    let signer = SignerApplication::new(signer_dir.path().into(), true);
+    phone.initialize(Network::Bitcoin).unwrap();
+    let config = phone
+        .pair_signer(&signer.initialize(Network::Bitcoin).unwrap())
+        .unwrap();
+    let error = phone.forget_vault().unwrap_err();
+    assert!(format!("{error:#}").contains("mainnet"));
+    assert_eq!(
+        phone.configuration().unwrap().vault_address,
+        config.vault_address
+    );
+    assert!(!phone_dir.path().join("replaced").exists());
+}

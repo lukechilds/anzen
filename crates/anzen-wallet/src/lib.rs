@@ -161,6 +161,29 @@ pub fn import_phone(data_dir: &Path, network: Network, words: &str) -> Result<In
     persist_phone(data_dir, network, &phone, DEFAULT_RECOVERY_LOCKTIME, false)
 }
 
+/// Forget this phone's vault and keep its keys, so it can set a vault up again, with the same
+/// signer or another. Test networks only: on mainnet a forgotten vault would be real bitcoin
+/// that this app no longer knows how to spend.
+///
+/// Nothing is deleted. The vault's records, with the wallet beside them, are set aside on the
+/// device; the phone starts again from its keys, and finds its wallet's history on the next sync.
+pub fn forget_vault(data_dir: &Path) -> Result<()> {
+    let device = anzen_common::storage::load_device(data_dir, PHONE_DEVICE_FILE)
+        .context("this phone has no wallet, and so no vault to forget")?;
+    if !anzen_common::storage::config_exists(data_dir) {
+        bail!("this phone has no vault to forget");
+    }
+    if device.bitcoin_network()? == Network::Bitcoin {
+        bail!("a mainnet vault cannot be forgotten: it holds real bitcoin");
+    }
+    anzen_common::storage::set_vault_aside(data_dir)?;
+    write_json(&data_dir.join(PHONE_DEVICE_FILE), &device)
+        .context("the vault was set aside, but this phone's keys could not be put back")?;
+    // Not marked fresh: these keys have history, which the first sync looks for.
+    HotWallet::open_or_create(data_dir)?;
+    Ok(())
+}
+
 pub const VANITY_SUFFIX: &str = "vault";
 
 /// Where a vanity search runs.

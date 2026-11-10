@@ -140,20 +140,36 @@ pub fn load_config(data_dir: &Path) -> Result<VaultConfig> {
 /// Where [`set_aside`] keeps the directories it moves.
 pub const REPLACED_DIR: &str = "replaced";
 
-/// Move a device's directory (`phone` or `hww`) out of the way, to `replaced/<name>-<n>`: keys are
-/// never deleted, only replaced. Nothing to move is fine.
+/// Move a device's directory (`phone` or `hww`), or one of its files, out of the way, to
+/// `replaced/<name>-<n>`: keys are never deleted, only replaced. Nothing to move is fine.
 pub fn set_aside(data_dir: &Path, relative: &str) -> Result<()> {
     let from = data_dir.join(relative);
     if !from.storage_exists() {
         return Ok(());
     }
     let replaced = data_dir.join(REPLACED_DIR);
-    fs::create_dir_all(&replaced)?;
     let to = (1_u32..)
         .map(|n| replaced.join(format!("{relative}-{n}")))
         .find(|path| !path.storage_exists())
         .context("no free name to set the old device aside")?;
+    fs::create_dir_all(to.parent().unwrap_or(&replaced))?;
     fs::rename(&from, &to).with_context(|| format!("failed to set {} aside", from.display()))?;
+    Ok(())
+}
+
+/// Set aside everything that makes a phone part of a vault: the phone's own directory (its keys,
+/// wallet and every vault record), the vault's configuration, the signer's public key and the
+/// recovery backup. A signer that shares the directory, as in the simulation, keeps its keys.
+pub fn set_vault_aside(data_dir: &Path) -> Result<()> {
+    for relative in [
+        "phone",
+        CONFIG_FILE,
+        LEGACY_CONFIG_FILE,
+        HWW_PUBLIC_FILE,
+        "cloud",
+    ] {
+        set_aside(data_dir, relative)?;
+    }
     Ok(())
 }
 

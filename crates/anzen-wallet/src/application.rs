@@ -49,6 +49,8 @@ pub enum WalletRequest {
     },
     /// The words that restore this phone's keys.
     RecoveryPhrase,
+    /// Forget this phone's vault and keep its keys. Test networks only.
+    ForgetVault,
     Identity,
     ImportRecoveryVault {
         config: VaultConfig,
@@ -178,6 +180,7 @@ impl WalletRequest {
                 | Self::Initialize { .. }
                 | Self::ImportRecoveryPhrase { .. }
                 | Self::RecoveryPhrase
+                | Self::ForgetVault
                 | Self::Identity
                 | Self::ImportRecoveryVault { .. }
                 | Self::ImportRecoveryBundle { .. }
@@ -288,6 +291,7 @@ impl WalletApplication {
             WalletRequest::RecoveryPhrase => {
                 serde_json::json!({ "words": self.recovery_phrase()? })
             }
+            WalletRequest::ForgetVault => serde_json::to_value(self.forget_vault()?)?,
             WalletRequest::Identity => serde_json::to_value(self.public_identity()?)?,
             WalletRequest::ImportRecoveryVault { config } => {
                 self.import_recovery_vault(&config)?;
@@ -461,6 +465,12 @@ impl WalletApplication {
     ) -> Result<PublicDeviceFile> {
         self.check_access(network)?;
         super::import_phone(&self.data_dir, network, words)?;
+        self.public_identity()
+    }
+
+    /// Forget this phone's vault, keeping its keys ([`super::forget_vault`]).
+    pub fn forget_vault(&self) -> Result<PublicDeviceFile> {
+        super::forget_vault(&self.data_dir)?;
         self.public_identity()
     }
 
