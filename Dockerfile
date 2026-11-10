@@ -1,7 +1,9 @@
 FROM rust:1.88-bookworm AS base
 
+# libdbus: `anzen-link` reaches Bluetooth through BlueZ on Linux, over D-Bus. Only the workspace's
+# tests build that crate here; the `anzen` binary does not depend on it.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends jq libsqlite3-dev pkg-config \
+    && apt-get install -y --no-install-recommends jq libdbus-1-dev libsqlite3-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
