@@ -82,7 +82,10 @@ The same code as a command, which checks every signature it gets back. It is als
 ```sh
 cargo run -p anzen-link --example trezor -- --emulator 31324 policy   # the emulator
 cargo run -p anzen-link --example trezor -- policy                    # a Trezor nearby
+cargo run -p anzen-link --example trezor -- scan                      # which Trezors are nearby
 ```
+
+A Trezor shows itself as a Trezor only to hosts it has bonded with. The first time, put it in pairing mode: on the Trezor, open **Pair & Connect** and choose **Pair new device**.
 
 To look at the emulated screen, or press its buttons by hand:
 

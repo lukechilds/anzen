@@ -3,6 +3,7 @@
 //! keys, checking every signature it returns. Nothing here touches funds.
 //!
 //! ```sh
+//! cargo run -p anzen-link --example trezor -- scan              # which Trezors are nearby
 //! cargo run -p anzen-link --example trezor                      # connect, show the signer's key
 //! cargo run -p anzen-link --example trezor -- policy            # set a vault up, approve a policy
 //! cargo run -p anzen-link --example trezor -- --emulator 31324 policy
@@ -213,7 +214,18 @@ async fn main() -> Result<()> {
     let ceremony = match arguments.as_slice() {
         [] => false,
         [command] if command == "policy" => true,
-        _ => bail!("usage: trezor [--emulator PORT] [--app FILE.tapp] [--state DIR] [policy]"),
+        // Only look: which Trezors are advertising nearby.
+        [command] if command == "scan" => {
+            let found = trezor::scan(Duration::from_secs(8)).await?;
+            if found.is_empty() {
+                println!("No Trezor is advertising nearby.");
+            }
+            for trezor in found {
+                println!("{}", trezor.name);
+            }
+            return Ok(());
+        }
+        _ => bail!("usage: trezor [--emulator PORT] [--app FILE.tapp] [--state DIR] [scan|policy]"),
     };
 
     match emulator {

@@ -5,6 +5,11 @@
 //! bonds the two at the Bluetooth level (the operating system and the Trezor each show a code);
 //! THP's own pairing then happens inside the link.
 //!
+//! The service is named in the Trezor's scan response, which it sends only to hosts it has bonded
+//! with, unless it is in pairing mode ("Pair & Connect", then "Pair new device", on the Trezor).
+//! To a host it has not bonded with, a Trezor outside pairing mode is a name and nothing else,
+//! and it accepts no connection from one. So a new host finds a Trezor only in pairing mode.
+//!
 //! Written from Trezor's host library (`trezorlib.transport.ble`) and not yet run against a
 //! device: the emulator speaks THP over UDP, so everything above this file is tested and this
 //! file is not.
@@ -112,7 +117,9 @@ pub async fn find(name: Option<&str>, window: Duration) -> Result<TrezorFound> {
             return Ok(trezor);
         }
     }
-    bail!("no Trezor found: unlock it, turn its Bluetooth on and keep it nearby")
+    bail!(
+        "No Trezor found. Unlock it and keep it nearby. The first time, put it in pairing mode: on the Trezor, open Pair & Connect and choose Pair new device."
+    )
 }
 
 /// An open Bluetooth link to a Trezor.

@@ -29,7 +29,7 @@ export function trezorTap(call: Call): Tap {
     return response.ok;
   };
   return {
-    hint: 'Unlock your Trezor and keep it close.',
+    hint: 'Unlock your Trezor and keep it close. The first time, open Pair & Connect on it and choose Pair new device.',
     connect: async () => {
       const connected = await ask({ method: 'connect' });
       if (connected.pairing) {
