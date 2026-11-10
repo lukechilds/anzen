@@ -4,7 +4,7 @@ The Anzen cold signer as a Trezor app: the phone sends a request, the Trezor sho
 
 ## Status: proof of concept
 
-It runs, end to end, in Trezor's emulator of a Safe 7 (`T3W1`), driven by the same Rust code the phone app uses. It has not run on a device.
+It runs, end to end, in Trezor's emulator of a Safe 7 (`T3W1`), driven by the same Rust code the phone app uses, and has run once on a real Safe 7 (see "Building for a device").
 
 Trezor's apps ("modular apps", loaded by the host each time it connects) are still in development: the SDK, the build tool and the firmware side live in an unmerged pull request. This app is built against our fork of that work, the `anzen-apps` branch of the `trezor-firmware` submodule, which adds three things the app needs:
 
@@ -116,7 +116,7 @@ That is a development build, which a retail Safe 7 runs only once its bootloader
 
 The phone app carries the device image inside it and uploads it when it connects (`mobile/rust/build.rs`), so build the app before building the phone app. From a Mac, `cargo run -p anzen-link --example trezor -- policy` does the same over Bluetooth with no phone.
 
-Untried on hardware, all of it: the firmware build compiles and the image fits the Safe 7's app memory on paper, and that is what is known. The parts most likely to need work on a device are the Bluetooth transport (written from Trezor's host library), the two confirmations a Trezor asks of a paired phone it no longer remembers as recent, and signing speed.
+Tried once on hardware: a Safe 7 flashed with this firmware, driven from a Mac with the `trezor` example over Bluetooth, paired by code, loaded the app, set a vault up and signed a two-deposit policy (16 signatures, all valid, 18 seconds including the review). The phone app's path to a device, larger policies, and the confirmations a Trezor asks of a paired host it no longer remembers as recent have not been tried.
 
 ## Protocol
 

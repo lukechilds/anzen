@@ -197,8 +197,8 @@ mod link {
                 Wire::Emulator(Emulator::connect(port).await?),
             ),
             None => {
-                let found = trezor::find(None, SEARCH).await?;
-                (found.name.clone(), Wire::Bluetooth(found.connect().await?))
+                let link = trezor::open(None, SEARCH).await?;
+                (link.name.clone(), Wire::Bluetooth(link))
             }
         };
         let mut identity = identity(root)?;

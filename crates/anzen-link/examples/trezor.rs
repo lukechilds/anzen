@@ -221,7 +221,8 @@ async fn main() -> Result<()> {
                 println!("No Trezor is advertising nearby.");
             }
             for trezor in found {
-                println!("{}", trezor.name);
+                let note = if trezor.certain { "" } else { " (may be one)" };
+                println!("{}{note}", trezor.name);
             }
             return Ok(());
         }
@@ -243,9 +244,9 @@ async fn main() -> Result<()> {
         None => {
             let image = app.map_or_else(|| built_image("armv8m"), Ok)?;
             eprintln!("Looking for a Trezor over Bluetooth…");
-            let found = trezor::find(None, Duration::from_secs(25)).await?;
-            eprintln!("Found {}. Connecting…", found.name);
-            let link: Bluetooth = found.connect().await?;
+            // Long enough to go and put the Trezor in pairing mode.
+            let link: Bluetooth = trezor::open(None, Duration::from_secs(180)).await?;
+            eprintln!("Connected to {} over Bluetooth.", link.name);
             run(link, &state, &image, ceremony).await
         }
     }

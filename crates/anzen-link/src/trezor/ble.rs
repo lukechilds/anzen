@@ -10,15 +10,15 @@
 //! To a host it has not bonded with, a Trezor outside pairing mode is a name and nothing else,
 //! and it accepts no connection from one. So a new host finds a Trezor only in pairing mode.
 //!
-//! Written from Trezor's host library (`trezorlib.transport.ble`) and not yet run against a
-//! device: the emulator speaks THP over UDP, so everything above this file is tested and this
-//! file is not.
+//! Written from Trezor's host library (`trezorlib.transport.ble`). The emulator speaks THP over
+//! UDP, so no automated test reaches this file; it has been run by hand against a Safe 7 from a
+//! Mac (the `trezor` example), which is where what it says about advertisements comes from.
 
 use super::Transport;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use btleplug::{
     api::{
-        Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, ScanFilter,
+        Central, Characteristic, Manager as _, Peripheral as _, PeripheralProperties, ScanFilter,
         ValueNotification, WriteType,
     },
     platform::{Manager, Peripheral},
@@ -34,14 +34,46 @@ const RX: Uuid = Uuid::from_u128(0x8c000002_a59b_4d58_a9ad_073df69fa1b1);
 const TX: Uuid = Uuid::from_u128(0x8c000003_a59b_4d58_a9ad_073df69fa1b1);
 const PACKET: usize = 244;
 
-/// A Trezor seen while scanning.
+/// The company identifier in a Trezor's manufacturer data.
+const COMPANY: u16 = 0x0f29;
+/// How long a device that only might be a Trezor gets to show that it is one.
+const PROBE: Duration = Duration::from_secs(12);
+/// How long the person has to confirm a first Bluetooth pairing on both devices.
+const BONDING: Duration = Duration::from_secs(120);
+
+/// A device seen while scanning that is, or may be, a Trezor.
 pub struct TrezorFound {
-    /// The name the device advertises.
+    /// The name the device advertises: its label, which its owner chose.
     pub name: String,
+    /// Whether what it advertises says it is a Trezor. Otherwise it only could be one, and
+    /// connecting finds out.
+    pub certain: bool,
     peripheral: Peripheral,
 }
 
-/// Trezors advertising nearby, for `window`.
+/// What an advertisement says about its sender.
+///
+/// A Trezor's advertisement proper is its name and nothing else. Its service and its company's
+/// manufacturer data follow in the scan response, which a host does not always get: not from a
+/// Trezor outside pairing mode that it has not bonded with, and (seen with a Safe 7 and a Mac)
+/// not reliably even then. So a device that names its service or its company is a Trezor, and
+/// one that advertises a bare name may be.
+fn likeness(properties: &PeripheralProperties) -> Option<bool> {
+    if properties.services.contains(&SERVICE) || properties.manufacturer_data.contains_key(&COMPANY)
+    {
+        return Some(true);
+    }
+    let bare_name = properties
+        .local_name
+        .as_deref()
+        .is_some_and(|name| !name.is_empty())
+        && properties.services.is_empty()
+        && properties.manufacturer_data.is_empty()
+        && properties.service_data.is_empty();
+    bare_name.then_some(false)
+}
+
+/// Devices advertising nearby, for `window`, that are or may be Trezors: the certain ones first.
 pub async fn scan(window: Duration) -> Result<Vec<TrezorFound>> {
     let manager = Manager::new().await.context("Bluetooth is unavailable")?;
     let central = manager
@@ -50,75 +82,79 @@ pub async fn scan(window: Duration) -> Result<Vec<TrezorFound>> {
         .into_iter()
         .next()
         .context("this device has no Bluetooth adapter")?;
-    let mut events = central.events().await?;
-    // Unfiltered: Trezor's own library finds scanning by service unreliable, and checks what
-    // each device advertises itself.
+    // Unfiltered: Trezor's own library finds scanning by service unreliable too.
     central
         .start_scan(ScanFilter::default())
         .await
         .context("could not scan for Bluetooth devices: check Bluetooth is on and allowed")?;
-    let mut found: Vec<TrezorFound> = Vec::new();
-    let deadline = tokio::time::sleep(window);
-    tokio::pin!(deadline);
-    loop {
-        let event = tokio::select! {
-            () = &mut deadline => break,
-            event = events.next() => event,
-        };
-        let id = match event {
-            Some(
-                CentralEvent::DeviceDiscovered(id)
-                | CentralEvent::DeviceUpdated(id)
-                | CentralEvent::ServicesAdvertisement { id, .. },
-            ) => id,
-            Some(_) => continue,
-            None => break,
-        };
-        let peripheral = central.peripheral(&id).await?;
-        if found.iter().any(|trezor| trezor.peripheral.id() == id) {
-            continue;
-        }
+    tokio::time::sleep(window).await;
+    central.stop_scan().await.ok();
+    let mut found = Vec::new();
+    for peripheral in central.peripherals().await? {
         let Some(properties) = peripheral.properties().await? else {
             continue;
         };
-        let name = properties.local_name.unwrap_or_default();
-        if !is_trezor(&properties.services, &name) {
+        let Some(certain) = likeness(&properties) else {
             continue;
-        }
+        };
         found.push(TrezorFound {
-            name: if name.is_empty() {
-                "Trezor".to_owned()
-            } else {
-                name
-            },
+            name: properties
+                .local_name
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "Trezor".to_owned()),
+            certain,
             peripheral,
         });
     }
-    central.stop_scan().await.ok();
+    found.sort_by_key(|trezor| !trezor.certain);
     Ok(found)
 }
 
-/// A Trezor advertises its service. One whose advertisement left the service out is still
-/// recognised by the name it gives itself.
-fn is_trezor(services: &[Uuid], name: &str) -> bool {
-    services.contains(&SERVICE) || name.starts_with("Trezor")
-}
-
-/// The first Trezor seen within `window`, or the one whose name contains `name`.
-pub async fn find(name: Option<&str>, window: Duration) -> Result<TrezorFound> {
+/// Find a Trezor within `window` (the one whose name contains `name`, if given) and connect to
+/// it. A device that only might be a Trezor is connected to and asked; one that is not is left
+/// alone after that.
+pub async fn open(name: Option<&str>, window: Duration) -> Result<Bluetooth> {
     let started = tokio::time::Instant::now();
-    // Short scans, so the first match returns without waiting out the window.
+    let mut not_trezors = Vec::new();
+    // Why each device that might have been a Trezor was passed over, for the error.
+    let mut refusals = Vec::new();
+    // Short scans, so the first match connects without waiting out the window.
     while started.elapsed() < window {
-        let found = scan(Duration::from_secs(2)).await?;
-        if let Some(trezor) = found
-            .into_iter()
-            .find(|trezor| name.is_none_or(|name| trezor.name.contains(name)))
-        {
-            return Ok(trezor);
+        for found in scan(Duration::from_secs(3)).await? {
+            if name.is_some_and(|name| !found.name.contains(name))
+                || not_trezors.contains(&found.peripheral.id())
+            {
+                continue;
+            }
+            if found.certain {
+                return found.connect().await;
+            }
+            let (id, name) = (found.peripheral.id(), found.name.clone());
+            match tokio::time::timeout(PROBE, found.attach()).await {
+                // It is a Trezor. From here the person may be asked to confirm the pairing.
+                Ok(Ok(attached)) => return attached.bond().await,
+                Ok(Err(error)) => {
+                    refusals.push(format!("{name}: {error:#}"));
+                    not_trezors.push(id);
+                }
+                // No answer says nothing about what it is: a Trezor outside pairing mode
+                // ignores a host it has not bonded with. It is tried again on the next pass.
+                Err(_) => {
+                    let silent = format!("{name} did not answer");
+                    if !refusals.contains(&silent) {
+                        refusals.push(silent);
+                    }
+                }
+            }
         }
     }
+    let tried = if refusals.is_empty() {
+        String::new()
+    } else {
+        format!(" (Tried {}.)", refusals.join("; "))
+    };
     bail!(
-        "No Trezor found. Unlock it and keep it nearby. The first time, put it in pairing mode: on the Trezor, open Pair & Connect and choose Pair new device."
+        "No Trezor found. Unlock it and keep it nearby. The first time, put it in pairing mode: on the Trezor, open Pair & Connect and choose Pair new device.{tried}"
     )
 }
 
@@ -130,9 +166,17 @@ pub struct Bluetooth {
     pub name: String,
 }
 
+/// A connected device that has shown it is a Trezor, not yet bonded with.
+struct Attached {
+    name: String,
+    peripheral: Peripheral,
+    notify: Characteristic,
+    write: Characteristic,
+}
+
 impl TrezorFound {
-    /// Connect. The first time, the operating system and the Trezor each show a code to confirm.
-    pub async fn connect(self) -> Result<Bluetooth> {
+    /// Connect and look for the Trezor's service. Asks nothing of the person.
+    async fn attach(self) -> Result<Attached> {
         let peripheral = self.peripheral;
         peripheral
             .connect()
@@ -144,18 +188,45 @@ impl TrezorFound {
                 .characteristics()
                 .into_iter()
                 .find(|characteristic| characteristic.uuid == uuid)
-                .ok_or_else(|| anyhow!("the Trezor lacks its characteristic {uuid}"))
         };
-        let (notify, write) = (characteristic(TX)?, characteristic(RX)?);
-        // Subscribing is what triggers Bluetooth pairing on a new device.
-        peripheral
-            .subscribe(&notify)
-            .await
-            .context("the Trezor refused the link: confirm the pairing code on both devices")?;
-        Ok(Bluetooth {
-            notifications: peripheral.notifications().await?,
+        let (Some(notify), Some(write)) = (characteristic(TX), characteristic(RX)) else {
+            peripheral.disconnect().await.ok();
+            bail!("{} is not a Trezor", self.name);
+        };
+        Ok(Attached {
+            name: self.name,
             peripheral,
+            notify,
             write,
+        })
+    }
+
+    /// Connect. The first time, the operating system and the Trezor each show a code to confirm.
+    pub async fn connect(self) -> Result<Bluetooth> {
+        self.attach().await?.bond().await
+    }
+}
+
+impl Attached {
+    /// Subscribe to the Trezor's packets, which is what triggers Bluetooth pairing on a new
+    /// device: this waits while the person confirms the code on both.
+    async fn bond(self) -> Result<Bluetooth> {
+        let subscribed = tokio::time::timeout(BONDING, self.peripheral.subscribe(&self.notify));
+        match subscribed.await {
+            Ok(Ok(())) => {}
+            failed => {
+                self.peripheral.disconnect().await.ok();
+                failed
+                    .map_err(|_| anyhow::anyhow!("the pairing was not confirmed in time"))?
+                    .context(
+                        "the Trezor refused the link: confirm the pairing code on both devices",
+                    )?;
+            }
+        }
+        Ok(Bluetooth {
+            notifications: self.peripheral.notifications().await?,
+            peripheral: self.peripheral,
+            write: self.write,
             name: self.name,
         })
     }
@@ -211,11 +282,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_trezor_is_known_by_its_service_or_its_name() {
-        assert!(is_trezor(&[SERVICE], ""));
-        assert!(is_trezor(&[], "Trezor Safe 7"));
+    fn an_advertisement_says_whether_its_sender_is_or_may_be_a_trezor() {
+        let advert =
+            |name: Option<&str>, services: &[Uuid], company: Option<u16>| PeripheralProperties {
+                local_name: name.map(str::to_owned),
+                services: services.to_vec(),
+                manufacturer_data: company
+                    .map(|company| (company, vec![0; 6]))
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            };
+        // Its service or its company's data: a Trezor, whatever its owner named it.
+        assert_eq!(
+            likeness(&advert(Some("Savings"), &[SERVICE], None)),
+            Some(true)
+        );
+        assert_eq!(likeness(&advert(None, &[], Some(COMPANY))), Some(true));
+        // A bare name is all a Trezor's advertisement proper holds: it may be one.
+        assert_eq!(likeness(&advert(Some("Anzen Dev"), &[], None)), Some(false));
+        // Anything else is something else.
         let heart_rate = Uuid::from_u128(0x0000180d_0000_1000_8000_00805f9b34fb);
-        assert!(!is_trezor(&[heart_rate], "Ledger Flex 1A2B"));
+        assert_eq!(likeness(&advert(Some("Strap"), &[heart_rate], None)), None);
+        assert_eq!(likeness(&advert(Some("iPhone"), &[], Some(76))), None);
+        assert_eq!(likeness(&advert(None, &[], None)), None);
+        assert_eq!(likeness(&advert(Some(""), &[], None)), None);
     }
 
     #[test]

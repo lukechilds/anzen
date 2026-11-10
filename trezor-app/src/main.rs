@@ -12,7 +12,7 @@
 //! path (`crypto::get_private_key`, a patch on the firmware this is built against). Core has no
 //! BIP340 or MuSig2 call, so the app signs in its own arithmetic.
 //!
-//! Proof of concept: it runs in the Trezor emulator, and has not run on a device.
+//! Proof of concept: it runs in the Trezor emulator, and has run once on a Safe 7.
 
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
