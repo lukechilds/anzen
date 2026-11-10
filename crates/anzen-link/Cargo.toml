@@ -1,6 +1,6 @@
 [package]
 name = "anzen-link"
-description = "Links from a phone or computer to a hardware signer: Bluetooth to a Ledger"
+description = "Links from a phone or computer to a hardware signer: Bluetooth to a Ledger or a Trezor"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,13 +13,25 @@ anzen-common.workspace = true
 # The command protocol and the messages a hardware signer reviews. No signing happens here.
 anzen-protocol.workspace = true
 anzen-signer.workspace = true
+base64 = "0.22"
 btleplug = "0.13"
 futures = "0.3"
+getrandom = "0.3"
+hex = { version = "0.4", features = ["serde"] }
+# Curve25519 field arithmetic for the map a Trezor's code-entry pairing uses (Elligator 2).
+num-bigint = "0.4"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+# A Trezor's messages are protocol buffers; these few are declared by hand, with no build step.
+prost = "0.14"
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["rt", "time", "macros", "net", "io-util"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt", "time", "macros", "net", "io-util", "sync"] }
+# The Trezor Host Protocol (channels, the Noise handshake, encryption), from Trezor.
+trezor-noise-rust-crypto = { version = "0.6.2", default-features = false, features = ["use-x25519", "use-aes-256-gcm", "use-sha2"] }
+trezor-thp = { version = "0.1.1", features = ["use_std"] }
 uuid = "1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 
 [dev-dependencies]
 # The emulator test plays the phone: real requests, and the host MuSig2 code to check the answers.
