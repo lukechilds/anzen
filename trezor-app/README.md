@@ -6,11 +6,13 @@ The Anzen cold signer as a Trezor app: the phone sends a request, the Trezor sho
 
 It runs, end to end, in Trezor's emulator of a Safe 7 (`T3W1`), driven by the same Rust code the phone app uses. It has not run on a device.
 
-Trezor's apps ("modular apps", loaded by the host each time it connects) are still in development: the SDK, the build tool and the firmware side live in an unmerged pull request. This app is built against our fork of that work, the `anzen-apps` branch of the `trezor-firmware` submodule, which adds three things:
+Trezor's apps ("modular apps", loaded by the host each time it connects) are still in development: the SDK, the build tool and the firmware side live in an unmerged pull request. This app is built against our fork of that work, the `anzen-apps` branch of the `trezor-firmware` submodule, which adds three things the app needs:
 
 - **The private key of a path in the app's manifest** (`crypto::get_private_key`). Trezor Core has no BIP340 or MuSig2 call, so an app can only sign for a vault by doing the arithmetic itself, with the key. Core releases a key only for a curve and a path the app's manifest declares, as it does for every other key operation. For this app that is `m/86'/0'/100'/0/0` and `m/86'/1'/100'/0/0`, the signer's vault key on mainnet and on the test networks, and nothing else in the wallet.
 - **Apps in the emulator on Apple silicon.** Upstream links and loads emulator apps for Linux only.
 - **Apps that live outside the firmware repository**, which this one does.
+
+It also makes development firmware for a retail device accept apps without checking their signature, which is what lets an unlocked Safe 7 load one at all (see "Building for a device").
 
 A Trezor running stock firmware cannot run this app.
 
@@ -97,16 +99,21 @@ A test that is killed half way leaves the emulator waiting on a dead connection 
 tools/build.sh device
 ```
 
-This writes the Safe 7 image and, beside it, what a Trezor needs to accept it: a proof that the app is in a signed set of apps, and that set's signature (a "root packet"), signed here with Trezor's development keys. Only firmware built with those keys accepts it, which means our fork built for development, on a Safe 7 that has been unlocked to run unofficial firmware:
+This writes the Safe 7 image and, beside it, what a Trezor needs to accept it: a proof that the app is in a signed set of apps, and that set's signature (a "root packet"), signed here with Trezor's development keys.
+
+The firmware to run it on is our fork, built for a device:
 
 ```sh
 cd ../trezor-firmware
 nix-shell --run "source .venv/bin/activate && xtask build firmware -m t3w1 --apps"
+nix-shell --run "source .venv/bin/activate && xtask upload firmware -m t3w1"
 ```
 
-The phone app carries the device image inside it and uploads it when it connects (see `mobile/rust/build.rs`), so build the app before building the phone app.
+That is a development build, which a retail Safe 7 runs only once its bootloader has been unlocked for unofficial firmware (Trezor documents how; it wipes the device, so use one with nothing on it). On such a build the fork does not check an app's signature: a retail device's secure monitor has no call for it, and Trezor has not published production keys for apps yet. Nothing vouches for an app on that firmware. It is for trying this out, never for funds.
 
-None of this section has been tried on hardware.
+The phone app carries the device image inside it and uploads it when it connects (`mobile/rust/build.rs`), so build the app before building the phone app. From a Mac, `cargo run -p anzen-link --example trezor -- policy` does the same over Bluetooth with no phone.
+
+Untried on hardware, all of it: the firmware build compiles and the image fits the Safe 7's app memory on paper, and that is what is known. The parts most likely to need work on a device are the Bluetooth transport (written from Trezor's host library), the two confirmations a Trezor asks of a paired phone it no longer remembers as recent, and signing speed.
 
 ## Protocol
 
