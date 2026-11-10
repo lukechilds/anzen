@@ -65,7 +65,7 @@ async function request(path: string, capability: string, body: JsonObject): Prom
 // signer, which draws its own body) leaves the children as they are.
 function PhoneBody({ id, on, children }: { id: number; on: boolean; children: React.ReactNode }) {
   if (!on) return <>{children}</>;
-  return <View style={{ flex: 1, borderRadius: 58, padding: 11, backgroundColor: '#16161a',
+  return <View style={{ flex: 1, borderRadius: 58, padding: 8, backgroundColor: '#16161a',
     boxShadow: [
       'inset 0 0 0 1.5px rgba(255,255,255,.2)', // the machined edge
       'inset 0 2px 1px -1px rgba(255,255,255,.3)', // its highlight along the top
@@ -87,7 +87,7 @@ function PhoneBody({ id, on, children }: { id: number; on: boolean; children: Re
       </Svg>
     </View>
     {/* The glass: black, with a faint edge where it meets the bezel. */}
-    <View style={{ flex: 1, borderRadius: 47, overflow: 'hidden', backgroundColor: '#000', boxShadow: '0 0 0 1px rgba(0,0,0,.9), 0 0 0 1.5px rgba(255,255,255,.05)' } as object}>
+    <View style={{ flex: 1, borderRadius: 50, overflow: 'hidden', backgroundColor: '#000', boxShadow: '0 0 0 1px rgba(0,0,0,.9), 0 0 0 1.5px rgba(255,255,255,.05)' } as object}>
       {children}
     </View>
   </View>;
