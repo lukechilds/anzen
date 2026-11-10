@@ -154,7 +154,7 @@ test('mainnet asks once, then reopens where it left off, never a localhost backe
   expect(backend).toEqual([]);
 });
 
-test('recovery phrases show and import on both devices, and only before vault setup', async ({ page, context, baseURL }) => {
+test('recovery phrases show and import before vault setup, and descriptors export for watching', async ({ page, context, baseURL }) => {
   const external = noBackend(context); await indexer(context, 'signet');
   await page.goto(origin(baseURL)); await page.getByRole('button', { name: 'Mutinynet', exact: true }).click();
   const wallet = page.getByTestId('device-wallet'), signer = page.getByTestId('device-signer');
@@ -192,6 +192,14 @@ test('recovery phrases show and import on both devices, and only before vault se
   await expect(wallet.getByRole('button', { name: 'Show recovery phrase', exact: true })).toBeVisible();
   await expect(wallet.getByRole('button', { name: 'Import recovery phrase', exact: true })).toHaveCount(0);
   await expect(signer.getByRole('button', { name: 'Import recovery phrase', exact: true })).toHaveCount(0);
+  // Public descriptors for watch-only wallets: the wallet's in its settings, the vault's in the vault's.
+  await wallet.getByRole('button', { name: 'Export wallet descriptor', exact: true }).click();
+  await expect(wallet.getByTestId('descriptor-wallet')).toHaveText(/^tr\(\[[0-9a-f]{8}\/86'\/1'\/0'\]tpub[1-9A-HJ-NP-Za-km-z]+\/<0;1>\/\*\)#[0-9a-z]{8}$/);
+  await wallet.getByRole('button', { name: 'Back to wallet', exact: true }).click();
+  await openVaultPanel(wallet, 'Vault settings');
+  await wallet.getByRole('button', { name: 'Export vault descriptors', exact: true }).click();
+  await expect(wallet.getByTestId('descriptor-vault')).toHaveText(/^tr\([0-9a-f]{64},and_v\(v:after\(\d+\),and_v\(v:older\(4259839\),pk\([0-9a-f]{64}\)\)\)\)#[0-9a-z]{8}$/);
+  await expect(wallet.getByTestId('descriptor-connectors')).toHaveText(/^tr\([0-9a-f]{64},pk\([0-9a-f]{64}\)\)#[0-9a-z]{8}$/);
   expect(external).toEqual([]);
 });
 

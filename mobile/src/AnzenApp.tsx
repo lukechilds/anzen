@@ -8,6 +8,7 @@ import { DarkBackground, DarkEffects, DeviceStatus, Icon } from './DarkChrome';
 import { ActionPill, Activity, DarkSheet, IconButton, MenuRow, WalletHistory } from './DarkSurfaces';
 import AddressCard, { AddressLines } from './AddressCard';
 import VaultSummary from './VaultSummary';
+import Descriptors from './Descriptors';
 import RecoveryPhrase from './RecoveryPhrase';
 import Benchmarks, { BenchmarkRunner } from './Benchmarks';
 import { VaultSettings, WithdrawalOptions } from './VaultControls';
@@ -563,6 +564,10 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
             {deviceSettings}
             {recoveryPhrase}
+            <View style={{ marginTop: 34 }}>
+              <Text style={s.sheetEyebrow}>Watch-only</Text>
+              <View style={{ marginTop: 12 }}><Descriptors kind="wallet" busy={busy} run={run}/></View>
+            </View>
             {benchmark && <Benchmarks runner={benchmark}/>}
             <View style={{ marginTop: 48, marginHorizontal: 4 }}>
               <Text style={s.footnote}>anzen · {identity?.network || network}</Text>
@@ -819,8 +824,9 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       {page === 'withdraw' && <WithdrawalOptions go={go} vault={vault}/>}
       {page === 'settings' && <VaultSettings vault={vault} disabled={busy}
         go={go} backup={() => propose({ method: 'propose_backup' }, 'backup-proposal', () => setPage('home'))}
-        reviewRecovered={() => { go('recovered-wallet'); void reviewRecovered(); }}/>
-      }
+        reviewRecovered={() => { go('recovered-wallet'); void reviewRecovered(); }}>
+        <Descriptors kind="vault" busy={busy} run={run}/>
+      </VaultSettings>}
       {page === 'lost' && <View style={{ gap: 18, marginTop: 22, marginHorizontal: 6 }}>
         {([['key', 'Lost your signer?', 'Restore it from the backup its maker gave you. It comes back as the same key, so your vault doesn’t change.'],
           ['phone', 'Lost your phone?', 'On a new phone, open Vault and recover with your signer. Your cloud backup restores this phone’s key.'],

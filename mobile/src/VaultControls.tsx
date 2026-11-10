@@ -6,9 +6,9 @@ import { JsonObject } from './transport';
 
 // Navigation only. Rust remains responsible for proposal validation, eligibility, fees,
 // signature checks and broadcast. No amounts or timelocks are constructed in this UI.
-export function VaultSettings({ vault, go, backup, reviewRecovered, disabled }: {
+export function VaultSettings({ vault, go, backup, reviewRecovered, disabled, children }: {
   vault: JsonObject; go: (page: string) => void; backup: () => void;
-  reviewRecovered: () => void; disabled: boolean;
+  reviewRecovered: () => void; disabled: boolean; children?: React.ReactNode;
 }) {
   return <View style={{ marginTop: 14 }}>
     <MenuRow title="Spending policy" subtitle="Monthly allowance and emergency access" onPress={() => go('policy')}/>
@@ -16,6 +16,7 @@ export function VaultSettings({ vault, go, backup, reviewRecovered, disabled }: 
     <MenuRow title="Lost a device?" subtitle="What to do if your phone or signer goes missing" onPress={() => go('lost')}/>
     {vault.recovered_wallet_available && <MenuRow title="Review recovered wallet funds" subtitle="Move the old phone’s everyday balance" onPress={reviewRecovered} disabled={disabled}/>}
     <MenuRow title="Saved messages" subtitle="Resend a request as a file" onPress={() => go('saved-messages')}/>
+    {children}
     <Text style={[s.footnote, { marginTop: 28, marginBottom: 6 }]}>{vault.config.network} · block {vault.chain_height.toLocaleString('en-US')}</Text>
   </View>;
 }
