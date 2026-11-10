@@ -16,9 +16,6 @@ use miniscript::{
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-pub const BIP341_NUMS_KEY: &str =
-    "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
-
 #[derive(Debug, Clone)]
 pub struct VaultPolicy {
     pub descriptor: Descriptor<DescriptorPublicKey>,
@@ -47,6 +44,7 @@ pub fn internal_key(phone: XOnlyPublicKey, hww: XOnlyPublicKey) -> Result<XOnlyP
     Ok(XOnlyPublicKey::from_slice(&aggregate)?)
 }
 
+/// How a connector is spent: the phone through the key path, or the signer through the only leaf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ControllerPath {
@@ -72,7 +70,9 @@ pub struct ControllerLeaf {
     pub control_block: ControlBlock,
 }
 
-/// The fixed 1-of-2 Taproot policy used by every connector UTXO in one vault.
+/// The fixed 1-of-2 Taproot policy used by every connector UTXO in one vault: `tr(phone,pk(hww))`.
+/// The phone spends connectors in every policy action, so it takes the smaller key path; the
+/// signer's revocations use the only leaf.
 ///
 /// It deliberately reuses the vault's phone and HWW public keys. Connector state is represented
 /// by an outpoint, not by a derived key: every connector is sent to this same address until the
@@ -81,7 +81,6 @@ pub struct ControllerLeaf {
 pub struct ControllerPolicy {
     pub descriptor: Descriptor<DescriptorPublicKey>,
     pub address: Address,
-    phone: XOnlyPublicKey,
     hww: XOnlyPublicKey,
 }
 
@@ -264,7 +263,7 @@ impl ControllerPolicy {
         hww: XOnlyPublicKey,
         network: Network,
     ) -> Result<Self> {
-        let descriptor_text = format!("tr({BIP341_NUMS_KEY},{{pk({phone}),pk({hww})}})");
+        let descriptor_text = format!("tr({phone},pk({hww}))");
         let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_text)
             .with_context(|| format!("invalid controller descriptor: {descriptor_text}"))?;
         let address = descriptor
@@ -273,7 +272,6 @@ impl ControllerPolicy {
         Ok(Self {
             descriptor,
             address,
-            phone,
             hww,
         })
     }
@@ -284,9 +282,24 @@ impl ControllerPolicy {
             .context("controller descriptor could not be made definite")
     }
 
+    /// The phone's key-path signature commits to this through the Taproot tweak.
+    pub fn merkle_root(&self) -> Result<bitcoin::taproot::TapNodeHash> {
+        match self
+            .descriptor
+            .derived_descriptor(&Secp256k1::verification_only(), 0)?
+        {
+            Descriptor::Tr(tr) => tr
+                .spend_info()
+                .merkle_root()
+                .context("controller descriptor has no script tree"),
+            _ => bail!("controller descriptor is not Taproot"),
+        }
+    }
+
+    /// The signer's leaf. The phone has none: it spends through the key path.
     pub fn leaf(&self, path: ControllerPath) -> Result<ControllerLeaf> {
         let key = match path {
-            ControllerPath::Phone => self.phone,
+            ControllerPath::Phone => bail!("the phone spends connectors through the key path"),
             ControllerPath::Hww => self.hww,
         };
         let target_script = Builder::new()
@@ -429,11 +442,15 @@ mod tests {
     }
 
     #[test]
-    fn controller_reuses_vault_keys_with_two_single_signature_paths() {
+    fn controller_reuses_vault_keys_with_the_phone_as_internal_key() {
         let secp = Secp256k1::new();
         let phone = DeviceKeys::generate(&secp).unwrap();
         let hww = DeviceKeys::generate(&secp).unwrap();
         let controller = ControllerPolicy::new(phone.vault_pubkey, hww.vault_pubkey).unwrap();
+        assert!(controller.descriptor_string().starts_with(&format!(
+            "tr({},pk({}))#",
+            phone.vault_pubkey, hww.vault_pubkey
+        )));
 
         assert!(
             controller
@@ -445,11 +462,25 @@ mod tests {
                 .descriptor_string()
                 .contains(&hww.vault_pubkey.to_string())
         );
-        assert_ne!(
-            controller.leaf(ControllerPath::Phone).unwrap().leaf_hash,
-            controller.leaf(ControllerPath::Hww).unwrap().leaf_hash
+        assert!(controller.leaf(ControllerPath::Phone).is_err());
+        let hww_leaf = controller.leaf(ControllerPath::Hww).unwrap();
+        assert_eq!(hww_leaf.depth, 0);
+        assert_eq!(
+            controller.merkle_root().unwrap(),
+            bitcoin::taproot::TapNodeHash::from(hww_leaf.leaf_hash)
         );
-        assert_eq!(controller.leaf(ControllerPath::Phone).unwrap().depth, 1);
-        assert_eq!(controller.leaf(ControllerPath::Hww).unwrap().depth, 1);
+        // The same output as the protocol's own construction.
+        let keys = VaultKeys {
+            phone: XOnlyKey(phone.vault_pubkey.serialize()),
+            hww: XOnlyKey(hww.vault_pubkey.serialize()),
+            recovery_locktime: DEFAULT_RECOVERY_LOCKTIME,
+        };
+        let protocol =
+            anzen_protocol::script::ControllerScript::new(&mut SoftwareCrypto::new(), &keys)
+                .unwrap();
+        assert_eq!(
+            controller.address.script_pubkey().as_bytes(),
+            protocol.script_pubkey
+        );
     }
 }

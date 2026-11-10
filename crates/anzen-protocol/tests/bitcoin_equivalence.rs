@@ -22,8 +22,6 @@ use bitcoin::{
 use miniscript::{Descriptor, DescriptorPublicKey};
 use std::str::FromStr;
 
-const NUMS: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
-
 fn random_keys() -> VaultKeys {
     let secp = Secp256k1::new();
     let key = || {
@@ -69,7 +67,7 @@ fn descriptors(
     let locktime = keys.recovery_locktime;
     let vault =
         format!("tr({aggregate},and_v(v:after({locktime}),and_v(v:older(4259839),pk({hww}))))");
-    let controller = format!("tr({NUMS},{{pk({phone}),pk({hww})}})");
+    let controller = format!("tr({phone},pk({hww}))");
     (
         Descriptor::from_str(&vault).unwrap(),
         Descriptor::from_str(&controller).unwrap(),
@@ -93,9 +91,9 @@ fn hot_destination() -> Vec<u8> {
 }
 
 /// Leaf scripts and control blocks as Miniscript satisfies them, for exact witness sizes. The
-/// cooperative key path is a single signature.
+/// vault's cooperative and the connector's phone key paths are a single signature.
 fn witness_for(keys: &VaultKeys, path: SpendPath) -> Witness {
-    if path == SpendPath::Cooperative {
+    if matches!(path, SpendPath::Cooperative | SpendPath::ControllerPhone) {
         let mut witness = Witness::new();
         witness.push([0_u8; 64]);
         return witness;
@@ -114,10 +112,9 @@ fn witness_for(keys: &VaultKeys, path: SpendPath) -> Witness {
     };
     let info = tr.spend_info();
     let (target_key, depth, delay) = match path {
-        SpendPath::Cooperative => unreachable!("handled above"),
+        SpendPath::Cooperative | SpendPath::ControllerPhone => unreachable!("handled above"),
         SpendPath::HwwRecovery => (Some(keys.hww), 0, Some(4_259_839)),
-        SpendPath::ControllerPhone => (Some(keys.phone), 1, None),
-        SpendPath::ControllerHww => (Some(keys.hww), 1, None),
+        SpendPath::ControllerHww => (Some(keys.hww), 0, None),
     };
     let (_, script) = tr
         .iter_scripts()
@@ -182,7 +179,6 @@ fn every_leaf_hash_matches_rust_bitcoin() {
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     for (path, leaf) in [
         (SpendPath::HwwRecovery, scripts.vault.hww_recovery_leaf),
-        (SpendPath::ControllerPhone, scripts.controller.phone_leaf),
         (SpendPath::ControllerHww, scripts.controller.hww_leaf),
     ] {
         let witness = witness_for(&keys, path);
@@ -264,7 +260,7 @@ fn serialization_vsize_and_sighashes_match_rust_bitcoin() {
         let cache = SighashCache::new(&mut crypto, &transaction, &prevouts).unwrap();
         let mut bitcoin_cache = BitcoinSighashCache::new(&bitcoin_tx);
         for (index, spend) in spends.iter().enumerate() {
-            if *spend == SpendPath::Cooperative {
+            if matches!(spend, SpendPath::Cooperative | SpendPath::ControllerPhone) {
                 let expected = bitcoin_cache
                     .taproot_key_spend_signature_hash(
                         index,

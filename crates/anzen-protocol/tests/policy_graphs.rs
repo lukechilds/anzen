@@ -23,6 +23,55 @@ fn inputs(values: &Value) -> Vec<Input> {
         .collect()
 }
 
+/// A fresh regtest Taproot address for a case that now needs one more destination, derived from
+/// `seed` so regenerating twice gives the same vector.
+fn new_destination(seed: &str) -> Value {
+    use bitcoin::hashes::{Hash, sha256};
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let secret = bitcoin::secp256k1::SecretKey::from_slice(
+        sha256::Hash::hash(seed.as_bytes()).as_byte_array(),
+    )
+    .unwrap();
+    let key = bitcoin::secp256k1::Keypair::from_secret_key(&secp, &secret).x_only_public_key();
+    bitcoin::Address::p2tr(&secp, key.0, None, bitcoin::Network::Regtest)
+        .to_string()
+        .into()
+}
+
+/// After a policy change, how many allowances fit (or whether the policy fits at all) can move:
+/// record the new outcome, keeping every destination that is still used.
+fn update_outcome(case: &mut Value, index: usize, request: &PolicyInputs<'_>) {
+    let plan = match policy::plan(request) {
+        Ok(plan) => plan,
+        Err(error) => {
+            case["outcome"] = serde_json::json!({ "error": error.to_string() });
+            return;
+        }
+    };
+    if case["outcome"].get("error").is_some() {
+        case["outcome"] =
+            serde_json::json!({ "allowance_destinations": [], "emergency_destination": null });
+    }
+    let outcome = &mut case["outcome"];
+    let mut allowances = outcome["allowance_destinations"]
+        .as_array()
+        .unwrap()
+        .clone();
+    allowances.truncate(plan.allowance_count);
+    while allowances.len() < plan.allowance_count {
+        allowances.push(new_destination(&format!(
+            "case {index} allowance {}",
+            allowances.len()
+        )));
+    }
+    outcome["allowance_destinations"] = allowances.into();
+    if !plan.has_emergency_access(request.limits) {
+        outcome["emergency_destination"] = Value::Null;
+    } else if outcome["emergency_destination"].is_null() {
+        outcome["emergency_destination"] = new_destination(&format!("case {index} emergency"));
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     bitcoin::hex::DisplayHex::to_lower_hex_string(bytes)
 }
@@ -47,7 +96,12 @@ fn protocol_reproduces_every_recorded_phone_graph() {
     };
     let scripts = Scripts::new(&mut crypto, &keys).unwrap();
     let (mut accepted, mut rejected) = (0, 0);
-    for case in document["cases"].as_array_mut().unwrap() {
+    for (index, case) in document["cases"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
         let vault = inputs(&case["vault_inputs"]);
         let controllers = inputs(&case["controller_inputs"]);
         let limits: Limits = serde_json::from_value(case["limits"].clone()).unwrap();
@@ -57,6 +111,9 @@ fn protocol_reproduces_every_recorded_phone_graph() {
             controllers: &controllers,
             limits,
         };
+        if update {
+            update_outcome(case, index, &request);
+        }
         let outcome = &case["outcome"];
         if outcome.get("error").is_some() {
             assert!(policy::plan(&request).is_err(), "accepted {case}");

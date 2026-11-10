@@ -50,10 +50,10 @@ tr(
 Revocable authorization state lives in separate 1,000-sat connector outputs. They reuse the same device keys under a fixed 1-of-2 Taproot policy:
 
 ```text
-tr(NUMS,{pk(phone),pk(hww)})
+tr(phone,pk(hww))
 ```
 
-Either device can spend a connector alone. The connector does not control vault principal; its exact outpoint is an execution token committed into a presigned policy PSBT.
+Either device can spend a connector alone: the phone through the key path, as every policy action does, and the HWW through the only leaf when it revokes. A phone spend is therefore a single signature that looks like any single-key Taproot spend. The connector does not control vault principal; its exact outpoint is an execution token committed into a presigned policy PSBT.
 
 ### Annual vault layout and presigned transaction graph
 

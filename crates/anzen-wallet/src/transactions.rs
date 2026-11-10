@@ -12,7 +12,7 @@ use anzen_protocol::{tx, wire::Signature};
 use bitcoin::{
     Psbt, Transaction, TxOut,
     hashes::Hash,
-    key::Secp256k1,
+    key::{Secp256k1, TapTweak},
     psbt::PsbtSighashType,
     secp256k1::{Keypair, Message, XOnlyPublicKey, schnorr},
     sighash::{Prevouts, SighashCache, TapSighashType},
@@ -254,6 +254,8 @@ pub fn sign_vault_psbt_inputs(
     Ok(())
 }
 
+/// Sign connector inputs: the phone through the key path with its tweaked key, the signer through
+/// its leaf.
 pub fn sign_controller_psbt_inputs(
     psbt: &mut Psbt,
     policy: &ControllerPolicy,
@@ -264,36 +266,97 @@ pub fn sign_controller_psbt_inputs(
     validate_default_sighashes(psbt)?;
     let secp = Secp256k1::new();
     let (signing_pubkey, _) = XOnlyPublicKey::from_keypair(keypair);
-    let leaf = policy.leaf(path)?;
+    let signer = ControllerSigner::new(policy, path)?;
     for &index in input_indexes {
         if index >= psbt.inputs.len() {
             bail!("controller signing input index {index} is out of range");
         }
-        let origins = psbt.inputs[index]
-            .tap_key_origins
-            .get(&signing_pubkey)
-            .with_context(|| {
-                format!("controller signing key {signing_pubkey} is not in PSBT input {index}")
-            })?;
-        if !origins.0.contains(&leaf.leaf_hash) {
-            bail!("signing key {signing_pubkey} is not authorized by the {path:?} controller leaf");
-        }
-        let unsigned_tx = psbt.unsigned_tx.clone();
-        let mut cache = SighashCache::new(&unsigned_tx);
-        let message = match psbt.sighash_msg(index, &mut cache, Some(leaf.leaf_hash))? {
-            PsbtSighashMsg::TapSighash(sighash) => Message::from_digest(sighash.to_byte_array()),
-            _ => bail!("controller input {index} did not produce a Taproot sighash"),
-        };
-        let signature = secp.sign_schnorr_no_aux_rand(&message, keypair);
-        psbt.inputs[index].tap_script_sigs.insert(
-            (signing_pubkey, leaf.leaf_hash),
-            taproot::Signature {
-                signature,
-                sighash_type: TapSighashType::Default,
+        signer.check_input(psbt, index, signing_pubkey)?;
+        let message = controller_message(psbt, index, signer.leaf_hash)?;
+        let signature = taproot::Signature {
+            signature: match signer.merkle_root {
+                Some(root) => secp.sign_schnorr_no_aux_rand(
+                    &message,
+                    &keypair.tap_tweak(&secp, Some(root)).to_keypair(),
+                ),
+                None => secp.sign_schnorr_no_aux_rand(&message, keypair),
             },
-        );
+            sighash_type: TapSighashType::Default,
+        };
+        match signer.leaf_hash {
+            Some(leaf) => {
+                psbt.inputs[index]
+                    .tap_script_sigs
+                    .insert((signing_pubkey, leaf), signature);
+            }
+            None => psbt.inputs[index].tap_key_sig = Some(signature),
+        }
     }
     Ok(())
+}
+
+/// What a connector signature commits to on each path. The phone's key path has no leaf and signs
+/// under the tweak of the signer's leaf; the signer's leaf is signed untweaked.
+struct ControllerSigner {
+    path: ControllerPath,
+    leaf_hash: Option<TapLeafHash>,
+    merkle_root: Option<taproot::TapNodeHash>,
+}
+
+impl ControllerSigner {
+    fn new(policy: &ControllerPolicy, path: ControllerPath) -> Result<Self> {
+        Ok(match path {
+            ControllerPath::Phone => Self {
+                path,
+                leaf_hash: None,
+                merkle_root: Some(policy.merkle_root()?),
+            },
+            ControllerPath::Hww => Self {
+                path,
+                leaf_hash: Some(policy.leaf(path)?.leaf_hash),
+                merkle_root: None,
+            },
+        })
+    }
+
+    /// The key must be the one this path authorizes in the input's descriptor metadata.
+    fn check_input(&self, psbt: &Psbt, index: usize, key: XOnlyPublicKey) -> Result<()> {
+        let input = &psbt.inputs[index];
+        let authorized = match (self.leaf_hash, self.merkle_root) {
+            (Some(leaf), _) => input
+                .tap_key_origins
+                .get(&key)
+                .is_some_and(|(leaves, _)| leaves.contains(&leaf)),
+            (None, root) => input.tap_internal_key == Some(key) && input.tap_merkle_root == root,
+        };
+        if !authorized {
+            bail!(
+                "key {key} is not authorized by the {:?} controller path on PSBT input {index}",
+                self.path
+            );
+        }
+        Ok(())
+    }
+
+    /// The key a signature on this path verifies against.
+    fn verifying_key(&self, key: XOnlyPublicKey) -> XOnlyPublicKey {
+        match self.merkle_root {
+            Some(root) => key
+                .tap_tweak(&Secp256k1::verification_only(), Some(root))
+                .0
+                .to_x_only_public_key(),
+            None => key,
+        }
+    }
+}
+
+fn controller_message(psbt: &Psbt, index: usize, leaf: Option<TapLeafHash>) -> Result<Message> {
+    let unsigned_tx = psbt.unsigned_tx.clone();
+    let mut cache = SighashCache::new(&unsigned_tx);
+    match psbt.sighash_msg(index, &mut cache, leaf)? {
+        PsbtSighashMsg::TapSighash(sighash) => Ok(Message::from_digest(sighash.to_byte_array())),
+        _ => bail!("controller input {index} did not produce a Taproot sighash"),
+    }
 }
 
 pub fn verify_vault_psbt_signature(
@@ -350,27 +413,28 @@ pub fn verify_controller_psbt_signatures(
 ) -> Result<()> {
     validate_default_sighashes(psbt)?;
     let secp = Secp256k1::verification_only();
-    let leaf = policy.leaf(path)?;
+    let signer = ControllerSigner::new(policy, path)?;
+    let verifying_key = signer.verifying_key(signing_pubkey);
     for &index in input_indexes {
         if index >= psbt.inputs.len() {
             bail!("controller verification input index {index} is out of range");
         }
-        let signature = psbt.inputs[index]
-            .tap_script_sigs
-            .get(&(signing_pubkey, leaf.leaf_hash))
-            .with_context(|| {
-                format!("PSBT input {index} lacks the expected controller signature from {signing_pubkey}")
-            })?;
+        signer.check_input(psbt, index, signing_pubkey)?;
+        let input = &psbt.inputs[index];
+        let signature = match signer.leaf_hash {
+            Some(leaf) => input.tap_script_sigs.get(&(signing_pubkey, leaf)),
+            None => input.tap_key_sig.as_ref(),
+        }
+        .with_context(|| {
+            format!(
+                "PSBT input {index} lacks the expected controller signature from {signing_pubkey}"
+            )
+        })?;
         if signature.sighash_type != TapSighashType::Default {
             bail!("PSBT input {index} uses a non-default Taproot sighash");
         }
-        let unsigned_tx = psbt.unsigned_tx.clone();
-        let mut cache = SighashCache::new(&unsigned_tx);
-        let message = match psbt.sighash_msg(index, &mut cache, Some(leaf.leaf_hash))? {
-            PsbtSighashMsg::TapSighash(sighash) => Message::from_digest(sighash.to_byte_array()),
-            _ => bail!("controller input {index} did not produce a Taproot sighash"),
-        };
-        secp.verify_schnorr(&signature.signature, &message, &signing_pubkey)
+        let message = controller_message(psbt, index, signer.leaf_hash)?;
+        secp.verify_schnorr(&signature.signature, &message, &verifying_key)
             .with_context(|| format!("invalid controller signature on PSBT input {index}"))?;
     }
     Ok(())
@@ -833,8 +897,9 @@ mod tests {
         )
         .unwrap();
         let finalized = finalize_vault_psbt(psbt).unwrap();
+        // Both are key-path spends: the vault's joint signature and the phone's own.
         assert_eq!(finalized.input[0].witness.len(), 1);
-        assert_eq!(finalized.input[1].witness.len(), 3);
+        assert_eq!(finalized.input[1].witness.len(), 1);
     }
 
     #[test]

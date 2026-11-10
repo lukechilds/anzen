@@ -218,9 +218,9 @@ pub enum SpendPath {
     Cooperative,
     /// Vault `and_v(v:after(T),and_v(v:older(4259839),pk(hww)))`, the tree's only leaf.
     HwwRecovery,
-    /// Connector `pk(phone)` at depth one.
+    /// Connector key path: the phone's own signature, under the Taproot tweak.
     ControllerPhone,
-    /// Connector `pk(hww)` at depth one.
+    /// Connector `pk(hww)`, the tree's only leaf.
     ControllerHww,
 }
 
@@ -234,9 +234,8 @@ impl SpendPath {
             Self::HwwRecovery => {
                 1 + item(64) + item(crate::script::RECOVERY_SCRIPT_LEN) + item(control_block(0))
             }
-            Self::ControllerPhone | Self::ControllerHww => {
-                1 + item(64) + item(34) + item(control_block(1))
-            }
+            Self::ControllerPhone => 1 + item(64),
+            Self::ControllerHww => 1 + item(64) + item(34) + item(control_block(0)),
         }
     }
 

@@ -771,7 +771,7 @@ pub fn activate_policy(
     let controller = controller_policy(&config)?;
     let limits = approval.request.limits;
     let schedule = Schedule {
-        version: 5,
+        version: SCHEDULE_VERSION,
         rollover_txid: rollover.compute_txid().to_string(),
         controller_descriptor: controller.descriptor_string(),
         controller_address: controller.address.to_string(),
@@ -1046,9 +1046,13 @@ fn validate_schedule_controller(schedule: &Schedule, controller: &ControllerPoli
     Ok(())
 }
 
+/// Version 6: connectors moved to `tr(phone,pk(hww))`, so a version 5 policy's connectors and
+/// actions belong to the old controller; approving a new policy replaces them.
+const SCHEDULE_VERSION: u8 = 6;
+
 pub fn load_schedule(data_dir: &Path) -> Result<Schedule> {
     let schedule: Schedule = read_json(&data_dir.join(SCHEDULE_FILE))?;
-    if schedule.version != 5 {
+    if schedule.version != SCHEDULE_VERSION {
         bail!("unsupported active policy version; approve a new vault policy");
     }
     Ok(schedule)

@@ -18,15 +18,16 @@ fn vector() -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-/// The controller descriptor `tr(NUMS,{pk(phone),pk(hww)})` names both keys; the vault's
-/// internal key is their aggregate, so it does not. The vault descriptor names the recovery
-/// locktime in its `after()`.
+/// The controller descriptor `tr(phone,pk(hww))` names both keys; the vault's internal key is
+/// their aggregate, so it does not. The vault descriptor names the recovery locktime in its
+/// `after()`.
 fn keys_from_descriptors(controller: &str, vault: &str) -> VaultKeys {
-    let mut keys = controller.split("pk(").skip(1).map(|part| &part[..64]);
+    let phone = &controller["tr(".len()..][..64];
+    let hww = &controller.split("pk(").nth(1).unwrap()[..64];
     let locktime = vault.split("after(").nth(1).unwrap();
     VaultKeys {
-        phone: XOnlyKey::from_hex(keys.next().unwrap()).unwrap(),
-        hww: XOnlyKey::from_hex(keys.next().unwrap()).unwrap(),
+        phone: XOnlyKey::from_hex(phone).unwrap(),
+        hww: XOnlyKey::from_hex(hww).unwrap(),
         recovery_locktime: locktime[..locktime.find(')').unwrap()].parse().unwrap(),
     }
 }

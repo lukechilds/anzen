@@ -28,8 +28,8 @@ pub const MONTHS_PER_ROLLOVER: usize = 12;
 pub const DEFAULT_MONTHLY_LIMIT_SATS: u64 = 10_000_000;
 pub const DEFAULT_FEE_RATE_SAT_VB: u64 = 1;
 /// Fixed value carried by each live connector UTXO in the current protocol version. At the MVP's
-/// 1 sat/vB fee rate, 1,000 sats pays the 137-vbyte standalone revocation fee and leaves non-dust
-/// P2TR wallet change. Production fee selection may add ordinary wallet inputs at higher feerates.
+/// 1 sat/vB fee rate, 1,000 sats pays a standalone revocation's fee (111 vbytes from the phone, 129
+/// from the HWW) and leaves non-dust P2TR wallet change. Production fee selection may add ordinary wallet inputs at higher feerates.
 pub const CONNECTOR_VALUE_SATS: u64 = 1_000;
 // BIP68 time locks use 512-second units. This is the smallest representable delay that is at
 // least 30 days: ceil(2_592_000 / 512) * 512 = 2_592_256 seconds.

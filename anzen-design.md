@@ -93,10 +93,10 @@ A future soft fork could extend relative-timelock range by assigning meaning to 
 The vault script remains the only script that controls principal. Revocable policy state is represented by small 1,000-sat connector UTXOs under this fixed Taproot policy:
 
 ```text
-tr(NUMS,{pk(M),pk(H)})
+tr(M,pk(H))
 ```
 
-The controller reuses the fixed vault public keys. Either device can spend it alone, there is no usable key path, and no controller xpub, derivation index, or additional seed is required. All connectors in one key epoch use the same address; the particular state is identified by its outpoint.
+The controller reuses the fixed vault public keys. Either device can spend it alone, and no controller xpub, derivation index, or additional seed is required. The phone key is the internal key because the phone spends connectors far more often: every allowance and emergency action, and its own revocations. Its spends use the key path, a single 64-byte signature (57.5 vB per input instead of 82.75 vB through a leaf at depth one), and look like any single-key Taproot spend. The HWW's revocations use the only leaf, whose control block needs no sibling hash (74.75 vB per input). All connectors in one key epoch use the same address; the particular state is identified by its outpoint.
 
 Every presigned policy action contains two inputs:
 
@@ -109,7 +109,7 @@ Revocation is constructed dynamically and spends only the current connector. It 
 
 Annual rollover consumes every live old connector and creates exactly one replacement for each enabled independent chain. An intermediate action rolls its connector to the same controller address; a terminal action consumes it without replacement. Phone-key rotation consumes all old-controller outputs before installing the replacement key, then a renewed policy creates connectors under the new keys.
 
-The MVP fixes connector value at 1,000 sats and fees at 1 sat/vB. A standalone 137-vbyte revocation therefore leaves 863 sats of non-dust P2TR change. Production requires a current-feerate strategy, optional fee inputs, and RBF/CPFP support. Until revocation confirms, it can race a mature policy action that spends the same connector.
+The MVP fixes connector value at 1,000 sats and fees at 1 sat/vB. A standalone phone revocation is 111 vbytes and leaves 889 sats of non-dust P2TR change; an HWW revocation of one connector is 129 vbytes and leaves 871. Production requires a current-feerate strategy, optional fee inputs, and RBF/CPFP support. Until revocation confirms, it can race a mature policy action that spends the same connector.
 
 ## Monthly mobile spending
 

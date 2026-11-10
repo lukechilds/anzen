@@ -4,12 +4,13 @@
 //! both devices together through the key path with one MuSig2 signature, or the hardware wallet
 //! alone after about 388 days (a time-based relative lock). `T` is a long-past absolute locktime
 //! that never delays recovery; vanity searches grind it to pick the address.
-//! Connectors: `tr(NUMS,{pk(phone),pk(hww)})`.
+//! Connectors: `tr(phone,pk(hww))`: the phone alone through the key path, as in every policy
+//! action, or the hardware wallet alone through the only leaf when it revokes.
 
 use crate::{
     Error, Result,
-    consts::{HWW_RECOVERY_SEQUENCE, NUMS_KEY, RECOVERY_LOCKTIMES},
-    crypto::{Crypto, TAPBRANCH_TAG, TAPLEAF_TAG, TAPTWEAK_TAG, TweakedKey, tagged_hash},
+    consts::{HWW_RECOVERY_SEQUENCE, RECOVERY_LOCKTIMES},
+    crypto::{Crypto, TAPLEAF_TAG, TAPTWEAK_TAG, TweakedKey, tagged_hash},
 };
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -116,19 +117,6 @@ pub fn tapleaf_hash<C: Crypto + ?Sized>(crypto: &mut C, script: &[u8]) -> [u8; 3
     )
 }
 
-pub fn tapbranch_hash<C: Crypto + ?Sized>(
-    crypto: &mut C,
-    left: [u8; 32],
-    right: [u8; 32],
-) -> [u8; 32] {
-    let (first, second) = if left <= right {
-        (left, right)
-    } else {
-        (right, left)
-    };
-    tagged_hash(crypto, &TAPBRANCH_TAG, &[&first, &second])
-}
-
 fn output_key<C: Crypto + ?Sized>(
     crypto: &mut C,
     internal_key: &[u8; 32],
@@ -207,12 +195,15 @@ impl VaultScript {
     }
 }
 
-/// Leaf hashes, output key and scriptPubKey of the 1-of-2 connector policy.
+/// Leaf, output key and scriptPubKey of the 1-of-2 connector policy. The phone key is the internal
+/// key: the phone spends connectors far more often, so its spends take the smaller key path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControllerScript {
     pub keys: VaultKeys,
-    pub phone_leaf: [u8; 32],
     pub hww_leaf: [u8; 32],
+    /// The tree has one leaf, so its root is that leaf's hash. The phone's key-path signature
+    /// commits to it through the Taproot tweak.
+    pub merkle_root: [u8; 32],
     pub output: TweakedKey,
     pub script_pubkey: Vec<u8>,
 }
@@ -220,14 +211,12 @@ pub struct ControllerScript {
 impl ControllerScript {
     pub fn new<C: Crypto + ?Sized>(crypto: &mut C, keys: &VaultKeys) -> Result<Self> {
         validate_keys(crypto, keys)?;
-        let phone_leaf = tapleaf_hash(crypto, &single_key_script(&keys.phone));
         let hww_leaf = tapleaf_hash(crypto, &single_key_script(&keys.hww));
-        let root = tapbranch_hash(crypto, phone_leaf, hww_leaf);
-        let output = output_key(crypto, &NUMS_KEY, root)?;
+        let output = output_key(crypto, &keys.phone.0, hww_leaf)?;
         Ok(Self {
             keys: *keys,
-            phone_leaf,
             hww_leaf,
+            merkle_root: hww_leaf,
             script_pubkey: p2tr_script_pubkey(&output.output_key),
             output,
         })
