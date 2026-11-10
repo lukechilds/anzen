@@ -10,6 +10,7 @@ import AddressCard, { AddressLines } from './AddressCard';
 import VaultSummary from './VaultSummary';
 import Descriptors from './Descriptors';
 import RecoveryPhrase from './RecoveryPhrase';
+import ForgetVault from './ForgetVault';
 import Benchmarks, { BenchmarkRunner } from './Benchmarks';
 import { VaultSettings, WithdrawalOptions } from './VaultControls';
 import { PolicyEditor } from './VaultControls';
@@ -130,6 +131,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const [vault, setVault] = useState<JsonObject | null>(null);
   const [pairing, setPairing] = useState<JsonObject | null>(null);
   const [paired, setPaired] = useState(false);
+  // Bumped to read the session again, after the device's state changed under the app.
+  const [sessionEpoch, setSessionEpoch] = useState(0);
   const [backupStored, setBackupStored] = useState(false);
   // A vault is ready once it has its signer and, where the signer can protect one, its backup.
   const ready = paired && (backupStored || signerKeepsNoBackup);
@@ -203,7 +206,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       if (signer && session.config) setPairing(session.config);
     }).catch(e => { if (active) setError(String(e)); }).finally(() => { if (active) setSessionLoaded(true); });
     return () => { active = false; };
-  }, [transport]);
+  }, [transport, sessionEpoch]);
 
   // Presentation privacy only. Wallet operations/authorization are exclusively Rust-owned.
   const hideVault = () => { privacyGeneration.current += 1; setRevealError(''); setVaultVisible(false); setVault(null); setRecoveredPayment(null); setPage('home'); setTab('wallet'); setError(''); setNotice(''); };
@@ -543,6 +546,11 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       if (signer) { if (!tap) void send('signer-identity', value); }
       else { setWallet(null); setWelcome(false); }
     }}/>;
+  // Forget this phone's vault, in settings: test networks only, and the wallet stays.
+  const forgetVault = !signer && paired && network !== 'bitcoin' && <ForgetVault busy={busy} run={run} onForgotten={value => {
+    setIdentity(value); setPaired(false); setBackupStored(false); setVault(null); setVaultVisible(false); setWallet(null);
+    setRecoveredPayment(null); setNotice('Vault forgotten. Your wallet is unchanged.'); setSessionEpoch(epoch => epoch + 1);
+  }}/>;
   const walletSheet = Boolean(identity && !signer && tab === 'wallet' && ['send', 'receive', 'confirm-send', 'transaction'].includes(page));
   const vaultSheetLabels: Record<string, string> = { lost: 'Lost a device', 'saved-messages': 'Saved messages', settings: 'Vault settings', policy: 'Vault policy', withdraw: 'Withdraw', monthly: 'Monthly allowance', emergency: 'Emergency access', deposit: 'Vault deposit', sweep: 'Move vault funds' };
   const vaultSheet = Boolean(identity && !signer && tab === 'vault' && vaultVisible && vaultSheetLabels[page]);
@@ -570,6 +578,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
             {deviceSettings}
             {recoveryPhrase}
+            {forgetVault}
             <View style={{ marginTop: 34 }}>
               <Text style={s.sheetEyebrow}>Watch-only</Text>
               <View style={{ marginTop: 12 }}><Descriptors kind="wallet" busy={busy} run={run}/></View>
