@@ -8,6 +8,7 @@ import { DarkBackground, DarkEffects, DeviceStatus, Icon } from './DarkChrome';
 import { ActionPill, Activity, DarkSheet, IconButton, MenuRow, WalletHistory } from './DarkSurfaces';
 import AddressCard, { AddressLines } from './AddressCard';
 import VaultSummary from './VaultSummary';
+import RecoveryPhrase from './RecoveryPhrase';
 import Benchmarks, { BenchmarkRunner } from './Benchmarks';
 import { VaultSettings, WithdrawalOptions } from './VaultControls';
 import { PolicyEditor } from './VaultControls';
@@ -527,6 +528,14 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     }));
   }, [signer, tap]);
   const inPrivate = signer || tab === 'vault';
+  // Show or import this device's recovery phrase, in settings. Import only before vault setup.
+  // The emulator's signer has no Face ID; a phone in hardware wallet mode still asks for its own.
+  const recoveryPhrase = <RecoveryPhrase signer={signer} network={network} hasKeys={Boolean(identity)} canImport={!paired && !backupStored}
+    busy={busy} run={run} secure={signer && !deviceAuthenticate ? async action => { await action(); } : secure} onImported={value => {
+      setIdentity(value); setNotice('Recovery phrase imported.');
+      if (signer) { if (!tap) void send('signer-identity', value); }
+      else { setWallet(null); setWelcome(false); }
+    }}/>;
   const walletSheet = Boolean(identity && !signer && tab === 'wallet' && ['send', 'receive', 'confirm-send', 'transaction'].includes(page));
   const vaultSheetLabels: Record<string, string> = { lost: 'Lost a device', 'saved-messages': 'Saved messages', settings: 'Vault settings', policy: 'Vault policy', withdraw: 'Withdraw', monthly: 'Monthly allowance', emergency: 'Emergency access', deposit: 'Vault deposit', sweep: 'Move vault funds' };
   const vaultSheet = Boolean(identity && !signer && tab === 'vault' && vaultVisible && vaultSheetLabels[page]);
@@ -553,6 +562,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
             <WalletHistory items={wallet?.activity || []} loaded={Boolean(wallet)} onSelect={entry => { setSelectedActivity(entry); setPage('transaction'); }}/></>}
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
             {deviceSettings}
+            {recoveryPhrase}
             {benchmark && <Benchmarks runner={benchmark}/>}
             <View style={{ marginTop: 48, marginHorizontal: 4 }}>
               <Text style={s.footnote}>anzen · {identity?.network || network}</Text>
@@ -748,10 +758,10 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     {!!error && <Text selectable accessibilityRole="alert" style={[r.errorText, { textAlign: 'center', marginTop: 10 }]}>{error}</Text>}
     {(busy || !sessionLoaded) && <ActivityIndicator color={colors.mint} style={{ marginTop: 12 }}/>}
     {identity && <SavedMessages transport={transport} deliver={deliver}/>}
-    {deviceSettings && (signerSettings ? deviceSettings
+    {signerSettings ? <>{deviceSettings}{recoveryPhrase}</>
       : <Pressable accessibilityRole="button" accessibilityLabel="Device settings" onPress={() => setSignerSettings(true)} style={{ alignSelf: 'center', marginTop: 18, padding: 8 }}>
         <Text style={[s.tiny, { color: colors.quiet }]}>Device settings</Text>
-      </Pressable>)}
+      </Pressable>}
   </>;
   if (signer) {
     const current = signerReview();

@@ -154,6 +154,47 @@ test('mainnet asks once, then reopens where it left off, never a localhost backe
   expect(backend).toEqual([]);
 });
 
+test('recovery phrases show and import on both devices, and only before vault setup', async ({ page, context, baseURL }) => {
+  const external = noBackend(context); await indexer(context, 'signet');
+  await page.goto(origin(baseURL)); await page.getByRole('button', { name: 'Mutinynet', exact: true }).click();
+  const wallet = page.getByTestId('device-wallet'), signer = page.getByTestId('device-signer');
+  const words = (device: typeof wallet) => device.getByTestId('recovery-phrase-words').innerText().then(text => text.split(/\s+/).filter(word => /^[a-z]+$/.test(word)));
+  await wallet.getByRole('button', { name: 'Get started', exact: true }).click();
+  await wallet.getByRole('button', { name: 'Settings', exact: true }).click();
+  await wallet.getByRole('button', { name: 'Show recovery phrase', exact: true }).click();
+  const generated = await words(wallet);
+  expect(generated).toHaveLength(24);
+  // Typed loosely: any case, any spacing.
+  const phrase = [...Array(23).fill('abandon'), 'art'];
+  await wallet.getByRole('button', { name: 'Import recovery phrase', exact: true }).click();
+  await wallet.getByLabel('Recovery phrase words').fill(`  ${phrase.join('   ').toUpperCase()}\n`);
+  await wallet.getByRole('button', { name: 'Import', exact: true }).click();
+  await expect(wallet.getByText('Recovery phrase imported.', { exact: true })).toBeVisible();
+  await wallet.getByRole('button', { name: 'Show recovery phrase', exact: true }).click();
+  expect(await words(wallet)).toEqual(phrase);
+  // A signer makes its key when it first pairs, so it can import one before that.
+  await signer.getByRole('button', { name: 'Device settings', exact: true }).click();
+  await expect(signer.getByRole('button', { name: 'Show recovery phrase', exact: true })).toHaveCount(0);
+  await signer.getByRole('button', { name: 'Import recovery phrase', exact: true }).click();
+  await signer.getByLabel('Recovery phrase words').fill('abandon abandon');
+  await signer.getByRole('button', { name: 'Import', exact: true }).click();
+  await expect(signer.getByText(/valid recovery phrase/)).toBeVisible();
+  const signerPhrase = [...Array(11).fill('abandon'), 'about'];
+  await signer.getByLabel('Recovery phrase words').fill(signerPhrase.join(' '));
+  await signer.getByRole('button', { name: 'Import', exact: true }).click();
+  await signer.getByRole('button', { name: 'Show recovery phrase', exact: true }).click();
+  expect(await words(signer)).toEqual(signerPhrase);
+  // After setup the keys belong to the vault: still shown, never replaced.
+  await wallet.getByRole('button', { name: 'Back to wallet', exact: true }).click();
+  await setUpVault(page, wallet);
+  await wallet.getByRole('tab', { name: 'Wallet', exact: true }).click();
+  await wallet.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(wallet.getByRole('button', { name: 'Show recovery phrase', exact: true })).toBeVisible();
+  await expect(wallet.getByRole('button', { name: 'Import recovery phrase', exact: true })).toHaveCount(0);
+  await expect(signer.getByRole('button', { name: 'Import recovery phrase', exact: true })).toHaveCount(0);
+  expect(external).toEqual([]);
+});
+
 test('Mutinynet rejects an indexer with the shared signet genesis but a different chain', async ({ page, context, baseURL }) => {
   const backend = noBackend(context), queries = await indexer(context, 'signet', true);
   await page.goto(origin(baseURL)); await page.getByRole('button', { name: 'Mutinynet', exact: true }).click(); const wallet = page.getByTestId('device-wallet');
