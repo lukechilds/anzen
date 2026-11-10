@@ -48,7 +48,7 @@ anzen-playground ──> anzen-wallet (public, watch-only sync)
 - `anzen-chain` defines the chain interface, including the block median time past that time-based relative locks are judged by, and contains the Bitcoin Core RPC backend (regtest). Electrum over WebSocket, the transport for Mutinynet and mainnet on every platform, lives in `anzen-wallet` (`electrum`), together with the live-update listener (`watch`); each platform supplies only the socket. `anzen-common` holds shared host formats (device keys, configuration, the HWW-wrapped cloud backup, device messages) and the host MuSig2 code (`musig`, built on the pure-Rust `musig2` crate with `k256`) that the phone, the browser and the software signer share. `anzen-storage` provides atomic private file writes and protected storage.
 - `ledger-app` is an independently built Ledger firmware crate and directly consumes `anzen-signer`. It is a proof of concept: it signs requests of at most 16 inputs, because it holds each request in memory whole (see its README for why that is left as it is). `anzen-link` is its host side: Bluetooth to a Ledger from Rust, and a client for the commands in `anzen_signer::hardware`. The shared crates' few accommodations for that device's memory are each marked "Hardware signer memory:".
 - `trezor-app` is an independently built Trezor app (one the host loads onto the device when it connects) and directly consumes `anzen-signer` too, with its `k256` feature: Trezor Core has no BIP340 or MuSig2 call, so the app is handed its vault key and signs in pure Rust. It stores nothing; the phone carries the signer's state under the signer's seal (`anzen_signer::hardware::stateless`). It is a proof of concept that runs in Trezor's emulator and has run once on a Safe 7 (see its README). `anzen-link` is its host side as well: Trezor's encrypted protocol over Bluetooth or the emulator's socket, pairing, loading the app, and a client for its requests. The bridge from the phone app's protocol messages (`anzen_link::bridge`) serves both devices.
-- `trezor-firmware` is our fork of Trezor's firmware. Trezor's apps are still an unmerged pull request there; the fork's `anzen-apps` branch is that work plus what the Anzen app needs (an app may read the private key of a path in its manifest; apps load in the emulator on Apple silicon; an app may live outside the firmware repository). The older `anzen` branch, which this repository still pins, holds the in-firmware signing benchmark below.
+- `trezor-firmware` is our fork of Trezor's firmware. Trezor's apps are still an unmerged pull request there; the fork's `anzen-apps` branch is that work plus what the Anzen app needs (an app may read the private key of a path in its manifest; apps load in the emulator on Apple silicon; an app may live outside the firmware repository). This repository pins that branch. The older `anzen` branch holds the in-firmware signing benchmark below.
 
 `scripts/check-boundaries.sh` enforces these boundaries from the resolved dependency graph: it
 builds `anzen-protocol` and `anzen-signer` for a bare-metal target, allowlists the signer's entire
@@ -154,7 +154,7 @@ The Ledger and Trezor benchmarks still model the earlier script-path signing wor
 
 The resulting workload is 15 transactions and 26 HWW signatures: twelve rollover-input signatures plus one for each of fourteen future actions. Dynamic revocation and cancellation are deliberately excluded because either device constructs and signs those controller-only transactions only when requested. `anzen-signer`'s benchmark checks every BIP341 sighash against `rust-bitcoin` and pins the controller script, first and last sighashes, and aggregate digest. Trezor independently pins those same values, preventing the two firmware implementations from silently benchmarking different graphs.
 
-Build Ledger Flex with the command above. From a configured Trezor Nix environment, run its focused compatibility test with:
+Build Ledger Flex with the command above. The Trezor benchmark lives on the fork's older `anzen` branch, not the pinned one. With that branch checked out, from a configured Trezor Nix environment, run its focused compatibility test with:
 
 ```bash
 make -C trezor-firmware/core test \
@@ -169,12 +169,12 @@ make -C trezor-firmware/core test \
 [submodule "trezor-firmware"]
     path = trezor-firmware
     url = git@github.com:lukechilds/trezor-firmware.git
-    branch = anzen
+    branch = anzen-apps
 ```
 
-Two branches of the fork matter. `anzen` is the one pinned here: an older firmware base with the signing benchmark. `anzen-apps` is Trezor's app SDK work with the patches the Anzen app in `trezor-app/` needs; building that app means switching the checkout to it (`git -C trezor-firmware switch anzen-apps`), which leaves the parent repository reporting the submodule as modified until the pin is moved.
+Two branches of the fork matter. `anzen-apps` is the one pinned here: Trezor's app SDK work with the patches the Anzen app in `trezor-app/` needs. `anzen` is an older firmware base that holds the in-firmware signing benchmark; its commits do not apply to the new base, so the benchmark is run from that branch (`git -C trezor-firmware switch anzen`).
 
-The Anzen repository itself records an exact firmware commit, not a moving branch reference. The `branch = anzen` setting is used only by explicit remote-update commands. This means an existing Anzen commit always resolves to the same firmware source even after newer firmware commits are pushed.
+The Anzen repository itself records an exact firmware commit, not a moving branch reference. The `branch = anzen-apps` setting is used only by explicit remote-update commands. This means an existing Anzen commit always resolves to the same firmware source even after newer firmware commits are pushed.
 
 ### Initializing it
 
@@ -197,8 +197,8 @@ The final command is needed only once. The setup script checks before adding the
 After an ordinary clone or `git submodule update`, Git checks out the exact pinned firmware commit in detached-HEAD state. That is correct for building and testing. Switch to the fork's development branch before editing:
 
 ```bash
-git -C trezor-firmware switch anzen
-git -C trezor-firmware pull --ff-only origin anzen
+git -C trezor-firmware switch anzen-apps
+git -C trezor-firmware pull --ff-only origin anzen-apps
 ```
 
 If the remote branch has advanced beyond the commit pinned by Anzen, switching and pulling will intentionally make the parent repository report `trezor-firmware` as modified.
@@ -211,7 +211,7 @@ Firmware source and the parent pointer require separate commits. Always publish 
 git -C trezor-firmware status --short
 git -C trezor-firmware add <firmware-paths>
 git -C trezor-firmware commit -m "feat(core): describe the firmware change"
-git -C trezor-firmware push origin anzen
+git -C trezor-firmware push origin anzen-apps
 
 git add trezor-firmware
 git commit -m "Update Trezor firmware"
@@ -230,7 +230,7 @@ git diff --submodule=log
 
 ### Pulling a newer fork commit
 
-To move Anzen to the current tip of the configured `anzen` firmware branch:
+To move Anzen to the current tip of the configured `anzen-apps` firmware branch:
 
 ```bash
 git submodule update --remote --merge trezor-firmware
@@ -250,11 +250,11 @@ origin    git@github.com:lukechilds/trezor-firmware.git
 upstream  https://github.com/trezor/trezor-firmware.git
 ```
 
-Published firmware commits are security-review artifacts, so do not rewrite the `anzen` branch after Anzen has pinned it. Merge a reviewed upstream release or create a new branch from its signed release tag, run the firmware tests, push the result, and then update the parent pointer:
+Published firmware commits are security-review artifacts, so do not rewrite the `anzen-apps` branch after Anzen has pinned it. Merge a reviewed upstream release or create a new branch from its signed release tag, run the firmware tests, push the result, and then update the parent pointer:
 
 ```bash
 git -C trezor-firmware fetch upstream --tags
-git -C trezor-firmware switch anzen
+git -C trezor-firmware switch anzen-apps
 git -C trezor-firmware merge <reviewed-upstream-tag>
 ```
 

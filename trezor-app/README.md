@@ -45,7 +45,6 @@ Because any state it seals at setup starts with no approved policy, the Trezor a
 Everything Trezor-side runs in the firmware's Nix shell. Once, from `../trezor-firmware`:
 
 ```sh
-git fetch origin && git switch anzen-apps    # this repository still pins the older `anzen` branch
 git submodule update --init --recursive
 nix-shell --run "uv sync"
 ```

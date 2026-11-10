@@ -14,4 +14,4 @@ if ! git -C "$firmware_dir" remote get-url upstream >/dev/null 2>&1; then
 fi
 
 printf 'Trezor firmware initialized at %s\n' "$(git -C "$firmware_dir" rev-parse HEAD)"
-printf 'For development, run: git -C trezor-firmware switch anzen\n'
+printf 'For development, run: git -C trezor-firmware switch anzen-apps\n'
