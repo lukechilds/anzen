@@ -75,6 +75,13 @@ ANZEN_TREZOR_PORT=31324 cargo test -p anzen-link --test trezor -- --ignored
 ANZEN_TEST_INPUTS=64 ANZEN_TREZOR_PORT=31324 cargo test -p anzen-link --test trezor full_policy -- --ignored
 ```
 
+The same code as a command, which checks every signature it gets back. It is also the quickest way to try a real Trezor, over Bluetooth from a Mac, with no phone involved:
+
+```sh
+cargo run -p anzen-link --example trezor -- --emulator 31324 policy   # the emulator
+cargo run -p anzen-link --example trezor -- policy                    # a Trezor nearby
+```
+
 To look at the emulated screen, or press its buttons by hand:
 
 ```sh

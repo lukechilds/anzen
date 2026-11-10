@@ -46,10 +46,10 @@ pub async fn scan(window: Duration) -> Result<Vec<TrezorFound>> {
         .next()
         .context("this device has no Bluetooth adapter")?;
     let mut events = central.events().await?;
+    // Unfiltered: Trezor's own library finds scanning by service unreliable, and checks what
+    // each device advertises itself.
     central
-        .start_scan(ScanFilter {
-            services: vec![SERVICE],
-        })
+        .start_scan(ScanFilter::default())
         .await
         .context("could not scan for Bluetooth devices: check Bluetooth is on and allowed")?;
     let mut found: Vec<TrezorFound> = Vec::new();
@@ -76,16 +76,27 @@ pub async fn scan(window: Duration) -> Result<Vec<TrezorFound>> {
         let Some(properties) = peripheral.properties().await? else {
             continue;
         };
-        if !properties.services.contains(&SERVICE) {
+        let name = properties.local_name.unwrap_or_default();
+        if !is_trezor(&properties.services, &name) {
             continue;
         }
         found.push(TrezorFound {
-            name: properties.local_name.unwrap_or_else(|| "Trezor".to_owned()),
+            name: if name.is_empty() {
+                "Trezor".to_owned()
+            } else {
+                name
+            },
             peripheral,
         });
     }
     central.stop_scan().await.ok();
     Ok(found)
+}
+
+/// A Trezor advertises its service. One whose advertisement left the service out is still
+/// recognised by the name it gives itself.
+fn is_trezor(services: &[Uuid], name: &str) -> bool {
+    services.contains(&SERVICE) || name.starts_with("Trezor")
 }
 
 /// The first Trezor seen within `window`, or the one whose name contains `name`.
@@ -191,6 +202,14 @@ impl Transport for Bluetooth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trezor_is_known_by_its_service_or_its_name() {
+        assert!(is_trezor(&[SERVICE], ""));
+        assert!(is_trezor(&[], "Trezor Safe 7"));
+        let heart_rate = Uuid::from_u128(0x0000180d_0000_1000_8000_00805f9b34fb);
+        assert!(!is_trezor(&[heart_rate], "Ledger Flex 1A2B"));
+    }
 
     #[test]
     fn the_characteristics_are_trezors() {
