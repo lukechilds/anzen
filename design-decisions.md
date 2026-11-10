@@ -125,6 +125,7 @@ Wallet UI  ──> anzen-wallet ─────┬──> anzen-chain, anzen-com
 Signer UI  ──> anzen-signer-app ─┤
                                  └──> anzen-signer ──> anzen-protocol
 Ledger app ──> anzen-signer
+Trezor app ──> anzen-signer
 ```
 
 - `anzen-protocol` is the one deterministic definition of the vault scripts and MuSig2 key aggregation, the annual policy graph, sweeps, revocations and their signature messages. It is `no_std` and builds every transaction from typed parameters, so the phone and every signer derive byte-identical transactions from the same request.

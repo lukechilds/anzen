@@ -18,6 +18,7 @@ anzen/
 │   ├── anzen-playground/        Loopback regtest host for the browser playground
 │   └── anzen-integration-tests/ Cross-role, vector and real-node integration tests
 ├── ledger-app/                  Ledger application; depends on `anzen-signer`
+├── trezor-app/                  Trezor application; depends on `anzen-signer`
 ├── mobile/                      React Native app, native (`mobile/rust`) and WASM (`mobile/wasm`) adapters
 ├── trezor-firmware/             Git submodule pointing to `lukechilds/trezor-firmware`
 ├── test-vectors/                Canonical serialized vault and transaction-graph fixtures
@@ -36,11 +37,8 @@ anzen-cli ──────────┬──> anzen-wallet ─────�
 mobile/rust, wasm ──┤                       │                  ├──> anzen-common ──> anzen-storage
                     └──> anzen-signer-app ──┼──────────────────┘
                                             └──> anzen-signer ──> anzen-protocol
-Ledger app ──────────────────────────────────────> anzen-signer ──> anzen-protocol
+Ledger app, Trezor app ──────────────────────────> anzen-signer ──> anzen-protocol
 anzen-playground ──> anzen-wallet (public, watch-only sync)
-
-Trezor firmware ──> independent Anzen protocol implementation
-                └──> canonical protocol test vectors
 ```
 
 - `anzen-protocol` is the single definition of what Anzen transactions are. It deterministically builds the vault and controller scripts, the annual policy graph, sweeps and revocations, and their BIP341 signature messages from typed parameters. It also owns BIP327 key aggregation (`musig`), because the vault's internal key is the MuSig2 aggregate of both device keys and every implementation must derive the same one. It is `no_std`, has no `bitcoin` or `miniscript` dependency, and takes hashing and curve operations (including the `mul_add` that key aggregation needs) through a `Crypto` trait so hardware can use device primitives.
@@ -49,7 +47,8 @@ Trezor firmware ──> independent Anzen protocol implementation
 - `anzen-wallet` owns phone keys, the BDK wallet, encrypted policy artifacts, policy execution, phone restoration and rotation, and the coordination of the HWW's delayed recovery (its time-lock clock reads each coin's start time through the chain backend's `median_time_past`). It produces signer requests and checks signer approvals against the transactions it built from the same protocol code. Its `cosigning` module holds the phone's MuSig2 nonce sessions (`phone/cosigning/`): fresh nonces for every request, bound to the exact messages they may sign, and replaced by the finished signatures in one atomic write when the signer's partial signatures arrive. Never put this directory in a backup or sync it between devices.
 - `anzen-chain` defines the chain interface, including the block median time past that time-based relative locks are judged by, and contains the Bitcoin Core RPC backend (regtest). Electrum over WebSocket, the transport for Mutinynet and mainnet on every platform, lives in `anzen-wallet` (`electrum`), together with the live-update listener (`watch`); each platform supplies only the socket. `anzen-common` holds shared host formats (device keys, configuration, the HWW-wrapped cloud backup, device messages) and the host MuSig2 code (`musig`, built on the pure-Rust `musig2` crate with `k256`) that the phone, the browser and the software signer share. `anzen-storage` provides atomic private file writes and protected storage.
 - `ledger-app` is an independently built Ledger firmware crate and directly consumes `anzen-signer`. It is a proof of concept: it signs requests of at most 16 inputs, because it holds each request in memory whole (see its README for why that is left as it is). `anzen-link` is its host side: Bluetooth to a Ledger from Rust, and a client for the commands in `anzen_signer::hardware`. The shared crates' few accommodations for that device's memory are each marked "Hardware signer memory:".
-- `trezor-firmware` cannot consume the Rust crate through Trezor's normal firmware architecture. It implements the same protocol independently and proves compatibility against the same deterministic vectors. Production code should live under `core/src/apps/anzen/`, with protocol messages in `common/protob/messages-anzen.proto`, Python host support in `python/src/trezorlib/anzen.py`, and device tests in `tests/device_tests/anzen/`.
+- `trezor-app` is an independently built Trezor app (one the host loads onto the device when it connects) and directly consumes `anzen-signer` too, with its `k256` feature: Trezor Core has no BIP340 or MuSig2 call, so the app is handed its vault key and signs in pure Rust. It stores nothing; the phone carries the signer's state under the signer's seal (`anzen_signer::hardware::stateless`). It is a proof of concept that runs in Trezor's emulator and has not run on a device (see its README). `anzen-link` is its host side as well: Trezor's encrypted protocol over Bluetooth or the emulator's socket, pairing, loading the app, and a client for its requests. The bridge from the phone app's protocol messages (`anzen_link::bridge`) serves both devices.
+- `trezor-firmware` is our fork of Trezor's firmware. Trezor's apps are still an unmerged pull request there; the fork's `anzen-apps` branch is that work plus what the Anzen app needs (an app may read the private key of a path in its manifest; apps load in the emulator on Apple silicon; an app may live outside the firmware repository). The older `anzen` branch, which this repository still pins, holds the in-firmware signing benchmark below.
 
 `scripts/check-boundaries.sh` enforces these boundaries from the resolved dependency graph: it
 builds `anzen-protocol` and `anzen-signer` for a bare-metal target, allowlists the signer's entire
@@ -99,6 +98,16 @@ The Ledger application uses a separate embedded target and workspace:
 cd ledger-app
 cargo ledger build flex
 ```
+
+So does the Trezor application, which also needs the firmware fork's `anzen-apps` branch checked out in `trezor-firmware/` and its Nix shell (`trezor-app/README.md` has the whole path, including the emulator and the tests that drive it):
+
+```bash
+trezor-app/tools/build.sh             # the emulator's image and the Safe 7's
+trezor-app/tools/emulator.sh          # the emulator, with a wallet loaded
+ANZEN_TREZOR_PORT=31324 cargo test -p anzen-link --test trezor -- --ignored
+```
+
+The phone app carries the Trezor app's image inside its Rust library (`mobile/rust/build.rs` picks it up from `trezor-app/target`), so build the Trezor app before `npm run build:rust:ios`. Without it the phone app still builds, and says it has no Trezor app when asked to connect to one.
 
 The Docker integration and end-to-end commands are documented in the main README. The Trezor submodule is excluded from the root Docker build context so local firmware checkouts do not invalidate or enlarge CLI images.
 
@@ -162,6 +171,8 @@ make -C trezor-firmware/core test \
     url = git@github.com:lukechilds/trezor-firmware.git
     branch = anzen
 ```
+
+Two branches of the fork matter. `anzen` is the one pinned here: an older firmware base with the signing benchmark. `anzen-apps` is Trezor's app SDK work with the patches the Anzen app in `trezor-app/` needs; building that app means switching the checkout to it (`git -C trezor-firmware switch anzen-apps`), which leaves the parent repository reporting the submodule as modified until the pin is moved.
 
 The Anzen repository itself records an exact firmware commit, not a moving branch reference. The `branch = anzen` setting is used only by explicit remote-update commands. This means an existing Anzen commit always resolves to the same firmware source even after newer firmware commits are pushed.
 
