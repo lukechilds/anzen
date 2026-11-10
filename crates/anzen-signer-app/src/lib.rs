@@ -45,6 +45,24 @@ pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice
         anyhow::bail!("HWW already initialized at {}", hww_path.display());
     }
     let hww = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
+    persist_signer(data_dir, network, &hww)
+}
+
+/// Replace this signer's key with a recovery phrase's. Its caller checks the signer is not yet
+/// paired; the old key is set aside, never deleted.
+pub fn import(data_dir: &Path, network: Network, words: &str) -> Result<InitializedDevice> {
+    validate_supported_network(network)?;
+    let hww = DeviceKeys::import_for_network(&Secp256k1::new(), words, network)?;
+    anzen_common::storage::set_aside(data_dir, "hww")?;
+    persist_signer(data_dir, network, &hww)
+}
+
+fn persist_signer(
+    data_dir: &Path,
+    network: Network,
+    hww: &DeviceKeys,
+) -> Result<InitializedDevice> {
+    let hww_path = data_dir.join(HWW_DEVICE_FILE);
     let mnemonic = hww.mnemonic.to_string();
     write_json(
         &data_dir.join(HWW_PUBLIC_FILE),

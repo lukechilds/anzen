@@ -42,6 +42,13 @@ pub enum WalletRequest {
     Initialize {
         network: Network,
     },
+    /// Replace a phone's keys with a recovery phrase's, before vault setup.
+    ImportRecoveryPhrase {
+        network: Network,
+        words: String,
+    },
+    /// The words that restore this phone's keys.
+    RecoveryPhrase,
     Identity,
     ImportRecoveryVault {
         config: VaultConfig,
@@ -167,6 +174,8 @@ impl WalletRequest {
             Self::Outbox
                 | Self::ReadOutbox { .. }
                 | Self::Initialize { .. }
+                | Self::ImportRecoveryPhrase { .. }
+                | Self::RecoveryPhrase
                 | Self::Identity
                 | Self::ImportRecoveryVault { .. }
                 | Self::ImportRecoveryBundle { .. }
@@ -269,6 +278,12 @@ impl WalletApplication {
             WalletRequest::ReadOutbox { id } => serde_json::to_value(self.read_outbox(&id)?)?,
             WalletRequest::Initialize { network } => {
                 serde_json::to_value(self.initialize(network)?)?
+            }
+            WalletRequest::ImportRecoveryPhrase { network, words } => {
+                serde_json::to_value(self.import_recovery_phrase(network, &words)?)?
+            }
+            WalletRequest::RecoveryPhrase => {
+                serde_json::json!({ "words": self.recovery_phrase()? })
             }
             WalletRequest::Identity => serde_json::to_value(self.public_identity()?)?,
             WalletRequest::ImportRecoveryVault { config } => {
@@ -433,6 +448,21 @@ impl WalletApplication {
         self.check_access(network)?;
         super::initialize(&self.data_dir, network)?;
         self.public_identity()
+    }
+
+    pub fn import_recovery_phrase(
+        &self,
+        network: Network,
+        words: &str,
+    ) -> Result<PublicDeviceFile> {
+        self.check_access(network)?;
+        super::import_phone(&self.data_dir, network, words)?;
+        self.public_identity()
+    }
+
+    pub fn recovery_phrase(&self) -> Result<String> {
+        self.public_identity()?;
+        Ok(storage::load_device(&self.data_dir, PHONE_DEVICE_FILE)?.mnemonic)
     }
 
     /// Grind a phone key whose vault address with `signer` begins with the vanity prefix.

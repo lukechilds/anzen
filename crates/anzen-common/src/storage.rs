@@ -137,6 +137,26 @@ pub fn load_config(data_dir: &Path) -> Result<VaultConfig> {
     read_json(&config_path(data_dir))
 }
 
+/// Where [`set_aside`] keeps the directories it moves.
+pub const REPLACED_DIR: &str = "replaced";
+
+/// Move a device's directory (`phone` or `hww`) out of the way, to `replaced/<name>-<n>`: keys are
+/// never deleted, only replaced. Nothing to move is fine.
+pub fn set_aside(data_dir: &Path, relative: &str) -> Result<()> {
+    let from = data_dir.join(relative);
+    if !from.storage_exists() {
+        return Ok(());
+    }
+    let replaced = data_dir.join(REPLACED_DIR);
+    fs::create_dir_all(&replaced)?;
+    let to = (1_u32..)
+        .map(|n| replaced.join(format!("{relative}-{n}")))
+        .find(|path| !path.storage_exists())
+        .context("no free name to set the old device aside")?;
+    fs::rename(&from, &to).with_context(|| format!("failed to set {} aside", from.display()))?;
+    Ok(())
+}
+
 pub fn config_exists(data_dir: &Path) -> bool {
     data_dir.join(CONFIG_FILE).storage_exists()
         || data_dir.join(LEGACY_CONFIG_FILE).storage_exists()

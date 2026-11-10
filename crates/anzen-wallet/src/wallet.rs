@@ -167,6 +167,11 @@ impl HotWallet {
             && self.is_fresh()?)
     }
 
+    /// Whether this wallet has seen any transaction.
+    pub(crate) fn has_history(&self) -> bool {
+        self.wallet.transactions().next().is_some()
+    }
+
     pub fn next_receive_address(&mut self) -> Result<Address> {
         let address = self
             .wallet

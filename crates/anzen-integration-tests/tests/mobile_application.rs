@@ -1419,3 +1419,71 @@ fn altered_rejected_or_unreviewed_requests_cannot_be_approved() {
     assert!(devices.signer.approve_policy(&review.review_id).is_err());
     assert_eq!(backend.broadcasts.get(), 0);
 }
+
+#[test]
+fn recovery_phrases_import_only_before_vault_setup_and_keep_the_replaced_keys() {
+    let phone_dir = tempfile::tempdir().unwrap();
+    let signer_dir = tempfile::tempdir().unwrap();
+    let phone = WalletApplication::new(phone_dir.path().into(), false);
+    let signer = SignerApplication::new(signer_dir.path().into(), false);
+    let generated = phone.initialize(Network::Regtest).unwrap();
+    let generated_words = phone.recovery_phrase().unwrap();
+
+    // Another wallet's phrase, typed loosely: any case, any spacing.
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = WalletApplication::new(other_dir.path().into(), false);
+    let other_identity = other.initialize(Network::Regtest).unwrap();
+    let words = other.recovery_phrase().unwrap();
+    assert_eq!(words.split(' ').count(), 24);
+    let typed = format!("  {}\n", words.to_uppercase().replace(' ', "  \n"));
+    let imported = phone
+        .import_recovery_phrase(Network::Regtest, &typed)
+        .unwrap();
+    assert_eq!(imported.vault_pubkey, other_identity.vault_pubkey);
+    assert_ne!(imported.vault_pubkey, generated.vault_pubkey);
+    assert_eq!(phone.recovery_phrase().unwrap(), words);
+    // The keys it replaced are set aside, not deleted.
+    let kept: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(phone_dir.path().join("replaced/phone-1/device.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(kept["mnemonic"], generated_words.as_str());
+    let error = phone
+        .import_recovery_phrase(Network::Regtest, "vault vault vault")
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("valid recovery phrase"));
+
+    // A signer imports before it joins a vault too.
+    let original_signer = signer.initialize(Network::Regtest).unwrap();
+    let other_signer_dir = tempfile::tempdir().unwrap();
+    let other_signer = SignerApplication::new(other_signer_dir.path().into(), false);
+    let other_signer_identity = other_signer.initialize(Network::Regtest).unwrap();
+    let signer_words = other_signer.recovery_phrase().unwrap();
+    let identity = signer
+        .import_recovery_phrase(Network::Regtest, &signer_words)
+        .unwrap();
+    assert_eq!(identity.vault_pubkey, other_signer_identity.vault_pubkey);
+    assert_ne!(identity.vault_pubkey, original_signer.vault_pubkey);
+    assert!(
+        signer_dir
+            .path()
+            .join("replaced/hww-1/device.json")
+            .exists()
+    );
+
+    // Once they share a vault, neither replaces its keys.
+    let config = phone.pair_signer(&identity).unwrap();
+    signer.accept_vault(&config).unwrap();
+    assert!(
+        phone
+            .import_recovery_phrase(Network::Regtest, &generated_words)
+            .is_err()
+    );
+    assert!(
+        signer
+            .import_recovery_phrase(Network::Regtest, &signer_words)
+            .is_err()
+    );
+    assert_eq!(phone.recovery_phrase().unwrap(), words);
+    assert_eq!(signer.recovery_phrase().unwrap(), signer_words);
+}

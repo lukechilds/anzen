@@ -45,6 +45,13 @@ pub enum SignerRequest {
     Initialize {
         network: Network,
     },
+    /// Replace this signer's key with a recovery phrase's, before it is paired with a vault.
+    ImportRecoveryPhrase {
+        network: Network,
+        words: String,
+    },
+    /// The words that restore this signer's key.
+    RecoveryPhrase,
     Identity,
     ExportVault,
     ExportRecoveryBundle,
@@ -179,9 +186,9 @@ impl SignerApplication {
 
     pub fn execute(&self, request: SignerRequest) -> Result<serde_json::Value> {
         let outgoing_kind = match &request {
-            SignerRequest::Initialize { .. } | SignerRequest::Identity => {
-                Some(OutgoingMessageKind::SignerIdentity)
-            }
+            SignerRequest::Initialize { .. }
+            | SignerRequest::ImportRecoveryPhrase { .. }
+            | SignerRequest::Identity => Some(OutgoingMessageKind::SignerIdentity),
             SignerRequest::AcceptVault { .. } | SignerRequest::AcceptSetup { .. } => {
                 Some(OutgoingMessageKind::VaultAccepted)
             }
@@ -203,6 +210,12 @@ impl SignerApplication {
             SignerRequest::ReadOutbox { id } => serde_json::to_value(self.read_outbox(&id)?)?,
             SignerRequest::Initialize { network } => {
                 serde_json::to_value(self.initialize(network)?)?
+            }
+            SignerRequest::ImportRecoveryPhrase { network, words } => {
+                serde_json::to_value(self.import_recovery_phrase(network, &words)?)?
+            }
+            SignerRequest::RecoveryPhrase => {
+                serde_json::json!({ "words": self.recovery_phrase()? })
             }
             SignerRequest::Identity => serde_json::to_value(self.public_identity()?)?,
             SignerRequest::ReviewPhoneRotation { request } => {
@@ -317,6 +330,24 @@ impl SignerApplication {
         self.check_access(network)?;
         super::initialize(&self.data_dir, network)?;
         self.public_identity()
+    }
+
+    pub fn import_recovery_phrase(
+        &self,
+        network: Network,
+        words: &str,
+    ) -> Result<PublicDeviceFile> {
+        self.check_access(network)?;
+        if self.paired() {
+            bail!("a recovery phrase can only be imported before this signer joins a vault");
+        }
+        super::import(&self.data_dir, network, words)?;
+        self.public_identity()
+    }
+
+    pub fn recovery_phrase(&self) -> Result<String> {
+        self.public_identity()?;
+        Ok(storage::load_device(&self.data_dir, HWW_DEVICE_FILE)?.mnemonic)
     }
 
     pub fn public_identity(&self) -> Result<PublicDeviceFile> {

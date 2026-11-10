@@ -135,7 +135,30 @@ use anzen_common::{
 pub fn initialize(data_dir: &Path, network: Network) -> Result<InitializedDevice> {
     validate_supported_network(network)?;
     let phone = DeviceKeys::generate_for_network(&Secp256k1::new(), network)?;
-    persist_phone(data_dir, network, &phone, DEFAULT_RECOVERY_LOCKTIME)
+    persist_phone(data_dir, network, &phone, DEFAULT_RECOVERY_LOCKTIME, true)
+}
+
+/// Replace this phone's keys with a recovery phrase's. Only before vault setup, and only while
+/// the current wallet has no transactions; its keys and wallet are set aside, never deleted.
+pub fn import_phone(data_dir: &Path, network: Network, words: &str) -> Result<InitializedDevice> {
+    validate_supported_network(network)?;
+    if anzen_common::storage::config_exists(data_dir)
+        || data_dir
+            .join(anzen_common::storage::PHONE_BACKUP_FILE)
+            .storage_exists()
+    {
+        bail!("a recovery phrase can only be imported before vault setup");
+    }
+    let phone = DeviceKeys::import_for_network(&Secp256k1::new(), words, network)?;
+    if data_dir.join(PHONE_DEVICE_FILE).storage_exists() {
+        if HotWallet::open_or_create(data_dir)?.has_history() {
+            bail!(
+                "this wallet has transactions: move its bitcoin out before importing a recovery phrase"
+            );
+        }
+        anzen_common::storage::set_aside(data_dir, "phone")?;
+    }
+    persist_phone(data_dir, network, &phone, DEFAULT_RECOVERY_LOCKTIME, false)
 }
 
 pub const VANITY_SUFFIX: &str = "vault";
@@ -211,7 +234,13 @@ where
         engine,
         report_progress,
     )?;
-    let device = persist_phone(data_dir, network, &vanity.phone, vanity.recovery_locktime)?;
+    let device = persist_phone(
+        data_dir,
+        network,
+        &vanity.phone,
+        vanity.recovery_locktime,
+        true,
+    )?;
     Ok(VanityInitialization {
         device,
         vault_address: vanity.vault_address,
@@ -512,6 +541,7 @@ fn persist_phone(
     network: Network,
     phone: &DeviceKeys,
     recovery_locktime: u32,
+    generated: bool,
 ) -> Result<InitializedDevice> {
     ensure_phone_is_uninitialized(data_dir)?;
     let phone_path = data_dir.join(PHONE_DEVICE_FILE);
@@ -526,8 +556,11 @@ fn persist_phone(
             recovery_locktime,
         },
     )?;
-    // Only newly generated seeds reach here; restored seeds are never marked.
-    HotWallet::open_or_create(data_dir)?.mark_fresh()?;
+    // Only seeds generated here are fresh: an imported one may have history anywhere on chain.
+    let mut wallet = HotWallet::open_or_create(data_dir)?;
+    if generated {
+        wallet.mark_fresh()?;
+    }
     Ok(InitializedDevice {
         mnemonic,
         vault_pubkey: phone.vault_pubkey.to_string(),

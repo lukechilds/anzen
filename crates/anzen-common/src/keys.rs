@@ -42,6 +42,22 @@ impl DeviceKeys {
         Self::from_mnemonic(secp, mnemonic, network, vault_key_index)
     }
 
+    /// A recovery phrase as someone typed it: any case, any spacing between the words.
+    pub fn import_for_network(
+        secp: &Secp256k1<All>,
+        words: &str,
+        network: Network,
+    ) -> Result<Self> {
+        let words = words
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>()
+            .join(" ");
+        Mnemonic::parse_in_normalized(Language::English, &words)
+            .context("that isn't a valid recovery phrase: check each word and their order")?;
+        Self::parse_for_network(secp, &words, network)
+    }
+
     pub fn parse(secp: &Secp256k1<All>, words: &str) -> Result<Self> {
         Self::parse_for_network(secp, words, Network::Regtest)
     }
