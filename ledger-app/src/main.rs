@@ -1,3 +1,11 @@
+//! The Anzen signer for Ledger devices. A proof of concept, not ready for real funds.
+//!
+//! It holds each request in memory whole, so it signs at most
+//! [`anzen_signer::hardware::MAX_INPUTS`] (16) inputs per request: a vault with more deposits
+//! than that cannot renew its policy here. Phone rotation does not fit in memory at all yet, and
+//! the phone's recovery backup is not implemented. Streaming requests through the device is the
+//! planned fix for the limits. Only Flex and Stax are sized for it. See `README.md`.
+
 #![no_std]
 #![no_main]
 
@@ -102,7 +110,10 @@ impl TryFrom<ApduHeader> for BenchmarkInstruction {
 fn show_home(comm: &mut Comm, session: &mut signer::Session) {
     let icon: sys::nbgl_icon_details_t = (&APP_ICON).into();
     let info_names = [c"Version".as_ptr(), c"Developer".as_ptr()];
-    let info_values = [c"0.1.0".as_ptr(), c"Anzen developers".as_ptr()];
+    let info_values = [
+        c"0.1.0 proof of concept".as_ptr(),
+        c"Anzen developers".as_ptr(),
+    ];
     let info_list = sys::nbgl_contentInfoList_t {
         infoTypes: info_names.as_ptr(),
         infoContents: info_values.as_ptr(),

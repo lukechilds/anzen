@@ -70,9 +70,9 @@ pub struct CooperativeSignature {
     pub partial: PartialSignature,
 }
 
-/// The outpoints of `inputs`. Inserted one at a time: collecting into a set sorts first, and the
-/// standard library's sort keeps a 4 KB scratch buffer on the stack, more than a hardware signer
-/// can spare.
+/// The outpoints of `inputs`. Hardware signer memory: inserted one at a time, because collecting
+/// into a set sorts first and the standard library's sort keeps a 4 KB scratch buffer on the
+/// stack, more than a hardware signer can spare. Anywhere else, `.collect()` would do.
 fn outpoints<'a>(inputs: impl Iterator<Item = &'a Input>) -> BTreeSet<OutPoint> {
     let mut set = BTreeSet::new();
     for input in inputs {

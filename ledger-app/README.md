@@ -1,8 +1,56 @@
 # Anzen Ledger app
 
-This crate is the Ledger implementation of the Anzen cold signer. It currently
-provides a native Ledger home screen and a deterministic benchmark of the
-complete annual vault-policy signing workload. The benchmark constructs real
+This crate is the Ledger implementation of the Anzen cold signer: a signer that
+reviews requests on the device's screen and signs them, and a deterministic
+benchmark of the annual vault-policy signing workload.
+
+## Status: proof of concept
+
+Do not use it with real funds. What it does, on Flex and Stax:
+
+- derives the vault key at `m/86'/coin'/100'/0/0`, where the phone app's signer
+  mode keeps its key, so the same seed gives the same signer;
+- accepts one vault per network and remembers it and the last approved policy;
+- reviews and signs yearly policies, transfers of all vault funds, and its own
+  recovery and revocation, with BIP327 MuSig2 on the secure element's own
+  arithmetic.
+
+Its limits:
+
+- **At most 16 inputs per request.** The device holds a whole request in its
+  36 KB of RAM while it reviews and signs. Every vault deposit is an input and a
+  policy renewal spends them all, so a vault with more than 16 deposits cannot
+  renew here. The fix is to stream requests through the device (fold inputs into
+  running hashes, build and sign one transaction at a time, return signatures as
+  they are made), which removes the limit; it is not built yet.
+- **Phone rotation does not fit in memory**, for the same reason.
+- **The phone's recovery backup is not implemented** (wrapping its key and
+  releasing it to a replacement phone).
+- **No phone app support yet.** The host side is `crates/anzen-link`: Bluetooth
+  from Rust, and a client for these commands.
+- It has run in the Speculos emulator, not yet on a device.
+- Nano S+, Nano X and Apex have less memory and are not sized for it.
+
+`anzen_signer::hardware` defines the commands. The shared crates carry a few
+accommodations for this device's memory, each marked "Hardware signer memory:".
+
+### Emulator tests
+
+`crates/anzen-link/tests/speculos.rs` plays the phone against the app in
+Speculos: real requests, taps on the emulated screen, and every signature
+completed and verified with the host's own code. In Ledger's dev container, with
+ports 9999 and 5001 published, build for Flex and run `tools/speculos.sh`; then:
+
+```console
+cargo test -p anzen-link --test speculos -- --ignored --test-threads=1
+```
+
+`cargo ledger build flex -- --features debug` prints stack and heap high-water
+marks to the emulator's log.
+
+## Benchmark
+
+The benchmark constructs real
 Bitcoin transactions and BIP341 sighashes, derives a reserved key from the
 Ledger seed, and creates real BIP340 signatures. All outpoints and amounts
 belong to an isolated fake fixture; the benchmark returns only non-secret

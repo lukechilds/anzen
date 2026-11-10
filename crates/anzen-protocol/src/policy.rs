@@ -210,6 +210,7 @@ impl PolicyGraph {
     }
 
     /// How many signatures [`Self::cooperative_signing_jobs`] asks for, without computing them.
+    /// Hardware signer memory: lets a device check its nonce count without building the job list.
     pub fn cooperative_signature_count(&self) -> usize {
         self.transactions()
             .into_iter()
@@ -217,9 +218,9 @@ impl PolicyGraph {
             .sum()
     }
 
-    /// [`Self::cooperative_signing_jobs`] for devices with little memory: `sign` receives each
-    /// message as it is computed, in the same order, and each transaction is freed as soon as its
-    /// inputs are signed.
+    /// Hardware signer memory: [`Self::cooperative_signing_jobs`] for devices with little memory.
+    /// `sign` receives each message as it is computed, in the same order, and each transaction is
+    /// freed as soon as its inputs are signed. Phones can use either; they have room for the list.
     pub fn sign_each<C: Crypto + ?Sized>(
         self,
         crypto: &mut C,

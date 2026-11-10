@@ -151,6 +151,13 @@ pub struct Signer<'a, C: Crypto + ?Sized, K: Keys + ?Sized> {
     keys: &'a mut K,
 }
 
+// Hardware signer memory: three things in this impl exist only for devices with a few kilobytes
+// of stack and heap (today the Ledger app, `ledger-app/`), and do nothing for phones:
+//   - `#[inline(never)]` on the entry points keeps each one's locals in its own stack frame;
+//   - the `sign_*_request` methods return signatures without a copy of the request;
+//   - `sign_policy` consumes the graph, freeing each transaction once it is signed.
+// A signer that streams requests instead of holding them would need none of them. Search for
+// "Hardware signer memory:" to find every such accommodation in the shared crates.
 impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
     pub fn new(crypto: &'a mut C, keys: &'a mut K) -> Self {
         Self { crypto, keys }
@@ -158,7 +165,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
 
     /// Accept a vault with the phone key and the recovery locktime the phone chose. Pairing never
     /// approves a spending policy.
-    #[inline(never)]
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn pair(
         &mut self,
         network: Network,
@@ -184,7 +191,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         })
     }
 
-    #[inline(never)]
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn review_policy(
         &mut self,
         state: &State,
@@ -232,8 +239,9 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         ))
     }
 
-    /// [`Self::approve_policy`] without the copy of the request, for devices with little memory.
-    #[inline(never)]
+    /// [`Self::approve_policy`] without the copy of the request. Hardware signer memory: see the
+    /// note on this impl.
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn sign_policy_request(
         &mut self,
         state: &State,
@@ -257,7 +265,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         ))
     }
 
-    #[inline(never)]
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn review_sweep(&mut self, state: &State, request: &SweepRequest) -> Result<SweepReview> {
         self.check_state(state)?;
         let (scripts, spend) = self.sweep(state, request)?;
@@ -283,8 +291,9 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         })
     }
 
-    /// [`Self::approve_sweep`] without the copy of the request.
-    #[inline(never)]
+    /// [`Self::approve_sweep`] without the copy of the request. Hardware signer memory: see the
+    /// note on this impl.
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn sign_sweep_request(
         &mut self,
         state: &State,
@@ -295,7 +304,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         self.sign_joint_spend(&scripts, &spend, &request.phone_nonces)
     }
 
-    #[inline(never)]
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn review_offline_action(
         &mut self,
         state: &State,
@@ -328,8 +337,9 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         })
     }
 
-    /// [`Self::approve_offline_action`] without the copy of the request.
-    #[inline(never)]
+    /// [`Self::approve_offline_action`] without the copy of the request. Hardware signer memory:
+    /// see the note on this impl.
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn sign_offline_action_request(
         &mut self,
         state: &State,
@@ -340,7 +350,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         self.sign_spend(&spend, &leaf)
     }
 
-    #[inline(never)]
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn review_rotation(
         &mut self,
         state: &State,
@@ -390,8 +400,9 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         ))
     }
 
-    /// [`Self::approve_rotation`] without the copy of the request.
-    #[inline(never)]
+    /// [`Self::approve_rotation`] without the copy of the request. Hardware signer memory: see the
+    /// note on this impl.
+    #[inline(never)] // Hardware signer memory: see the note on this impl.
     pub fn sign_rotation_request(
         &mut self,
         state: &State,
@@ -509,8 +520,8 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
     }
 
     /// Sign every joint signature of `graph`, in [`PolicyGraph::cooperative_signing_jobs`]
-    /// order. The graph is consumed: each transaction is freed once signed, so a device never
-    /// holds the whole graph and all its signatures at once.
+    /// order. Hardware signer memory: the graph is consumed, each transaction freed once signed,
+    /// so a device never holds the whole graph and all its signatures at once.
     fn sign_policy(
         &mut self,
         scripts: &Scripts,

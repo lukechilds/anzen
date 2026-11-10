@@ -6,6 +6,12 @@
 //! a time and shows its review while the host waits for the `RUN` command's reply.
 //!
 //! The device keeps one vault per network.
+//!
+//! Proof of concept. Its one implementation is the Ledger app (`ledger-app/`), which holds a
+//! whole request in memory and so accepts at most [`MAX_INPUTS`] inputs. The intended design
+//! streams a request through the device (inputs folded into running hashes, transactions built
+//! and signed one at a time, signatures returned as they are made), which removes that limit and
+//! changes these commands.
 
 use alloc::vec::Vec;
 use anzen_protocol::{
@@ -21,7 +27,10 @@ pub const PROTOCOL_VERSION: u8 = 1;
 
 /// The largest request the device accepts.
 pub const MAX_REQUEST: usize = 6_144;
-/// The most inputs one request may spend, bounded by the device's memory.
+/// The most inputs one request may spend. A limit of the proof of concept, not of the protocol:
+/// a Ledger Flex or Stax has 36 KB of RAM, and a 16-input policy (30 joint signatures) is the
+/// largest that fits while the whole request is held in memory. A vault with more deposits than
+/// this cannot renew its policy on such a device until requests are streamed.
 pub const MAX_INPUTS: usize = 16;
 /// Data bytes per APDU, in either direction.
 pub const CHUNK: usize = 250;

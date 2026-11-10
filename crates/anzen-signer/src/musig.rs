@@ -6,6 +6,11 @@
 //! implementations (`anzen_common::musig`, built on the `musig2` crate) must give byte-identical
 //! answers, and this crate's tests check that they do.
 //!
+//! This is a second implementation of the same signing, kept only so hardware can use its own
+//! arithmetic: phones, browsers and the software signer still use `anzen_common::musig`. Today
+//! its one user is the Ledger app (`ledger-app/src/bolos.rs`). If every signer moved to this
+//! code, or hardware could run the `musig2` crate, one of the two could go.
+//!
 //! See [`crate::Keys::sign_cooperative`] for why the nonce is derived, never stored.
 
 use crate::CooperativeSession;

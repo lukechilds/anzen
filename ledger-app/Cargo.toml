@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Anzen developers"]
 edition = "2024"
 license = "MIT"
-description = "Anzen cold-signer app for Ledger devices"
+description = "Anzen cold-signer app for Ledger devices (proof of concept)"
 
 [dependencies]
 anzen-protocol = { path = "../crates/anzen-protocol" }

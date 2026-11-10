@@ -3,6 +3,11 @@
 //!
 //! Every decision is [`anzen_signer::Signer`]'s, the same code every other Anzen signer runs.
 //! This module supplies what is the device's own: its key, its storage and its screen.
+//!
+//! Proof of concept: a request is uploaded whole and held in memory while it is reviewed and
+//! signed, which is why [`MAX_INPUTS`] exists and why the functions below are shaped around the
+//! stack (one never-inlined function per operation, requests and state boxed, the review freed
+//! before signing). Streaming requests would replace most of that.
 
 use crate::storage::{self, Place};
 use crate::{
