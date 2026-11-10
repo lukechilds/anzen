@@ -89,6 +89,18 @@ impl DeviceKeys {
         ))
     }
 
+    /// The hot wallet's public descriptor for watch-only wallets: receive and change together as
+    /// one BIP389 multipath descriptor, with its checksum.
+    pub fn hot_watch_descriptor(&self, secp: &Secp256k1<All>) -> Result<String> {
+        let coin_type = coin_type(self.network)?;
+        let account_path = DerivationPath::from_str(&format!("m/86'/{coin_type}'/0'"))?;
+        let account_xpub =
+            Xpub::from_priv(secp, &self.master_xpriv.derive_priv(secp, &account_path)?);
+        let fingerprint = self.master_xpriv.fingerprint(secp);
+        let text = format!("tr([{fingerprint}/86'/{coin_type}'/0']{account_xpub}/<0;1>/*)");
+        Ok(miniscript::Descriptor::<miniscript::DescriptorPublicKey>::from_str(&text)?.to_string())
+    }
+
     pub fn hot_private_descriptors(&self, secp: &Secp256k1<All>) -> Result<(String, String)> {
         let coin_type = coin_type(self.network)?;
         let account_path = DerivationPath::from_str(&format!("m/86'/{coin_type}'/0'"))?;
@@ -186,6 +198,27 @@ mod tests {
             generated.hot_private_descriptors(&secp).unwrap(),
             restored.hot_private_descriptors(&secp).unwrap()
         );
+    }
+
+    #[test]
+    fn watch_descriptor_is_the_receive_and_change_descriptors_in_one() {
+        use miniscript::{Descriptor, DescriptorPublicKey};
+        let secp = Secp256k1::new();
+        for network in [Network::Bitcoin, Network::Signet] {
+            let keys = DeviceKeys::generate_for_network(&secp, network).unwrap();
+            let watch = keys.hot_watch_descriptor(&secp).unwrap();
+            assert!(watch.contains("/<0;1>/*)#"));
+            let singles = Descriptor::<DescriptorPublicKey>::from_str(&watch)
+                .unwrap()
+                .into_single_descriptors()
+                .unwrap();
+            let (external, internal) = keys.hot_descriptors(&secp).unwrap();
+            let expected = [external, internal]
+                .map(|text| Descriptor::<DescriptorPublicKey>::from_str(&text).unwrap());
+            assert_eq!(singles, expected);
+            // Public only.
+            assert!(!watch.contains("prv"));
+        }
     }
 
     #[test]

@@ -104,6 +104,8 @@ pub enum WalletRequest {
         signer: PublicDeviceFile,
     },
     Configuration,
+    /// Public descriptors for watch-only wallets: this phone's wallet, and the vault's once set up.
+    Descriptors,
     WalletSnapshot,
     BackgroundWalletSnapshot,
     VaultSnapshot,
@@ -191,6 +193,7 @@ impl WalletRequest {
                 | Self::PairSigner { .. }
                 | Self::SetupVault { .. }
                 | Self::Configuration
+                | Self::Descriptors
                 | Self::WatchTargets
                 | Self::ReceiveAddress
                 | Self::RejectPayment { .. }
@@ -353,6 +356,7 @@ impl WalletApplication {
                 serde_json::to_value(self.setup_vault(&signer)?)?
             }
             WalletRequest::Configuration => serde_json::to_value(self.configuration()?)?,
+            WalletRequest::Descriptors => self.descriptors()?,
             WalletRequest::WalletSnapshot => serde_json::to_value(self.wallet_snapshot(chain()?)?)?,
             WalletRequest::BackgroundWalletSnapshot => {
                 serde_json::to_value(self.background_wallet_snapshot(chain()?)?)?
@@ -520,6 +524,24 @@ impl WalletApplication {
             backup: self.propose_backup()?,
             config,
         })
+    }
+
+    /// Public descriptors only: the phone's wallet (receive and change in one), and once a vault
+    /// exists its descriptor and its connectors'.
+    pub fn descriptors(&self) -> Result<serde_json::Value> {
+        self.public_identity()?;
+        let phone = load_device_keys(&self.data_dir, PHONE_DEVICE_FILE)?;
+        let wallet = phone.hot_watch_descriptor(&bitcoin::key::Secp256k1::new())?;
+        let vault = if storage::config_exists(&self.data_dir) {
+            let config = self.configuration()?;
+            Some(serde_json::json!({
+                "vault": config.vault_descriptor,
+                "connectors": super::controller_policy(&config)?.descriptor_string(),
+            }))
+        } else {
+            None
+        };
+        Ok(serde_json::json!({ "wallet": wallet, "vault": vault }))
     }
 
     pub fn configuration(&self) -> Result<VaultConfig> {
