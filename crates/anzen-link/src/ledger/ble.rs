@@ -194,6 +194,11 @@ impl Ledger {
         Ok(())
     }
 
+    /// Whether the link is still up, as far as the operating system knows.
+    pub async fn is_connected(&self) -> bool {
+        self.peripheral.is_connected().await.unwrap_or(false)
+    }
+
     /// The frame size the device accepts.
     pub fn mtu(&self) -> usize {
         self.mtu

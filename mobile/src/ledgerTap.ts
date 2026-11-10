@@ -14,18 +14,17 @@ export function ledgerTap(call: Call): Tap {
   };
   return {
     hint: 'Unlock your Ledger and open the Anzen app.',
-    connect: async signal => {
+    connect: async () => {
       await ask({ method: 'connect' });
-      const close = () => { void ask({ method: 'disconnect' }).catch(() => {}); };
-      // Rust cannot be interrupted while it looks; give up the link it found instead.
-      if (signal.aborted) close();
       return {
         request: async message => {
           const answer = await ask({ method: 'request', message });
           if (answer.declined) throw new Error(DECLINED);
           return answer as ProtocolMessage;
         },
-        close,
+        // The link stays open for the next request: the Ledger's pairing screen, on a first
+        // connection, needs it to outlast this one. Rust reuses it or reconnects as needed.
+        close: () => {},
       };
     },
     // A phone is never a Ledger's signer side.
