@@ -9,7 +9,7 @@ use anzen_protocol::{
 };
 use anzen_signer::{
     CooperativeSession, Keys,
-    software::{SoftwareArithmetic, SoftwareKey},
+    software::{Place, SoftwareArithmetic, SoftwareKey},
 };
 use bitcoin::{
     key::{Keypair, Secp256k1},
@@ -129,4 +129,58 @@ fn zero_and_out_of_range_secrets_are_not_keys() {
     assert!(SoftwareKey::new([0; 32]).is_err());
     assert!(SoftwareKey::new([0xff; 32]).is_err());
     let _ = PublicKey::from_slice(&random_point()).unwrap();
+}
+
+#[test]
+fn a_seal_is_the_keys_own_and_covers_the_state_and_its_place() {
+    let (key, other) = (
+        SoftwareKey::new([7; 32]).unwrap(),
+        SoftwareKey::new([8; 32]).unwrap(),
+    );
+    let state = random();
+    let seal = key.seal(Place::Vault, &state);
+    assert!(key.sealed(Place::Vault, &state, &seal));
+    // The same key seals the same state the same way: a seal is no secret nonce.
+    assert_eq!(seal, key.seal(Place::Vault, &state));
+
+    // Another key, another place, another state or another seal: not this signer's.
+    assert!(!other.sealed(Place::Vault, &state, &seal));
+    assert!(!key.sealed(Place::Rotated, &state, &seal));
+    assert_ne!(seal, key.seal(Place::Rotated, &state));
+    for index in 0..state.len() {
+        let mut altered = state;
+        altered[index] ^= 1;
+        assert!(!key.sealed(Place::Vault, &altered, &seal));
+    }
+    for index in 0..seal.len() {
+        let mut altered = seal;
+        altered[index] ^= 0x80;
+        assert!(!key.sealed(Place::Vault, &state, &altered));
+    }
+    // Longer or shorter state, same prefix.
+    assert!(!key.sealed(Place::Vault, &state[..31], &seal));
+    let mut longer = state.to_vec();
+    longer.push(0);
+    assert!(!key.sealed(Place::Vault, &longer, &seal));
+    assert!(key.sealed(Place::Vault, &[], &key.seal(Place::Vault, &[])));
+}
+
+#[test]
+fn a_seal_is_hmac_sha256_under_a_key_derived_from_the_vault_key() {
+    use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
+    let secret = [7_u8; 32];
+    let state = b"what the signer would have stored";
+    let mut derived = sha256::Hash::engine();
+    derived.input(b"Anzen/sealed-state/v1");
+    derived.input(&secret);
+    let derived = sha256::Hash::from_engine(derived);
+    let mut mac = HmacEngine::<sha256::Hash>::new(derived.as_byte_array());
+    mac.input(&[Place::Rotated as u8]);
+    mac.input(state);
+    assert_eq!(
+        SoftwareKey::new(secret)
+            .unwrap()
+            .seal(Place::Rotated, state),
+        Hmac::<sha256::Hash>::from_engine(mac).to_byte_array()
+    );
 }

@@ -12,6 +12,13 @@
 //! through the device would remove that limit, and is deliberately not planned: it would give
 //! the shared transaction builder a second, incremental shape for the sake of one device, and
 //! every other signer (the phone's signer mode, Trezor, Passport) has memory to spare.
+//!
+//! [`stateless`] is the protocol of a signer app with no storage, whose one implementation is
+//! the Trezor app (`trezor-app/`). It shares this module's [`Operation`]s and request types.
+//! [`review`] is the wording of a review's rows, the same on every device.
+
+pub mod review;
+pub mod stateless;
 
 use alloc::vec::Vec;
 use anzen_protocol::{

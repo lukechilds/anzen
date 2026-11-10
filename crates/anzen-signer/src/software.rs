@@ -23,6 +23,7 @@ use k256::{
         group::Group,
         ops::Reduce,
         sec1::{FromEncodedPoint, ToEncodedPoint},
+        subtle::ConstantTimeEq,
     },
     schnorr::SigningKey,
 };
@@ -122,6 +123,62 @@ impl SoftwareKey {
             return Err(Error::InvalidKey);
         }
         Ok(Self(secret))
+    }
+}
+
+/// Which of the signer's two memories a sealed state is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Place {
+    /// The vault this signer accepted, and the last policy it approved.
+    Vault = 1,
+    /// The vault of an approved phone rotation, not yet adopted.
+    Rotated = 2,
+}
+
+impl SoftwareKey {
+    /// A seal over state this signer hands to its host to keep.
+    ///
+    /// A signer with no storage of its own remembers by proxy: it seals what it would have
+    /// stored, the host keeps it, and the signer takes it back only with its own seal on it. The
+    /// seal is HMAC-SHA256 under a key derived from the vault key, so no one else can make one,
+    /// and it covers `place`, so the state of an unadopted rotation cannot pass for the vault's.
+    ///
+    /// A seal proves the signer once held this state, not that it is the latest: a host can
+    /// present an older one.
+    pub fn seal(&self, place: Place, state: &[u8]) -> [u8; 32] {
+        const BLOCK: usize = 64;
+        let mut key = [0_u8; BLOCK];
+        key[..32].copy_from_slice(
+            &Sha256::new()
+                .chain_update(b"Anzen/sealed-state/v1")
+                .chain_update(self.0)
+                .finalize(),
+        );
+        let (mut inner, mut outer) = ([0x36_u8; BLOCK], [0x5c_u8; BLOCK]);
+        for index in 0..BLOCK {
+            inner[index] ^= key[index];
+            outer[index] ^= key[index];
+        }
+        let digest = Sha256::new()
+            .chain_update(inner)
+            .chain_update([place as u8])
+            .chain_update(state)
+            .finalize();
+        let seal = Sha256::new()
+            .chain_update(outer)
+            .chain_update(digest)
+            .finalize()
+            .into();
+        key.zeroize();
+        inner.zeroize();
+        outer.zeroize();
+        seal
+    }
+
+    /// Whether `seal` is this signer's own over `state` in `place`. Constant time.
+    pub fn sealed(&self, place: Place, state: &[u8], seal: &[u8; 32]) -> bool {
+        bool::from(self.seal(place, state).ct_eq(seal))
     }
 }
 
