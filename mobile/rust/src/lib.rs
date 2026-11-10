@@ -1,6 +1,7 @@
 //! Native transport only: role routing, OS-key scope, backend selection and C ABI ownership.
 //! Wallet behavior is implemented by the role facades, never by this adapter or JavaScript.
 
+mod ledger;
 use anyhow::{Context, Result, bail};
 use anzen_signer_app::{
     api as cold,
@@ -318,6 +319,23 @@ pub unsafe extern "C" fn anzen_mobile_benchmark(request: *const c_char) -> *mut 
         }
         // SAFETY: checked for null; remaining validity/lifetime is the documented C ABI contract.
         benchmark(unsafe { CStr::from_ptr(request).to_str()? })
+    });
+    envelope(outcome)
+}
+
+/// The Bluetooth link to a Ledger signer: `{"method":"connect"|"request"|"disconnect", …}` (see
+/// [`ledger`]). Blocks while the person reviews on the Ledger; call it off the main thread.
+///
+/// # Safety
+/// `request` must reference a live NUL-terminated UTF-8 string for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn anzen_mobile_ledger(request: *const c_char) -> *mut c_char {
+    let outcome = std::panic::catch_unwind(|| -> Result<Value> {
+        if request.is_null() {
+            bail!("null native argument");
+        }
+        // SAFETY: checked for null; remaining validity/lifetime is the documented C ABI contract.
+        ledger::ledger(unsafe { CStr::from_ptr(request).to_str()? })
     });
     envelope(outcome)
 }

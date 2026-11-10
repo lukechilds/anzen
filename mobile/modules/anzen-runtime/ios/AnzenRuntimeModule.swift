@@ -7,6 +7,8 @@ public final class AnzenRuntimeModule: Module {
   private let queue = DispatchQueue(label: "app.anzen.rust", qos: .userInitiated)
   // Benchmarks block for their whole run, so they never share the wallet's command queue.
   private let benchmarkQueue = DispatchQueue(label: "app.anzen.benchmark", qos: .userInitiated)
+  // A Ledger review waits for its person, so the link has a queue of its own.
+  private let ledgerQueue = DispatchQueue(label: "app.anzen.ledger", qos: .userInitiated)
 
   public func definition() -> ModuleDefinition {
     Name("AnzenRuntime")
@@ -69,6 +71,16 @@ public final class AnzenRuntimeModule: Module {
         return String(cString: pointer)
       }
     }.runOnQueue(benchmarkQueue)
+    // The Bluetooth link to a Ledger signer. Rust owns the connection; each call is one step.
+    AsyncFunction("ledger") { (request: String) throws -> String in
+      return try request.withCString { requestPointer in
+        guard let pointer = anzen_mobile_ledger(requestPointer) else {
+          throw self.failure("Rust returned no response")
+        }
+        defer { anzen_mobile_free(pointer) }
+        return String(cString: pointer)
+      }
+    }.runOnQueue(ledgerQueue)
     // Live updates run on Rust's own thread; this call only starts, updates or reads them, so it
     // is synchronous and never waits behind a command on the queue above.
     Function("watch") { (settings: String, request: String) throws -> String in

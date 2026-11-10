@@ -28,6 +28,9 @@ type Props = {
   deliver: Deliver;
   // The Bluetooth link to the signer. Without it, messages travel as files.
   tap?: Tap;
+  // The signer cannot protect the phone's recovery backup (a Ledger, for now), so a vault is
+  // complete without one. Losing the phone then leaves only the signer's own delayed recovery.
+  signerKeepsNoBackup?: boolean;
   saveBackup?: (backup: JsonObject) => Promise<TransferResult>;
   cloudBackup?: JsonObject | null;
   // Asks the owner to confirm it's them (Face ID or passcode) before the app opens, the vault
@@ -107,7 +110,7 @@ function Field({ label, value, onChange, numeric = false }: { label: string; val
     style={s.input} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} /></>;
 }
 
-export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark, deviceSettings }: Props) {
+export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark, deviceSettings, signerKeepsNoBackup = false }: Props) {
   const signer = transport.role === 'signer';
   const [identity, setIdentity] = useState<JsonObject | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -128,6 +131,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const [pairing, setPairing] = useState<JsonObject | null>(null);
   const [paired, setPaired] = useState(false);
   const [backupStored, setBackupStored] = useState(false);
+  // A vault is ready once it has its signer and, where the signer can protect one, its backup.
+  const ready = paired && (backupStored || signerKeepsNoBackup);
   const [tapState, setTapState] = useState<TapState | null>(null);
   const [linked, setLinked] = useState(false);
   const [signerSettings, setSignerSettings] = useState(false);
@@ -382,9 +387,9 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     finally { opening.current = false; setBusy(false); }
   }
   useEffect(() => {
-    if (signer || tab !== 'vault' || page !== 'home' || !paired || !backupStored || vaultVisible || busy || tapState || revealError) return;
+    if (signer || tab !== 'vault' || page !== 'home' || !ready || vaultVisible || busy || tapState || revealError) return;
     void reveal();
-  }, [signer, tab, page, paired, backupStored, vaultVisible, busy, tapState, revealError]);
+  }, [signer, tab, page, ready, vaultVisible, busy, tapState, revealError]);
   const reviewRecovered = () => {
     const generation = privacyGeneration.current;
     return run({ method: 'review_recovered_wallet' }, value => {
@@ -437,7 +442,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       }
       case 'signer-identity':
         // A lost signer comes back from its own backup as the same key; a vault never changes signer.
-        if (paired && backupStored) throw new Error('This vault already has a signer.');
+        if (ready) throw new Error('This vault already has a signer.');
         progress('Creating your vault');
         { const setup = await call({ method: 'setup_vault', signer: body }); setPaired(true); await send('vault-setup', setup); }
         return;
@@ -447,8 +452,9 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
         await send('vault-accepted', accepted); return;
       }
       case 'vault-accepted':
-        // A signer finishing a rotation only confirms it switched vaults.
-        if (!body.backup) { setNotice('Your signer now uses the new vault.'); return; }
+        // A signer that keeps no backup has finished setup; one finishing a rotation only
+        // confirms it switched vaults.
+        if (!body.backup) { setNotice(signerKeepsNoBackup ? 'Vault set up. This signer keeps no recovery backup for your phone.' : 'Your signer now uses the new vault.'); return; }
         progress('Saving your recovery backup');
         await call({ method: 'store_backup', message: body.backup }); setBackupStored(true);
         await saveToCloud(); return;
@@ -572,7 +578,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
             <View style={{ marginTop: 48, marginHorizontal: 4 }}>
               <Text style={s.footnote}>anzen · {identity?.network || network}</Text>
             </View></>}
-        </> : !vaultVisible ? page === 'home' && (paired && backupStored ? <>
+        </> : !vaultVisible ? page === 'home' && (ready ? <>
           <View style={[s.hero, { paddingBottom: 20 }]}><Text style={s.eyebrow}>Vault</Text>
             <Text style={[s.balance, { fontSize: 34 }]}>{revealError ? 'Still locked.' : 'Opening…'}</Text></View>
           {!!revealError && <><Text accessibilityRole="alert" style={[s.errorText, { textAlign: 'center' }]}>{revealError}</Text>
@@ -822,7 +828,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       <Text style={s.sheetEyebrow}>{vaultSheetLabels[page]}</Text>
       {page === 'deposit' && <AddressCard address={vault.config.vault_address} vault/>}
       {page === 'withdraw' && <WithdrawalOptions go={go} vault={vault}/>}
-      {page === 'settings' && <VaultSettings vault={vault} disabled={busy}
+      {page === 'settings' && <VaultSettings vault={vault} disabled={busy} noBackup={signerKeepsNoBackup}
         go={go} backup={() => propose({ method: 'propose_backup' }, 'backup-proposal', () => setPage('home'))}
         reviewRecovered={() => { go('recovered-wallet'); void reviewRecovered(); }}>
         <Descriptors kind="vault" busy={busy} run={run}/>
@@ -884,6 +890,6 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     </DarkSheet>}
     {locked && <View style={[StyleSheet.absoluteFill, { zIndex: 85, backgroundColor: colors.background }]}/>}
     {faceId.prompt}
-    {tapState && <TapSheet state={tapState} onCancel={cancelTap} onRetry={() => void connectAndSend()} onDone={() => setTapState(null)}/>}
+    {tapState && <TapSheet state={tapState} hint={tap?.hint} onCancel={cancelTap} onRetry={() => void connectAndSend()} onDone={() => setTapState(null)}/>}
   </View>;
 }

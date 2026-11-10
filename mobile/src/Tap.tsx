@@ -77,7 +77,7 @@ function Pill({ title, onPress, primary = false }: { title: string; onPress: () 
 // The signer's user said no. Shown as an outcome, not as a failure to retry.
 export const DECLINED = 'Declined on your signer.';
 
-export function TapSheet({ state, onCancel, onRetry, onDone }: { state: TapState; onCancel: () => void; onRetry: () => void; onDone: () => void }) {
+export function TapSheet({ state, hint, onCancel, onRetry, onDone }: { state: TapState; hint?: string; onCancel: () => void; onRetry: () => void; onDone: () => void }) {
   const { purpose, phase } = state;
   const declined = phase === 'failed' && state.error === DECLINED;
   const title = declined ? 'Declined on your signer' : phase === 'failed' ? 'Couldn’t finish'
@@ -89,7 +89,7 @@ export function TapSheet({ state, onCancel, onRetry, onDone }: { state: TapState
     : phase === 'done' ? (purpose === 'setup' ? 'Protected by this phone and your signer.' : '')
     : phase === 'review' ? 'Check the details on your signer’s screen.'
     : phase === 'working' ? state.step
-    : waiting[purpose];
+    : hint ?? waiting[purpose];
   const close = phase === 'done' ? onDone : onCancel;
   return <DarkSheet label="Connect signer" onClose={close}>
     <View testID="tap-sheet" style={{ alignItems: 'center', paddingTop: 30 }}>

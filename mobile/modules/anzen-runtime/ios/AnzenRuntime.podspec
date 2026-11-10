@@ -17,7 +17,8 @@ Pod::Spec.new do |s|
   s.source_files = '*.swift', 'include/*.h'
   s.public_header_files = 'include/AnzenRuntime.h'
   s.vendored_frameworks = 'AnzenMobile.xcframework'
-  # Metal and QuartzCore for the GPU benchmarks (wgpu and native Metal).
-  s.frameworks = 'Security', 'SystemConfiguration', 'Metal', 'QuartzCore', 'UIKit'
+  # Metal and QuartzCore for the GPU benchmarks (wgpu and native Metal); CoreBluetooth for the
+  # link to a Ledger signer.
+  s.frameworks = 'Security', 'SystemConfiguration', 'Metal', 'QuartzCore', 'UIKit', 'CoreBluetooth'
   s.libraries = 'c++', 'resolv'
 end

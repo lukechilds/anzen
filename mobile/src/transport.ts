@@ -38,6 +38,8 @@ export interface SignerLink {
 // The signer's side: answer one request. The signal aborts when the phone moves away.
 export type TapAnswer = (message: ProtocolMessage, signal: AbortSignal) => Promise<ProtocolMessage>;
 export interface Tap {
+  // What to do while the phone looks for this kind of signer, if it needs saying.
+  readonly hint?: string;
   // Phone: resolves once a signer is held close. Aborting stops waiting.
   connect(signal: AbortSignal): Promise<SignerLink>;
   // Signer: answer phones held close. Returns an unsubscribe function.

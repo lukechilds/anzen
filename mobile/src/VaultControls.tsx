@@ -6,13 +6,17 @@ import { JsonObject } from './transport';
 
 // Navigation only. Rust remains responsible for proposal validation, eligibility, fees,
 // signature checks and broadcast. No amounts or timelocks are constructed in this UI.
-export function VaultSettings({ vault, go, backup, reviewRecovered, disabled, children }: {
+export function VaultSettings({ vault, go, backup, reviewRecovered, disabled, noBackup = false, children }: {
   vault: JsonObject; go: (page: string) => void; backup: () => void;
-  reviewRecovered: () => void; disabled: boolean; children?: React.ReactNode;
+  reviewRecovered: () => void; disabled: boolean;
+  // The signer cannot protect a recovery backup, so there is none to make.
+  noBackup?: boolean; children?: React.ReactNode;
 }) {
   return <View style={{ marginTop: 14 }}>
     <MenuRow title="Spending policy" subtitle="Monthly allowance and emergency access" onPress={() => go('policy')}/>
-    <MenuRow title="Recovery backup" subtitle={vault.recovery_backup_stored ? 'Encrypted and saved for you' : 'Approve with your signer'} value={vault.recovery_backup_stored ? 'Saved' : 'Not set'} onPress={backup} disabled={disabled}/>
+    {noBackup && !vault.recovery_backup_stored
+      ? <MenuRow title="Recovery backup" subtitle="Your Ledger can’t protect one yet. Keep this phone’s recovery phrase." value="None" onPress={() => {}} disabled/>
+      : <MenuRow title="Recovery backup" subtitle={vault.recovery_backup_stored ? 'Encrypted and saved for you' : 'Approve with your signer'} value={vault.recovery_backup_stored ? 'Saved' : 'Not set'} onPress={backup} disabled={disabled}/>}
     <MenuRow title="Lost a device?" subtitle="What to do if your phone or signer goes missing" onPress={() => go('lost')}/>
     {vault.recovered_wallet_available && <MenuRow title="Review recovered wallet funds" subtitle="Move the old phone’s everyday balance" onPress={reviewRecovered} disabled={disabled}/>}
     <MenuRow title="Saved messages" subtitle="Resend a request as a file" onPress={() => go('saved-messages')}/>

@@ -8,6 +8,7 @@ import { BenchmarkRunner } from './Benchmarks';
 import { DeviceTransport, JsonObject, ProtocolMessage, Role } from './transport';
 import { parseProtocolMessage } from './fileExchange';
 import { nativeFileExchange } from './nativeFileExchange';
+import { ledgerTap } from './ledgerTap';
 import { colors, styles as s } from './theme';
 
 interface NativeRuntime {
@@ -16,10 +17,12 @@ interface NativeRuntime {
   watch(settings: string, request: string): string;
   // Vanity-search benchmarks on their own queue: {"engine": "gpu" | "cpu", "seconds": n}.
   benchmark(request: string): Promise<string>;
+  // The Bluetooth link to a Ledger signer: connect, one request at a time, disconnect. iOS only.
+  ledger?(request: string): Promise<string>;
 }
 // This phone's network, role and regtest node, kept between launches. Nothing secret: a regtest
 // node's credentials at most.
-const defaults: DevicePrefs = { network: 'signet', role: 'wallet', rpc: { url: 'http://127.0.0.1:18443', user: 'anzen', password: 'anzen' } };
+const defaults: DevicePrefs = { network: 'signet', role: 'wallet', rpc: { url: 'http://127.0.0.1:18443', user: 'anzen', password: 'anzen' }, ledger: false };
 const prefsFile = () => new File(Paths.document, 'anzen-device.json');
 function loadPrefs(): DevicePrefs {
   try {
@@ -30,6 +33,7 @@ function loadPrefs(): DevicePrefs {
       network: ['signet', 'bitcoin', 'regtest'].includes(saved.network) ? saved.network : defaults.network,
       role: ['wallet', 'signer'].includes(saved.role) ? saved.role : defaults.role,
       rpc: { ...defaults.rpc, ...saved.rpc },
+      ledger: saved.ledger === true,
     };
   } catch { return defaults; }
 }
@@ -100,6 +104,9 @@ export default function NativeApp() {
       },
     };
   }, [runtime]);
+  // A Ledger as this wallet's signer: the same link the app's signer flows already speak to.
+  const ledgerCall = runtime?.ledger?.bind(runtime);
+  const tap = useMemo(() => ledgerCall && prefs.ledger && role === 'wallet' ? ledgerTap(ledgerCall) : undefined, [ledgerCall, prefs.ledger, role]);
   const acceptMessage = (value: ProtocolMessage) => {
     setIncoming(value); setMessage(''); setExchange(false); setError(''); setFileNotice('');
   };
@@ -148,7 +155,8 @@ export default function NativeApp() {
       <AnzenApp key={`${network}:${role}`} transport={transport!} network={network} incoming={incoming} dismissIncoming={() => setIncoming(null)}
         cloudBackup={cloudBackup} saveBackup={backup => nativeFileExchange.saveBackup(role, backup)}
         deliver={nativeFileExchange.sendMessage} benchmark={role === 'wallet' ? benchmark : undefined}
-        deviceSettings={<DeviceSettings prefs={prefs} onChange={updatePrefs}
+        tap={tap} signerKeepsNoBackup={Boolean(tap)}
+        deviceSettings={<DeviceSettings prefs={prefs} onChange={updatePrefs} ledgerAvailable={Boolean(ledgerCall)}
           onImport={() => { setExchange(true); setError(''); setFileNotice(''); }}/>} />
     </View>
     {/* What a file import did, until dismissed. */}

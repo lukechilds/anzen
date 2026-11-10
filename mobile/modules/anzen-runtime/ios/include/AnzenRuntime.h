@@ -13,5 +13,9 @@ char *anzen_mobile_watch(const char *settings, const char *request);
 // whole length; call it off the main thread. The returned JSON envelope is released with
 // anzen_mobile_free.
 char *anzen_mobile_benchmark(const char *request);
+// The Bluetooth link to a Ledger signer: request is {"method":"connect"|"request"|"disconnect",
+// ...}. It blocks while the person reviews on the Ledger; call it off the main thread. The
+// returned JSON envelope is released with anzen_mobile_free.
+char *anzen_mobile_ledger(const char *request);
 void anzen_mobile_free(char *value);
 #endif
