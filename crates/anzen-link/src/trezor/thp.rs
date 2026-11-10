@@ -182,6 +182,20 @@ impl std::fmt::Display for Failure {
 
 impl std::error::Error for Failure {}
 
+/// What went wrong inside the protocol library, in words. (Its error type prints itself only
+/// in debug builds.)
+fn why(error: trezor_thp::Error) -> &'static str {
+    use trezor_thp::Error;
+    match error {
+        Error::UnexpectedInput => "unexpected input",
+        Error::NotReady => "not ready",
+        Error::MalformedData => "malformed data",
+        Error::InvalidChecksum => "a checksum does not match",
+        Error::InsufficientBuffer => "a buffer is too small",
+        Error::CryptoError => "the encryption failed",
+    }
+}
+
 enum Event {
     Message(u8, u16, Vec<u8>),
     /// The Trezor allocated the channel that was asked for.
@@ -195,7 +209,7 @@ async fn flush<T: Transport, C: ChannelIO>(
     while channel.packet_out_ready() {
         let packet = channel
             .packet_out()
-            .map_err(|error| anyhow!("could not frame a packet for the Trezor: {error:?}"))?;
+            .map_err(|error| anyhow!("could not frame a packet for the Trezor: {}", why(error)))?;
         transport.send(&packet).await?;
     }
     Ok(())
@@ -210,7 +224,7 @@ async fn send<T: Transport, C: ChannelIO>(
 ) -> Result<()> {
     channel
         .message_in(session, kind, message)
-        .map_err(|error| anyhow!("the channel to the Trezor is not ready: {error:?}"))?;
+        .map_err(|error| anyhow!("the channel to the Trezor is not ready: {}", why(error)))?;
     flush(transport, channel).await
 }
 
@@ -237,7 +251,7 @@ async fn receive<T: Transport, C: ChannelIO>(
                 retry += 1;
                 channel
                     .message_retransmit()
-                    .map_err(|error| anyhow!("could not resend to the Trezor: {error:?}"))?;
+                    .map_err(|error| anyhow!("could not resend to the Trezor: {}", why(error)))?;
                 continue;
             }
             bail!("the Trezor did not answer in time");
@@ -247,9 +261,9 @@ async fn receive<T: Transport, C: ChannelIO>(
                 message_ready: true,
                 ..
             } => {
-                let (session, kind, message) = channel
-                    .message_out()
-                    .map_err(|error| anyhow!("could not read the Trezor's message: {error:?}"))?;
+                let (session, kind, message) = channel.message_out().map_err(|error| {
+                    anyhow!("could not read the Trezor's message: {}", why(error))
+                })?;
                 // Acknowledge it.
                 flush(transport, channel).await?;
                 return Ok(Event::Message(session, kind, message));
@@ -268,7 +282,7 @@ async fn receive<T: Transport, C: ChannelIO>(
                 }
             ),
             PacketInResult::Failed { error } => {
-                bail!("the channel to the Trezor failed: {error:?}")
+                bail!("the channel to the Trezor failed: {}", why(error))
             }
             // An acknowledgement, part of a longer message, or a packet that was not for this
             // channel: keep reading.
@@ -344,7 +358,7 @@ impl<T: Transport> Trezor<T> {
         );
         let mut open = mux
             .map(|mux| mux.complete(identity.clone()))
-            .map_err(|error| anyhow!("could not open a channel to the Trezor: {error:?}"))?;
+            .map_err(|error| anyhow!("could not open a channel to the Trezor: {}", why(error)))?;
         let properties: proto::DeviceProperties = proto::decode(open.device_properties())?;
         if let (Some(major), Some(minor)) = (
             properties.protocol_version_major,
@@ -366,7 +380,7 @@ impl<T: Transport> Trezor<T> {
         );
         let channel = open
             .map(|open| open.complete())
-            .map_err(|error| anyhow!("the handshake with the Trezor failed: {error:?}"))?;
+            .map_err(|error| anyhow!("the handshake with the Trezor failed: {}", why(error)))?;
         let handshake = match channel.phase() {
             Phase::PairingCredential {
                 handshake_pairing_state,
