@@ -14,6 +14,7 @@
 extern crate alloc;
 
 pub mod benchmark;
+pub mod hardware;
 pub mod musig;
 
 /// Name presented by hardware-wallet implementations of the protocol.
@@ -157,6 +158,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
 
     /// Accept a vault with the phone key and the recovery locktime the phone chose. Pairing never
     /// approves a spending policy.
+    #[inline(never)]
     pub fn pair(
         &mut self,
         network: Network,
@@ -182,6 +184,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         })
     }
 
+    #[inline(never)]
     pub fn review_policy(
         &mut self,
         state: &State,
@@ -218,13 +221,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         request: &PolicyRequest,
         now: Option<u64>,
     ) -> Result<(PolicyApproval, State)> {
-        self.check_state(state)?;
-        let (scripts, graph, _) = self.policy(state, request, now)?;
-        let signatures = self.sign_policy(&scripts, &graph, &request.phone_nonces)?;
-        let mut next = state.clone();
-        next.limits = request.limits;
-        next.anchor = Some(graph.anchor());
-        next.anchor_approved_at = now;
+        let (signatures, next) = self.sign_policy_request(state, request, now)?;
         Ok((
             PolicyApproval {
                 version: wire::VERSION,
@@ -235,6 +232,32 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         ))
     }
 
+    /// [`Self::approve_policy`] without the copy of the request, for devices with little memory.
+    #[inline(never)]
+    pub fn sign_policy_request(
+        &mut self,
+        state: &State,
+        request: &PolicyRequest,
+        now: Option<u64>,
+    ) -> Result<(Vec<CooperativeSignature>, State)> {
+        self.check_state(state)?;
+        let (scripts, graph, _) = self.policy(state, request, now)?;
+        let anchor = graph.anchor();
+        let signatures = self.sign_policy(&scripts, graph, &request.phone_nonces)?;
+        Ok((
+            signatures,
+            State {
+                version: state.version,
+                network: state.network,
+                keys: state.keys,
+                limits: request.limits,
+                anchor: Some(anchor),
+                anchor_approved_at: now,
+            },
+        ))
+    }
+
+    #[inline(never)]
     pub fn review_sweep(&mut self, state: &State, request: &SweepRequest) -> Result<SweepReview> {
         self.check_state(state)?;
         let (scripts, spend) = self.sweep(state, request)?;
@@ -253,15 +276,26 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         state: &State,
         request: &SweepRequest,
     ) -> Result<SweepApproval> {
-        self.check_state(state)?;
-        let (scripts, spend) = self.sweep(state, request)?;
         Ok(SweepApproval {
             version: wire::VERSION,
+            signatures: self.sign_sweep_request(state, request)?,
             request: request.clone(),
-            signatures: self.sign_joint_spend(&scripts, &spend, &request.phone_nonces)?,
         })
     }
 
+    /// [`Self::approve_sweep`] without the copy of the request.
+    #[inline(never)]
+    pub fn sign_sweep_request(
+        &mut self,
+        state: &State,
+        request: &SweepRequest,
+    ) -> Result<Vec<CooperativeSignature>> {
+        self.check_state(state)?;
+        let (scripts, spend) = self.sweep(state, request)?;
+        self.sign_joint_spend(&scripts, &spend, &request.phone_nonces)
+    }
+
+    #[inline(never)]
     pub fn review_offline_action(
         &mut self,
         state: &State,
@@ -287,15 +321,26 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         state: &State,
         request: &OfflineActionRequest,
     ) -> Result<OfflineActionApproval> {
-        self.check_state(state)?;
-        let (_, spend, leaf) = self.offline_action(state, request)?;
         Ok(OfflineActionApproval {
             version: wire::VERSION,
+            signatures: self.sign_offline_action_request(state, request)?,
             request: request.clone(),
-            signatures: self.sign_spend(&spend, &leaf)?,
         })
     }
 
+    /// [`Self::approve_offline_action`] without the copy of the request.
+    #[inline(never)]
+    pub fn sign_offline_action_request(
+        &mut self,
+        state: &State,
+        request: &OfflineActionRequest,
+    ) -> Result<Vec<Signature>> {
+        self.check_state(state)?;
+        let (_, spend, leaf) = self.offline_action(state, request)?;
+        self.sign_spend(&spend, &leaf)
+    }
+
+    #[inline(never)]
     pub fn review_rotation(
         &mut self,
         state: &State,
@@ -332,6 +377,27 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         request: &RotationRequest,
         now: Option<u64>,
     ) -> Result<(RotationApproval, State)> {
+        let (signatures, next) = self.sign_rotation_request(state, request, now)?;
+        Ok((
+            RotationApproval {
+                version: wire::VERSION,
+                request: request.clone(),
+                sweep_signatures: signatures.sweep,
+                revocation_signatures: signatures.revocation,
+                policy_signatures: signatures.policy,
+            },
+            next,
+        ))
+    }
+
+    /// [`Self::approve_rotation`] without the copy of the request.
+    #[inline(never)]
+    pub fn sign_rotation_request(
+        &mut self,
+        state: &State,
+        request: &RotationRequest,
+        now: Option<u64>,
+    ) -> Result<(hardware::RotationSignatures, State)> {
         self.check_state(state)?;
         let (plan, _) = self.rotation(state, request, now)?;
         let sweep_signatures =
@@ -340,11 +406,14 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
             Some(spend) => self.sign_spend(spend, &plan.old_scripts.controller.hww_leaf)?,
             None => Vec::new(),
         };
-        let (policy_signatures, anchor) = match (&plan.renewed, &request.renewed_policy) {
-            (Some((scripts, graph)), Some(renewed)) => (
-                self.sign_policy(scripts, graph, &renewed.phone_nonces)?,
-                Some(graph.anchor()),
-            ),
+        let (policy_signatures, anchor) = match (plan.renewed, &request.renewed_policy) {
+            (Some((scripts, graph)), Some(renewed)) => {
+                let anchor = graph.anchor();
+                (
+                    self.sign_policy(&scripts, graph, &renewed.phone_nonces)?,
+                    Some(anchor),
+                )
+            }
             _ => (Vec::new(), None),
         };
         let next = State {
@@ -356,12 +425,10 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
             anchor_approved_at: now,
         };
         Ok((
-            RotationApproval {
-                version: wire::VERSION,
-                request: request.clone(),
-                sweep_signatures,
-                revocation_signatures,
-                policy_signatures,
+            hardware::RotationSignatures {
+                sweep: sweep_signatures,
+                revocation: revocation_signatures,
+                policy: policy_signatures,
             },
             next,
         ))
@@ -398,8 +465,7 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
             now,
         )?;
         let (scripts, graph) = request.build(self.crypto)?;
-        let jobs = graph.cooperative_signing_jobs(self.crypto)?.len();
-        wire::check_nonces(&request.phone_nonces, jobs)?;
+        wire::check_nonces(&request.phone_nonces, graph.cooperative_signature_count())?;
         Ok((scripts, graph, linkage))
     }
 
@@ -437,24 +503,35 @@ impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
         let plan = request.build(self.crypto)?;
         wire::check_nonces(&request.sweep_nonces, request.sweep_inputs.len())?;
         if let (Some((_, graph)), Some(renewed)) = (&plan.renewed, &request.renewed_policy) {
-            let jobs = graph.cooperative_signing_jobs(self.crypto)?.len();
-            wire::check_nonces(&renewed.phone_nonces, jobs)?;
+            wire::check_nonces(&renewed.phone_nonces, graph.cooperative_signature_count())?;
         }
         Ok((plan, linkage))
     }
 
+    /// Sign every joint signature of `graph`, in [`PolicyGraph::cooperative_signing_jobs`]
+    /// order. The graph is consumed: each transaction is freed once signed, so a device never
+    /// holds the whole graph and all its signatures at once.
     fn sign_policy(
         &mut self,
         scripts: &Scripts,
-        graph: &PolicyGraph,
+        graph: PolicyGraph,
         nonces: &[PubNonce],
     ) -> Result<Vec<CooperativeSignature>> {
-        let jobs = graph.cooperative_signing_jobs(self.crypto)?;
-        wire::check_nonces(nonces, jobs.len())?;
-        jobs.iter()
-            .zip(nonces)
-            .map(|(job, nonce)| self.sign_jointly(scripts, &job.sighash, nonce))
-            .collect()
+        wire::check_nonces(nonces, graph.cooperative_signature_count())?;
+        let mut signatures = Vec::with_capacity(nonces.len());
+        let keys = &mut *self.keys;
+        let mut nonces = nonces.iter();
+        graph.sign_each(self.crypto, |message| {
+            let phone_nonce = nonces.next().ok_or(Error::NonceCountMismatch)?;
+            signatures.push(keys.sign_cooperative(&CooperativeSession {
+                keys: &scripts.vault.keys,
+                merkle_root: &scripts.vault.merkle_root,
+                message,
+                phone_nonce,
+            })?);
+            Ok(())
+        })?;
+        Ok(signatures)
     }
 
     fn sign_joint_spend(

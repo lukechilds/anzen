@@ -209,6 +209,38 @@ impl PolicyGraph {
         Ok(jobs)
     }
 
+    /// How many signatures [`Self::cooperative_signing_jobs`] asks for, without computing them.
+    pub fn cooperative_signature_count(&self) -> usize {
+        self.transactions()
+            .into_iter()
+            .map(|transaction| transaction.vault_input_indexes().count())
+            .sum()
+    }
+
+    /// [`Self::cooperative_signing_jobs`] for devices with little memory: `sign` receives each
+    /// message as it is computed, in the same order, and each transaction is freed as soon as its
+    /// inputs are signed.
+    pub fn sign_each<C: Crypto + ?Sized>(
+        self,
+        crypto: &mut C,
+        mut sign: impl FnMut(&[u8; 32]) -> Result<()>,
+    ) -> Result<()> {
+        let emergency = self
+            .emergency
+            .into_iter()
+            .flat_map(|access| [access.trigger, access.withdrawal]);
+        let transactions = core::iter::once(self.rollover)
+            .chain(self.allowances.into_iter().map(|step| step.authorization))
+            .chain(emergency);
+        for transaction in transactions {
+            let cache = SighashCache::new(crypto, &transaction.transaction, &transaction.prevouts)?;
+            for input in transaction.vault_input_indexes() {
+                sign(&cache.key_path(crypto, input))?;
+            }
+        }
+        Ok(())
+    }
+
     /// The outpoints whose consumption makes this graph's presigned actions impossible.
     pub fn anchor(&self) -> EpochAnchor {
         let rollover_txid = self.rollover.txid;

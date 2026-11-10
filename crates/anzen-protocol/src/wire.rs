@@ -70,6 +70,17 @@ pub struct CooperativeSignature {
     pub partial: PartialSignature,
 }
 
+/// The outpoints of `inputs`. Inserted one at a time: collecting into a set sorts first, and the
+/// standard library's sort keeps a 4 KB scratch buffer on the stack, more than a hardware signer
+/// can spare.
+fn outpoints<'a>(inputs: impl Iterator<Item = &'a Input>) -> BTreeSet<OutPoint> {
+    let mut set = BTreeSet::new();
+    for input in inputs {
+        set.insert(input.outpoint);
+    }
+    set
+}
+
 /// Every joint signature needs exactly one phone nonce.
 pub fn check_nonces(nonces: &[PubNonce], signatures: usize) -> Result<()> {
     if nonces.len() != signatures {
@@ -131,11 +142,7 @@ impl PolicyRequest {
     }
 
     pub fn spent_outpoints(&self) -> BTreeSet<OutPoint> {
-        self.vault_inputs
-            .iter()
-            .chain(&self.controller_inputs)
-            .map(|input| input.outpoint)
-            .collect()
+        outpoints(self.vault_inputs.iter().chain(&self.controller_inputs))
     }
 }
 
@@ -347,11 +354,7 @@ impl RotationRequest {
 
     /// Outpoints of the old epoch this rotation consumes.
     pub fn spent_outpoints(&self) -> BTreeSet<OutPoint> {
-        self.sweep_inputs
-            .iter()
-            .chain(&self.revoke_connectors)
-            .map(|input| input.outpoint)
-            .collect()
+        outpoints(self.sweep_inputs.iter().chain(&self.revoke_connectors))
     }
 }
 
