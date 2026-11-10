@@ -9,6 +9,7 @@ import { DeviceTransport, JsonObject, ProtocolMessage, Role } from './transport'
 import { parseProtocolMessage } from './fileExchange';
 import { nativeFileExchange } from './nativeFileExchange';
 import { ledgerTap } from './ledgerTap';
+import { trezorTap } from './trezorTap';
 import { colors, styles as s } from './theme';
 
 interface NativeRuntime {
@@ -19,10 +20,12 @@ interface NativeRuntime {
   benchmark(request: string): Promise<string>;
   // The Bluetooth link to a Ledger signer: connect, one request at a time, disconnect. iOS only.
   ledger?(request: string): Promise<string>;
+  // The link to a Trezor signer: connect, pair, one request at a time, disconnect. iOS only.
+  trezor?(request: string): Promise<string>;
 }
 // This phone's network, role and regtest node, kept between launches. Nothing secret: a regtest
 // node's credentials at most.
-const defaults: DevicePrefs = { network: 'signet', role: 'wallet', rpc: { url: 'http://127.0.0.1:18443', user: 'anzen', password: 'anzen' }, ledger: false };
+const defaults: DevicePrefs = { network: 'signet', role: 'wallet', rpc: { url: 'http://127.0.0.1:18443', user: 'anzen', password: 'anzen' }, ledger: false, trezor: false };
 const prefsFile = () => new File(Paths.document, 'anzen-device.json');
 function loadPrefs(): DevicePrefs {
   try {
@@ -34,6 +37,7 @@ function loadPrefs(): DevicePrefs {
       role: ['wallet', 'signer'].includes(saved.role) ? saved.role : defaults.role,
       rpc: { ...defaults.rpc, ...saved.rpc },
       ledger: saved.ledger === true,
+      trezor: saved.trezor === true && saved.ledger !== true,
     };
   } catch { return defaults; }
 }
@@ -104,9 +108,16 @@ export default function NativeApp() {
       },
     };
   }, [runtime]);
-  // A Ledger as this wallet's signer: the same link the app's signer flows already speak to.
+  // A Ledger or a Trezor as this wallet's signer: the same link the app's signer flows already
+  // speak to.
   const ledgerCall = runtime?.ledger?.bind(runtime);
-  const tap = useMemo(() => ledgerCall && prefs.ledger && role === 'wallet' ? ledgerTap(ledgerCall) : undefined, [ledgerCall, prefs.ledger, role]);
+  const trezorCall = runtime?.trezor?.bind(runtime);
+  const tap = useMemo(() => {
+    if (role !== 'wallet') return undefined;
+    if (ledgerCall && prefs.ledger) return ledgerTap(ledgerCall);
+    if (trezorCall && prefs.trezor) return trezorTap(trezorCall);
+    return undefined;
+  }, [ledgerCall, trezorCall, prefs.ledger, prefs.trezor, role]);
   const acceptMessage = (value: ProtocolMessage) => {
     setIncoming(value); setMessage(''); setExchange(false); setError(''); setFileNotice('');
   };
@@ -156,7 +167,7 @@ export default function NativeApp() {
         cloudBackup={cloudBackup} saveBackup={backup => nativeFileExchange.saveBackup(role, backup)}
         deliver={nativeFileExchange.sendMessage} benchmark={role === 'wallet' ? benchmark : undefined}
         tap={tap} signerKeepsNoBackup={Boolean(tap)}
-        deviceSettings={<DeviceSettings prefs={prefs} onChange={updatePrefs} ledgerAvailable={Boolean(ledgerCall)}
+        deviceSettings={<DeviceSettings prefs={prefs} onChange={updatePrefs} ledgerAvailable={Boolean(ledgerCall)} trezorAvailable={Boolean(trezorCall)}
           onImport={() => { setExchange(true); setError(''); setFileNotice(''); }}/>} />
     </View>
     {/* What a file import did, until dismissed. */}

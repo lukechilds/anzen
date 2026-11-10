@@ -17,5 +17,10 @@ char *anzen_mobile_benchmark(const char *request);
 // ...}. It blocks while the person reviews on the Ledger; call it off the main thread. The
 // returned JSON envelope is released with anzen_mobile_free.
 char *anzen_mobile_ledger(const char *request);
+// The link to a Trezor signer: request is {"method":"connect"|"pair"|"request"|"disconnect",
+// ...}. root is the directory the phone's devices are stored in. It blocks while the person
+// reviews on the Trezor; call it off the main thread. The returned JSON envelope is released
+// with anzen_mobile_free.
+char *anzen_mobile_trezor(const char *root, const char *request);
 void anzen_mobile_free(char *value);
 #endif

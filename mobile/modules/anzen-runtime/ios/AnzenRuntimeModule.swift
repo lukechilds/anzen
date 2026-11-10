@@ -9,6 +9,8 @@ public final class AnzenRuntimeModule: Module {
   private let benchmarkQueue = DispatchQueue(label: "app.anzen.benchmark", qos: .userInitiated)
   // A Ledger review waits for its person, so the link has a queue of its own.
   private let ledgerQueue = DispatchQueue(label: "app.anzen.ledger", qos: .userInitiated)
+  // As does a Trezor's.
+  private let trezorQueue = DispatchQueue(label: "app.anzen.trezor", qos: .userInitiated)
 
   public func definition() -> ModuleDefinition {
     Name("AnzenRuntime")
@@ -33,13 +35,7 @@ public final class AnzenRuntimeModule: Module {
     }
     AsyncFunction("execute") { (role: String, command: String, settings: String) throws -> String in
       guard role == "wallet" || role == "signer" else { throw self.failure("Invalid device role") }
-      let manager = FileManager.default
-      var root = try manager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        .appendingPathComponent("AnzenDevices", isDirectory: true)
-      try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.complete])
-      var values = URLResourceValues()
-      values.isExcludedFromBackup = true
-      try root.setResourceValues(values)
+      let root = try self.devicesRoot()
       var key = try self.storageKey(role: role, root: root)
       defer { key.resetBytes(in: 0..<key.count) }
       return try root.path.withCString { rootPointer in
@@ -81,6 +77,21 @@ public final class AnzenRuntimeModule: Module {
         return String(cString: pointer)
       }
     }.runOnQueue(ledgerQueue)
+    // The link to a Trezor signer. Rust owns the connection, and keeps this phone's pairing with
+    // the Trezor and the signer's sealed state beside the devices: protected while the phone is
+    // locked, and never in a backup.
+    AsyncFunction("trezor") { (request: String) throws -> String in
+      let root = try self.devicesRoot()
+      return try root.path.withCString { rootPointer in
+        try request.withCString { requestPointer in
+          guard let pointer = anzen_mobile_trezor(rootPointer, requestPointer) else {
+            throw self.failure("Rust returned no response")
+          }
+          defer { anzen_mobile_free(pointer) }
+          return String(cString: pointer)
+        }
+      }
+    }.runOnQueue(trezorQueue)
     // Live updates run on Rust's own thread; this call only starts, updates or reads them, so it
     // is synchronous and never waits behind a command on the queue above.
     Function("watch") { (settings: String, request: String) throws -> String in
@@ -94,6 +105,19 @@ public final class AnzenRuntimeModule: Module {
         }
       }
     }
+  }
+
+  // Where this phone's devices are stored: unreadable while the phone is locked, and excluded
+  // from backups.
+  private func devicesRoot() throws -> URL {
+    let manager = FileManager.default
+    var root = try manager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+      .appendingPathComponent("AnzenDevices", isDirectory: true)
+    try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.complete])
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try root.setResourceValues(values)
+    return root
   }
 
   // The storage key never leaves native memory. It is device-bound, excluded from backups,

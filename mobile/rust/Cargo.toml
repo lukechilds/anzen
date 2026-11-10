@@ -21,8 +21,8 @@ zeroize = "1.8"
 # Mobile devices do not provide libsqlite3 development files for cross-compilation.
 rusqlite = { version = "0.31", features = ["bundled"] }
 
-# A Ledger signer over Bluetooth. Not on Android yet: its Bluetooth needs a Java-side setup this
-# app does not have.
+# A Ledger or Trezor signer over Bluetooth. Not on Android yet: its Bluetooth needs a Java-side
+# setup this app does not have.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 anzen-link = { path = "../../crates/anzen-link" }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
@@ -30,6 +30,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 [dev-dependencies]
 tempfile = "3.23"
 bitcoincore-rpc = "0.19"
+# The Trezor emulator test plays the phone: real requests, and the host MuSig2 code to check the
+# answers.
+anzen-common = { path = "../../crates/anzen-common" }
+anzen-protocol = { path = "../../crates/anzen-protocol", features = ["software"] }
+bitcoin = { version = "0.32.9", features = ["rand-std"] }
+tokio = { version = "1", features = ["rt", "time", "net"] }
 
 [profile.release]
 lto = "thin"

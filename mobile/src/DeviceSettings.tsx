@@ -14,6 +14,8 @@ export interface DevicePrefs {
   network: Network; role: Role; rpc: Rpc;
   // This wallet's signer is a Ledger, reached over Bluetooth (a proof of concept).
   ledger: boolean;
+  // Or a Trezor (also a proof of concept). At most one of the two.
+  trezor: boolean;
 }
 
 export const networkNames: Record<Network, string> = { signet: 'Mutinynet', bitcoin: 'Mainnet', regtest: 'Regtest' };
@@ -34,15 +36,17 @@ function Choice({ title, note, selected, onPress }: { title: string; note: strin
   </Pressable>;
 }
 
-export default function DeviceSettings({ prefs, onChange, onImport, ledgerAvailable = false }: {
+export default function DeviceSettings({ prefs, onChange, onImport, ledgerAvailable = false, trezorAvailable = false }: {
   prefs: DevicePrefs;
   onChange: (prefs: DevicePrefs) => void;
   // This build can reach a Ledger over Bluetooth.
   ledgerAvailable?: boolean;
+  // This build can reach a Trezor.
+  trezorAvailable?: boolean;
   // Opens the file import, for messages from the other device (no Bluetooth link yet).
   onImport?: () => void;
 }) {
-  const [open, setOpen] = useState<'network' | 'role' | 'ledger' | null>(null);
+  const [open, setOpen] = useState<'network' | 'role' | 'ledger' | 'trezor' | null>(null);
   const [picked, setPicked] = useState<Network>(prefs.network);
   const [rpc, setRpc] = useState<Rpc>(prefs.rpc);
   const signer = prefs.role === 'signer';
@@ -90,7 +94,18 @@ export default function DeviceSettings({ prefs, onChange, onImport, ledgerAvaila
             {prefs.ledger ? 'Vault requests go back to travelling as files, for a phone in hardware wallet mode.'
               : 'A proof of concept: test bitcoin only. It needs the Anzen app on a Ledger Flex or Stax, unlocked and open. A Ledger can’t protect this phone’s recovery backup yet, so keep its recovery phrase, and it can renew a vault of at most 16 deposits.'}
           </Text>
-          <Button title={prefs.ledger ? 'Turn off' : 'Turn on'} primary onPress={() => { onChange({ ...prefs, ledger: !prefs.ledger }); setOpen(null); }}/>
+          <Button title={prefs.ledger ? 'Turn off' : 'Turn on'} primary onPress={() => { onChange({ ...prefs, ledger: !prefs.ledger, trezor: false }); setOpen(null); }}/>
+        </View>}
+      </>}
+      {trezorAvailable && !signer && <>
+        <MenuRow title="Trezor signer" subtitle={prefs.trezor ? 'Your vault’s signer is a Trezor, over Bluetooth.' : 'Use a Trezor as your vault’s signer.'}
+          value={prefs.trezor ? 'On' : 'Off'} onPress={() => setOpen(open === 'trezor' ? null : 'trezor')}/>
+        {open === 'trezor' && <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
+          <Text style={[s.tiny, { color: colors.quiet, marginTop: 4 }]}>
+            {prefs.trezor ? 'Vault requests go back to travelling as files, for a phone in hardware wallet mode.'
+              : 'A proof of concept: test bitcoin only. It needs a Trezor Safe 7 running Anzen’s firmware; this app loads the Anzen app onto it. A Trezor can’t protect this phone’s recovery backup yet, so keep its recovery phrase, and it can renew a vault of at most 64 deposits.'}
+          </Text>
+          <Button title={prefs.trezor ? 'Turn off' : 'Turn on'} primary onPress={() => { onChange({ ...prefs, trezor: !prefs.trezor, ledger: false }); setOpen(null); }}/>
         </View>}
       </>}
       {onImport && <MenuRow title="Import a message or backup" subtitle="A file from your other device." onPress={onImport}/>}

@@ -2,6 +2,7 @@
 //! Wallet behavior is implemented by the role facades, never by this adapter or JavaScript.
 
 mod ledger;
+mod trezor;
 use anyhow::{Context, Result, bail};
 use anzen_signer_app::{
     api as cold,
@@ -336,6 +337,33 @@ pub unsafe extern "C" fn anzen_mobile_ledger(request: *const c_char) -> *mut c_c
         }
         // SAFETY: checked for null; remaining validity/lifetime is the documented C ABI contract.
         ledger::ledger(unsafe { CStr::from_ptr(request).to_str()? })
+    });
+    envelope(outcome)
+}
+
+/// The link to a Trezor signer: `{"method":"connect"|"pair"|"request"|"disconnect", …}` (see
+/// [`trezor`]). `root` is the directory the phone's devices are stored in. Blocks while the
+/// person reviews on the Trezor; call it off the main thread.
+///
+/// # Safety
+/// `root` and `request` must reference live NUL-terminated UTF-8 strings for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn anzen_mobile_trezor(
+    root: *const c_char,
+    request: *const c_char,
+) -> *mut c_char {
+    let outcome = std::panic::catch_unwind(|| -> Result<Value> {
+        if root.is_null() || request.is_null() {
+            bail!("null native argument");
+        }
+        // SAFETY: checked for null; remaining validity/lifetime is the documented C ABI contract.
+        let (root, request) = unsafe {
+            (
+                CStr::from_ptr(root).to_str()?,
+                CStr::from_ptr(request).to_str()?,
+            )
+        };
+        trezor::trezor(root, request)
     });
     envelope(outcome)
 }

@@ -28,7 +28,7 @@ type Props = {
   deliver: Deliver;
   // The Bluetooth link to the signer. Without it, messages travel as files.
   tap?: Tap;
-  // The signer cannot protect the phone's recovery backup (a Ledger, for now), so a vault is
+  // The signer cannot protect the phone's recovery backup (a Ledger or a Trezor, for now), so a vault is
   // complete without one. Losing the phone then leaves only the signer's own delayed recovery.
   signerKeepsNoBackup?: boolean;
   saveBackup?: (backup: JsonObject) => Promise<TransferResult>;

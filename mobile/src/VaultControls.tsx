@@ -15,7 +15,7 @@ export function VaultSettings({ vault, go, backup, reviewRecovered, disabled, no
   return <View style={{ marginTop: 14 }}>
     <MenuRow title="Spending policy" subtitle="Monthly allowance and emergency access" onPress={() => go('policy')}/>
     {noBackup && !vault.recovery_backup_stored
-      ? <MenuRow title="Recovery backup" subtitle="Your Ledger can’t protect one yet. Keep this phone’s recovery phrase." value="None" onPress={() => {}} disabled/>
+      ? <MenuRow title="Recovery backup" subtitle="Your hardware signer can’t protect one yet. Keep this phone’s recovery phrase." value="None" onPress={() => {}} disabled/>
       : <MenuRow title="Recovery backup" subtitle={vault.recovery_backup_stored ? 'Encrypted and saved for you' : 'Approve with your signer'} value={vault.recovery_backup_stored ? 'Saved' : 'Not set'} onPress={backup} disabled={disabled}/>}
     <MenuRow title="Lost a device?" subtitle="What to do if your phone or signer goes missing" onPress={() => go('lost')}/>
     {vault.recovered_wallet_available && <MenuRow title="Review recovered wallet funds" subtitle="Move the old phone’s everyday balance" onPress={reviewRecovered} disabled={disabled}/>}
