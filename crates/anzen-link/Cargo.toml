@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# The app's vault configuration and identity formats, for answering its protocol messages.
+anzen-common.workspace = true
 # The command protocol and the messages a hardware signer reviews. No signing happens here.
 anzen-protocol.workspace = true
 anzen-signer.workspace = true
@@ -15,12 +17,12 @@ btleplug = "0.13"
 futures = "0.3"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde.workspace = true
+serde_json.workspace = true
 tokio = { version = "1", features = ["rt", "time", "macros", "net", "io-util"] }
 uuid = "1"
 
 [dev-dependencies]
 # The emulator test plays the phone: real requests, and the host MuSig2 code to check the answers.
-anzen-common.workspace = true
 anzen-protocol = { workspace = true, features = ["software"] }
 bitcoin.workspace = true
 serde_json.workspace = true

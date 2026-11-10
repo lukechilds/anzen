@@ -1,11 +1,13 @@
 //! A Ledger over Bluetooth Low Energy: APDU commands to whichever app is open on the device.
 
 mod ble;
+mod bridge;
 mod frame;
 mod signer;
 mod speculos;
 
 pub use ble::{Ledger, LedgerFound, find, scan};
+pub use bridge::Message;
 pub use signer::{HardwareSigner, Rejected};
 pub use speculos::Speculos;
 

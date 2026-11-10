@@ -45,19 +45,32 @@ pub struct HardwareSigner<T> {
 impl<T: Exchange> HardwareSigner<T> {
     /// Check the open app is Anzen and speaks this protocol.
     pub async fn open(mut link: T) -> Result<Self> {
+        Self::check(&mut link).await?;
+        Ok(Self { link })
+    }
+
+    /// [`Self::open`]'s check alone, for callers that close the link themselves if it fails.
+    pub async fn check(link: &mut T) -> Result<()> {
         let answer = link
             .exchange(&apdu(CLA, ins::INFO, 0, 0, &[])?, QUICK)
             .await?;
+        if answer.status == 0x5515 {
+            bail!("Unlock your Ledger.");
+        }
         ensure!(
             answer.status == status::OK,
-            "open the Anzen app on your Ledger (it answered {:#06x})",
-            answer.status
+            "Open the Anzen app on your Ledger."
         );
         ensure!(
             answer.data == [PROTOCOL_VERSION],
-            "the Anzen app on your Ledger is a different version: update it"
+            "The Anzen app on your Ledger is a different version: update it."
         );
-        Ok(Self { link })
+        Ok(())
+    }
+
+    /// A signer on a link [`Self::check`] has passed.
+    pub fn new(link: T) -> Self {
+        Self { link }
     }
 
     pub fn into_link(self) -> T {

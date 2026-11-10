@@ -523,3 +523,114 @@ async fn the_ledger_app_signs_sweeps_and_its_own_actions_and_honours_a_rejection
     let refused = signer.approve_sweep(&other).await.unwrap_err().to_string();
     assert!(refused.contains("vault"), "{refused}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the Speculos emulator running the Ledger app"]
+async fn the_ledger_answers_the_apps_own_messages() {
+    use anzen_common::{
+        HWW_RECOVERY_SECONDS,
+        policy::VaultPolicy,
+        storage::{PublicDeviceFile, VAULT_CONFIG_VERSION, VaultConfig},
+    };
+    use anzen_link::ledger::Message;
+    use anzen_protocol::{policy::Limits, wire::PolicyApproval};
+    use serde_json::json;
+
+    let (mut signer, phone, keys) = paired().await;
+    let phone_key = phone.x_only_public_key().0;
+    let message = |kind: &str, body: serde_json::Value| Message {
+        kind: kind.to_owned(),
+        body,
+    };
+
+    // The phone says hello, in the app's network names; the signer answers with its identity.
+    let hello = message(
+        "signer-hello",
+        json!({ "network": "regtest", "phone": phone_key.to_string() }),
+    );
+    let identity = signer.answer(&hello).await.unwrap();
+    assert_eq!(identity.kind, "signer-identity");
+    let identity: PublicDeviceFile = serde_json::from_value(identity.body).unwrap();
+    identity.validate_kind("hww-public-key").unwrap();
+    assert_eq!(identity.vault_pubkey, keys.hww.to_hex());
+    // Another phone is told the Ledger is taken, before it builds a vault.
+    let stranger = message(
+        "signer-hello",
+        json!({ "network": "regtest", "phone": keys.hww.to_hex() }),
+    );
+    let refused = signer.answer(&stranger).await.unwrap_err().to_string();
+    assert!(
+        refused.contains("already protects another vault"),
+        "{refused}"
+    );
+
+    // The vault the phone builds from both keys.
+    let policy = VaultPolicy::new_for_network(
+        phone_key,
+        identity.parsed_vault_pubkey().unwrap(),
+        keys.recovery_locktime,
+        bitcoin::Network::Regtest,
+    )
+    .unwrap();
+    let config = VaultConfig {
+        version: VAULT_CONFIG_VERSION,
+        network: "regtest".to_owned(),
+        phone_vault_pubkey: phone_key.to_string(),
+        hww_vault_pubkey: identity.vault_pubkey.clone(),
+        phone_hot_external_descriptor: String::new(),
+        phone_hot_internal_descriptor: String::new(),
+        vault_descriptor: policy.descriptor_string(),
+        vault_address: policy.address.to_string(),
+        hww_recovery_seconds: HWW_RECOVERY_SECONDS,
+        recovery_locktime: keys.recovery_locktime,
+        monthly_limit_sats: 0,
+        emergency_access_limit_sats: 0,
+    };
+    let setup = message("vault-setup", json!({ "config": config, "backup": null }));
+    let accepted = signer.answer(&setup).await.unwrap();
+    assert_eq!(accepted.kind, "vault-accepted");
+    assert_eq!(accepted.body["vault_address"], policy.address.to_string());
+    assert!(accepted.body.get("backup").is_none());
+    // A vault whose address does not follow from its keys is refused.
+    let mut forged = config.clone();
+    forged.vault_address = phone_side::hot(7, NETWORK);
+    let forged = message("vault-setup", json!({ "config": forged }));
+    assert!(signer.answer(&forged).await.is_err());
+
+    // A policy proposal comes back as the approval the phone activates.
+    let limits = Limits {
+        monthly_limit_sats: 10_000_000,
+        emergency_access_limit_sats: 0,
+    };
+    let (request, secrets, messages) = phone_side::policy(
+        &phone,
+        keys,
+        NETWORK,
+        vec![phone_side::input(1, 110_000_000)],
+        limits,
+    );
+    let proposal = message("policy-proposal", serde_json::to_value(&request).unwrap());
+    let (approved, _) = tokio::join!(signer.answer(&proposal), approve_on_screen("Vault balance"));
+    let approved = approved.unwrap();
+    assert_eq!(approved.kind, "policy-approved");
+    let approval: PolicyApproval = serde_json::from_value(approved.body).unwrap();
+    assert_eq!(approval.request, request);
+    phone_side::complete_all(
+        &phone,
+        &keys,
+        &messages,
+        &secrets,
+        &request.phone_nonces,
+        &approval.signatures,
+    );
+
+    // What the Ledger app cannot do yet is refused by name, not left hanging.
+    for kind in [
+        "backup-proposal",
+        "phone-rotation-proposal",
+        "recovery-vault-request",
+    ] {
+        let refused = signer.answer(&message(kind, json!({}))).await.unwrap_err();
+        assert!(refused.to_string().contains("cannot"), "{refused}");
+    }
+}
