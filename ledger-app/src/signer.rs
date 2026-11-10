@@ -23,13 +23,12 @@ use alloc::{
 };
 use anzen_protocol::{
     address::{self, Network},
-    policy::Linkage,
     script::Scripts,
-    wire::{OfflineAction, OfflineActionRequest, PolicyRequest, RotationRequest, SweepRequest},
+    wire::{OfflineActionRequest, PolicyRequest, RotationRequest, SweepRequest},
 };
 use anzen_signer::{
     Keys, Signer, State,
-    hardware::{self, CHUNK, MAX_INPUTS, MAX_REQUEST, Operation, Pair, ins, status},
+    hardware::{self, CHUNK, MAX_INPUTS, MAX_REQUEST, Operation, Pair, ins, review, status},
 };
 use ledger_device_sdk::{
     io::Comm,
@@ -290,7 +289,7 @@ fn with_signing_signer<T>(
     f(&mut Signer::new(&mut crypto, &mut keys))
 }
 
-type Fields = Vec<(&'static str, String)>;
+use review::Fields;
 
 /// Setup asks nothing: accepting a vault approves no spending, and the Bluetooth pairing code
 /// already tied this phone to this Ledger. Another vault needs this one forgotten first.
@@ -362,40 +361,7 @@ fn policy_fields(
     let review = with_signer(network, |signer| {
         Ok(signer.review_policy(state, request, None)?)
     })?;
-    let monthly = if review.monthly_limit_sats > 0 && review.funded_withdrawals > 0 {
-        format!(
-            "{} a month, {} months funded",
-            btc(review.monthly_limit_sats),
-            review.funded_withdrawals
-        )
-    } else {
-        "Off".to_string()
-    };
-    let emergency = match review.emergency_delay_seconds {
-        Some(_) => format!("{} after 1 week", btc(review.emergency_access_limit_sats)),
-        None => "Off".to_string(),
-    };
-    let previous = match review.previous_policy {
-        Linkage::First => "None: this is the first",
-        Linkage::ConflictsWithPrevious | Linkage::ConsumesPrevious => "Replaced by this one",
-        Linkage::MonthlyReportedComplete => {
-            "Your phone reports its monthly allowances were all used. This Ledger cannot check."
-        }
-    };
-    Ok(vec![
-        ("Vault", review.vault_address),
-        ("Vault balance", btc(review.vault_input_sats)),
-        ("Monthly allowance", monthly),
-        ("Emergency access", emergency),
-        ("Previous policy", previous.to_string()),
-        (
-            "Signs",
-            format!(
-                "{} transactions, {} sats fee",
-                review.transaction_count, review.rollover_fee_sats
-            ),
-        ),
-    ])
+    Ok(review::policy(&review, "Ledger"))
 }
 
 #[inline(never)]
@@ -409,12 +375,7 @@ fn sweep(
     check(request.network, network, request.inputs.len())?;
     let state = accepted(network)?;
     let review = with_signer(network, |signer| Ok(signer.review_sweep(&state, &request)?))?;
-    let fields = vec![
-        ("Move vault funds", btc(review.amount_sats)),
-        ("To", review.destination),
-        ("Fee", format!("{} sats", review.fee_sats)),
-        ("From vault", review.vault_address),
-    ];
+    let fields = review::sweep(&review);
     if !review_fields(comm, fields, "Move vault funds now", "Reject transfer") {
         return Err(Refusal::Rejected);
     }
@@ -439,23 +400,7 @@ fn offline_action(
     let review = with_signer(network, |signer| {
         Ok(signer.review_offline_action(&state, &request)?)
     })?;
-    let (title, note) = match review.action {
-        OfflineAction::HwwRecovery => (
-            "Recover vault funds",
-            "Bitcoin accepts this only about 388 days after each deposit confirmed. Signing does not unlock funds early.",
-        ),
-        OfflineAction::RevokeActions => (
-            "Revoke vault actions",
-            "Disables the phone's monthly and emergency withdrawals. Savings stay in the vault.",
-        ),
-    };
-    let fields = vec![
-        (title, btc(review.amount_sats)),
-        ("To", review.destination),
-        ("Fee", format!("{} sats", review.fee_sats)),
-        ("From vault", review.vault_address),
-        ("Note", note.to_string()),
-    ];
+    let (title, fields) = review::offline_action(&review);
     if !review_fields(comm, fields, title, "Reject") {
         return Err(Refusal::Rejected);
     }
@@ -509,22 +454,7 @@ fn rotation_fields(
     let review = with_signer(network, |signer| {
         Ok(signer.review_rotation(state, request, None)?)
     })?;
-    Ok(vec![
-        ("Move to a new phone key", btc(review.amount_sats)),
-        ("New phone key", review.new_phone_public_key),
-        ("From vault", review.old_vault_address),
-        ("To new vault", review.new_vault_address),
-        (
-            "Policy kept",
-            format!(
-                "{} a month ({} funded), {} emergency",
-                btc(review.monthly_limit_sats),
-                review.funded_withdrawals,
-                btc(review.emergency_access_limit_sats)
-            ),
-        ),
-        ("Fee", format!("{} sats", review.sweep_fee_sats)),
-    ])
+    Ok(review::rotation(&review))
 }
 
 #[inline(never)]
@@ -598,16 +528,6 @@ fn forget_vault(comm: &mut Comm, network: Network, notice: Notice<'_>) -> Result
     store(Place::Vault(network), None)?;
     *notice = Some(c"Vault forgotten");
     Ok(Vec::new())
-}
-
-/// Bitcoin amounts to at least four decimal places, and as many as the amount needs.
-fn btc(sats: u64) -> String {
-    let mut text = format!("{}.{:08}", sats / 100_000_000, sats % 100_000_000);
-    while text.ends_with('0') && text.len() - text.find('.').expect("has a point") > 5 {
-        text.pop();
-    }
-    text.push_str(" BTC");
-    text
 }
 
 /// A review: the fields, then a hold-to-approve page. True if the person approved.
