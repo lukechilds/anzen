@@ -1,0 +1,3 @@
+# Trezor's app build tool, from the firmware checkout the app is built against.
+[alias]
+app-tool = "run --manifest-path ../trezor-firmware/sdk/crates/trezor-app-tool/Cargo.toml --"

@@ -1,0 +1,80 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "anzen-trezor"
+version = "0.1.0"
+authors = ["Anzen developers"]
+edition = "2024"
+license = "MIT"
+description = "Anzen cold-signer app for Trezor devices (proof of concept)"
+
+# What Trezor Core enforces on the app. It may use one curve, and derive keys on these paths
+# only: the signer's vault key, `m/86'/coin'/100'/0/0`, for mainnet and for every test network.
+[package.metadata.trezor]
+id = "anzen.app"
+name = "Anzen"
+vendor = "Anzen"
+# The code, the stack and the heap share the app arena, which is 384 KiB on a Safe 7.
+stack-size = 65536
+heap-size = 196608
+# The inbox holds one message from the host, which is at most a piece of a request.
+ipc-buffer-size = 16384
+app-ring = 2
+curves = ["secp256k1"]
+paths = ["m/86'/0'/100'/0/0", "m/86'/1'/100'/0/0"]
+
+[dependencies]
+anzen-protocol = { path = "../crates/anzen-protocol" }
+# `k256`: Trezor Core hands the app its key and no Schnorr or MuSig2 call, so the app signs in
+# its own pure-Rust arithmetic.
+anzen-signer = { path = "../crates/anzen-signer", features = ["k256"] }
+# The compact form requests and answers travel in.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+trezor-app-sdk = { path = "../trezor-firmware/sdk/crates/trezor-app-sdk" }
+
+[build-dependencies]
+anyhow = "1.0.71"
+trezor-app-build = { path = "../trezor-firmware/sdk/crates/trezor-app-build" }
+
+# `cargo app-tool` chooses these from its own flags; none is set by hand.
+[features]
+model_t3t1 = []
+model_t3w1 = []
+lang_en = []
+log_level_error = ['trezor-app-sdk/log_level_error']
+log_level_warn = ['trezor-app-sdk/log_level_warn']
+log_level_info = ['trezor-app-sdk/log_level_info']
+log_level_debug = ['trezor-app-sdk/log_level_debug']
+emulator = []
+test = ["dev_keys", 'trezor-app-sdk/test', 'trezor-app-sdk/log_level_debug']
+debug = ['trezor-app-sdk/debug']
+dev_keys = []
+
+# Keep device firmware out of the desktop workspace's default build and test graph. A Trezor app
+# needs a nightly toolchain and Trezor's build tool.
+[workspace]
+
+# The profile names `cargo app-tool` builds with.
+[profile.debug-fw]
+inherits = "dev"
+split-debuginfo = "off"
+debug = 2
+strip = "none"
+panic = "abort"
+
+[profile.release-fw]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+split-debuginfo = "off"
+debug = 0
+debug-assertions = false
+overflow-checks = false
+incremental = false
+panic = "immediate-abort"
+
+[profile.test]
+split-debuginfo = "off"
+debug = 2
