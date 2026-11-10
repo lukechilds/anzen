@@ -80,6 +80,19 @@ impl<T: Exchange> HardwareSigner<T> {
         decode(&self.download(first).await?)
     }
 
+    /// A development build's memory marks: the stack's size, its deepest use since the last
+    /// reset, its use now, and the heap's largest free block. `reset` restarts the deepest-use
+    /// mark. Release builds refuse the command.
+    pub async fn memory(&mut self, reset: bool) -> Result<[u16; 4]> {
+        let marks = self
+            .command(ins::MEMORY, u8::from(reset), Network::Mainnet, &[], QUICK)
+            .await?;
+        ensure!(marks.len() == 8, "not a development build of the Anzen app");
+        Ok(core::array::from_fn(|index| {
+            u16::from_be_bytes([marks[2 * index], marks[2 * index + 1]])
+        }))
+    }
+
     /// Accept the vault of this phone key. Asks nothing on the device, and approves no spending.
     pub async fn pair(&mut self, pair: &Pair) -> Result<()> {
         self.run(Operation::Pair, pair.network, Some(&encode(pair)?))

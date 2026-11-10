@@ -28,7 +28,8 @@ Its limits:
   releasing it to a replacement phone).
 - **No phone app support yet.** The host side is `crates/anzen-link`: Bluetooth
   from Rust, and a client for these commands.
-- It has run in the Speculos emulator, not yet on a device.
+- It has run in the Speculos emulator and on a Flex over Bluetooth, driven by
+  tests, never yet by the phone app or against a real chain.
 - Nano S+, Nano X and Apex have less memory and are not sized for it.
 
 `anzen_signer::hardware` defines the commands. The shared crates carry a few
@@ -46,7 +47,33 @@ cargo test -p anzen-link --test speculos -- --ignored --test-threads=1
 ```
 
 `cargo ledger build flex -- --features debug` prints stack and heap high-water
-marks to the emulator's log.
+marks to the emulator's log. Never load a `debug` build on a device: it prints by
+semihosting. `--features measure` is safe on a device and answers the same marks
+to `cargo run -p anzen-link --example ledger-memory`.
+
+### On a device, without a cable
+
+`cargo run -p anzen-link --example ledger-proxy` connects to a Ledger over
+Bluetooth and offers it on TCP port 9998 in the proxy protocol Ledger's tools
+speak. With the device unlocked on its dashboard, load the app from the dev
+container (the device asks to allow an unsafe manager, then to install):
+
+```console
+LEDGER_PROXY_ADDRESS=host.docker.internal LEDGER_PROXY_PORT=9998 \
+  python3 -m ledgerblue.runScript --targetId 0x33300004 --apdu --scp \
+  --fileName target/flex/release/anzen-ledger.apdu
+```
+
+Open Anzen on the device, then run the same tests with a person approving:
+
+```console
+ANZEN_LEDGER=127.0.0.1:9998 ANZEN_LEDGER_HUMAN=1 \
+  cargo test -p anzen-link --test speculos -- --ignored --test-threads=1 --nocapture
+```
+
+A policy is tens of signatures and takes many seconds on the secure element. The
+app services the device's events between signatures; without that a real device
+resets partway through a large policy, which the emulator never shows.
 
 ## Benchmark
 

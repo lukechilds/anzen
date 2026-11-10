@@ -16,7 +16,10 @@ ledger_device_sdk = { version = "=1.36.1", features = ["io_new", "sys"] }
 
 [features]
 default = ["ledger_device_sdk/nano_nbgl"]
-debug = ["ledger_device_sdk/debug"]
+# Stack and heap high-water marks, answered over the `MEMORY` command. Safe on a device.
+measure = []
+# Also prints them to the emulator's log. Semihosting: never load this build on a device.
+debug = ["measure", "ledger_device_sdk/debug"]
 
 [package.metadata.ledger]
 # Raster launcher icons are generated from ../media/anzen-mark.svg.

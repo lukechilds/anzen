@@ -4,6 +4,11 @@
 //! Needs the emulator (`ledger-app/tools/speculos.sh` in Ledger's dev container, with its APDU
 //! port 9999 and API port 5001 published), so it is ignored by default:
 //! `cargo test -p anzen-link --test speculos -- --ignored`
+//!
+//! The same tests run against a real device, with a person doing the tapping: start
+//! `cargo run -p anzen-link --example ledger-proxy`, open the Anzen app on the Ledger, and set
+//! `ANZEN_LEDGER=127.0.0.1:9998 ANZEN_LEDGER_HUMAN=1` (with `--test-threads=1 --nocapture`).
+//! They use the device's regtest vault and a fixed test phone key.
 
 use anzen_common::keys::DeviceKeys;
 use anzen_link::ledger::{HardwareSigner, Speculos};
@@ -22,6 +27,16 @@ use tokio::{
 const SEED: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const NETWORK: Network = Network::Regtest;
+
+/// Where the app answers APDUs: the emulator, or a proxy to a real device.
+fn address() -> String {
+    std::env::var("ANZEN_LEDGER").unwrap_or_else(|_| "127.0.0.1:9999".to_owned())
+}
+
+/// A person holds the device and approves on its screen; nothing is automated or read back.
+fn human() -> bool {
+    std::env::var_os("ANZEN_LEDGER_HUMAN").is_some()
+}
 
 /// The emulator's automation API.
 async fn api(method: &str, path: &str, body: &str) -> Vec<u8> {
@@ -94,6 +109,10 @@ async fn wait_for(text: &str) -> String {
 /// Read a review to its last page and hold the approve button, as a person would on a Flex.
 /// Returns everything the review showed.
 async fn approve_on_screen(first: &str) -> String {
+    if human() {
+        eprintln!("\n>>> On the Ledger: review \"{first}\" and hold to approve.\n");
+        return String::new();
+    }
     let mut shown = wait_for(first).await;
     for _ in 0..8 {
         if shown.contains("Hold to approve") {
@@ -115,7 +134,7 @@ fn phone() -> Keypair {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the Speculos emulator running the Ledger app"]
 async fn the_ledger_app_pairs_and_remembers_its_vault() {
-    let mut signer = HardwareSigner::open(Speculos::connect("127.0.0.1:9999").await.unwrap())
+    let mut signer = HardwareSigner::open(Speculos::connect(&address()).await.unwrap())
         .await
         .unwrap();
     // The device derives the same vault key the phone app's signer mode would from this seed.
@@ -124,7 +143,9 @@ async fn the_ledger_app_pairs_and_remembers_its_vault() {
             .unwrap()
             .vault_pubkey;
     let identity = signer.identity(NETWORK).await.unwrap();
-    assert_eq!(identity, XOnlyKey(expected.serialize()));
+    if !human() {
+        assert_eq!(identity, XOnlyKey(expected.serialize()));
+    }
     // Mainnet's key is another one.
     assert_ne!(signer.identity(Network::Mainnet).await.unwrap(), identity);
 
@@ -291,7 +312,7 @@ mod phone_side {
 #[ignore = "requires the Speculos emulator running the Ledger app"]
 async fn the_ledger_app_reviews_and_signs_a_full_policy() {
     use anzen_protocol::policy::Limits;
-    let mut signer = HardwareSigner::open(Speculos::connect("127.0.0.1:9999").await.unwrap())
+    let mut signer = HardwareSigner::open(Speculos::connect(&address()).await.unwrap())
         .await
         .unwrap();
     let phone = phone();
@@ -333,7 +354,10 @@ async fn the_ledger_app_reviews_and_signs_a_full_policy() {
         "0.5000 BTC after 1 week",
         "15 transactions",
     ] {
-        assert!(shown.contains(expected), "{expected:?} not in {shown}");
+        assert!(
+            human() || shown.contains(expected),
+            "{expected:?} not in {shown}"
+        );
     }
     phone_side::complete_all(
         &phone,
@@ -347,7 +371,7 @@ async fn the_ledger_app_reviews_and_signs_a_full_policy() {
 
 /// A paired signer and the vault's keys.
 async fn paired() -> (HardwareSigner<Speculos>, Keypair, VaultKeys) {
-    let mut signer = HardwareSigner::open(Speculos::connect("127.0.0.1:9999").await.unwrap())
+    let mut signer = HardwareSigner::open(Speculos::connect(&address()).await.unwrap())
         .await
         .unwrap();
     let phone = phone();
@@ -411,31 +435,34 @@ async fn the_ledger_app_signs_sweeps_and_its_own_actions_and_honours_a_rejection
         secrets.push(secret);
         sweep.phone_nonces.push(public);
     }
-    // Rejecting on the device signs nothing.
-    let (rejected, ()) = tokio::join!(signer.approve_sweep(&sweep), async {
-        wait_for("Move vault funds").await;
-        tap(100, 550).await;
-        // The device asks to confirm the rejection.
-        tokio::time::sleep(Duration::from_millis(800)).await;
-        let asked = screen().await;
-        if asked.contains("Yes") {
-            tap(240, 400).await;
-        }
-    });
-    let rejected = rejected.unwrap_err();
-    assert!(
-        rejected.downcast_ref::<Rejected>().is_some(),
-        "{rejected:#}"
-    );
+    // Rejecting on the device signs nothing. A person's taps are not scripted, so this part runs
+    // only against the emulator.
+    if !human() {
+        let (rejected, ()) = tokio::join!(signer.approve_sweep(&sweep), async {
+            wait_for("Move vault funds").await;
+            tap(100, 550).await;
+            // The device asks to confirm the rejection.
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            let asked = screen().await;
+            if asked.contains("Yes") {
+                tap(240, 400).await;
+            }
+        });
+        let rejected = rejected.unwrap_err();
+        assert!(
+            rejected.downcast_ref::<Rejected>().is_some(),
+            "{rejected:#}"
+        );
+    }
 
     let (halves, shown) = tokio::join!(
         signer.approve_sweep(&sweep),
         approve_on_screen("Move vault funds")
     );
     let shown = shown.replace(" | ", "");
-    assert!(shown.contains(&destination), "{shown}");
+    assert!(human() || shown.contains(&destination), "{shown}");
     assert!(
-        shown.contains(&format!("{} sats", spend.fee_sats)),
+        human() || shown.contains(&format!("{} sats", spend.fee_sats)),
         "{shown}"
     );
     phone_side::complete_all(

@@ -1,9 +1,13 @@
-//! Memory measurements for development, printed to the emulator's log by `--features debug`
-//! builds. The stack and the heap share 36 KB, so both are worth knowing exactly.
+//! Memory measurements for development. The stack and the heap share 36 KB, so both are worth
+//! knowing exactly, and the emulator and a real device do not use them identically.
+//!
+//! `--features measure` paints the unused stack at start and answers the `MEMORY` command with
+//! the high-water marks, which works on a device. `--features debug` also prints them to the
+//! emulator's log at checkpoints (semihosting: never load a `debug` build on a device).
 
-#[cfg(feature = "debug")]
+#[cfg(feature = "measure")]
 mod measure {
-    use alloc::{format, vec::Vec};
+    use alloc::vec::Vec;
     use core::arch::asm;
 
     unsafe extern "C" {
@@ -47,25 +51,40 @@ mod measure {
         low
     }
 
-    pub fn report(label: &str) {
+    /// The stack's size, its deepest use since the last paint, its use now, and the heap's
+    /// largest free block.
+    pub fn usage() -> [usize; 4] {
         let (bottom, top) = bounds();
         let mut deepest = bottom;
         while deepest < top && unsafe { core::ptr::read_volatile(deepest as *const u8) } == PAINT {
             deepest += 1;
         }
-        #[allow(deprecated)]
-        ledger_device_sdk::testing::debug_print(&format!(
-            "memory {label}: stack {} of {} used at its deepest, {} now; heap's largest free block {}\n",
-            top - deepest,
+        [
             top - bottom,
+            top - deepest,
             top - stack_pointer(),
             largest_free_block(),
-        ));
+        ]
     }
 }
 
+#[cfg(feature = "measure")]
+pub use measure::{paint, usage};
+
+#[cfg(not(feature = "measure"))]
+pub fn paint() {}
+
+/// Print the marks to the emulator's log.
 #[cfg(feature = "debug")]
-pub use measure::{paint, report};
+pub fn report(label: &str) {
+    let [size, deepest, now, free] = usage();
+    #[allow(deprecated)]
+    ledger_device_sdk::testing::debug_print(&alloc::format!(
+        "memory {label}: stack {deepest} of {size} used at its deepest, {now} now; heap's largest free block {free}\n",
+    ));
+}
+#[cfg(not(feature = "debug"))]
+pub fn report(_label: &str) {}
 
 /// Print a panic's location. No allocation: the heap may be what failed.
 #[cfg(feature = "debug")]
@@ -89,8 +108,3 @@ pub fn note(info: &core::panic::PanicInfo) {
 }
 #[cfg(not(feature = "debug"))]
 pub fn note(_info: &core::panic::PanicInfo) {}
-
-#[cfg(not(feature = "debug"))]
-pub fn paint() {}
-#[cfg(not(feature = "debug"))]
-pub fn report(_label: &str) {}

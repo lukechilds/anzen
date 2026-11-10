@@ -48,6 +48,9 @@ pub mod ins {
     pub const RUN: u8 = 0x11;
     /// → the next chunk of the current download.
     pub const DOWNLOAD: u8 = 0x12;
+    /// Development builds only → four big-endian `u16`s: the stack's size, its deepest use, its
+    /// use now, and the heap's largest free block. p1 = 1 resets the deepest-use mark.
+    pub const MEMORY: u8 = 0x7f;
 }
 
 pub mod status {

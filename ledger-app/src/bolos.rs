@@ -18,6 +18,7 @@ use anzen_signer::{
 use ledger_device_sdk::{
     ecc::{CurvesId, bip32_derive},
     hash::{HashInit, sha2::Sha2_256},
+    io::Comm,
     sys,
 };
 
@@ -234,11 +235,13 @@ const HARDENED: u32 = 0x8000_0000;
 
 /// The signer's vault key for one network: `m/86'/coin'/100'/0/0`, where the phone app's own
 /// signer mode keeps its key too.
-pub struct VaultKey {
+pub struct VaultKey<'a> {
     path: [u32; 5],
+    /// The device's event queue, serviced between signatures.
+    comm: Option<&'a mut Comm>,
 }
 
-impl VaultKey {
+impl<'a> VaultKey<'a> {
     pub fn new(network: Network) -> Self {
         let coin = match network {
             Network::Mainnet => 0,
@@ -246,6 +249,23 @@ impl VaultKey {
         };
         Self {
             path: [HARDENED | 86, HARDENED | coin, HARDENED | 100, 0, 0],
+            comm: None,
+        }
+    }
+
+    /// Service the device's events between signatures. A policy is tens of signatures and takes
+    /// many seconds on the secure element; starved of its screen, Bluetooth and USB events for
+    /// that long, a real device resets.
+    pub fn serviced_by(mut self, comm: &'a mut Comm) -> Self {
+        self.comm = Some(comm);
+        self
+    }
+
+    /// Handle one pending event, such as the tick that turns the spinner. A command arriving
+    /// now is dropped: the host is waiting for this operation's answer and sends none.
+    fn heartbeat(&mut self) {
+        if let Some(comm) = self.comm.as_deref_mut() {
+            let _ = comm.try_next_event();
         }
     }
 
@@ -266,7 +286,7 @@ impl VaultKey {
     }
 }
 
-impl Keys for VaultKey {
+impl Keys for VaultKey<'_> {
     fn vault_key(&mut self) -> Result<XOnlyKey> {
         let point = self.with_secret(|secret| Bolos.base_mul(secret))?;
         let mut key = [0_u8; 32];
@@ -275,6 +295,7 @@ impl Keys for VaultKey {
     }
 
     fn sign(&mut self, message: &[u8; 32]) -> Result<[u8; 64]> {
+        self.heartbeat();
         self.with_secret(|secret| {
             let mut key: sys::cx_ecfp_256_private_key_t = unsafe { core::mem::zeroed() };
             let key_pointer = (&raw mut key).cast::<sys::cx_ecfp_private_key_t>();
@@ -315,6 +336,7 @@ impl Keys for VaultKey {
         &mut self,
         session: &CooperativeSession<'_>,
     ) -> Result<CooperativeSignature> {
+        self.heartbeat();
         self.with_secret(|secret| musig::sign_last(&mut Bolos, secret, session))
     }
 }

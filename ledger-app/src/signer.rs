@@ -126,6 +126,18 @@ impl Session {
                     .and_then(|answer| self.begin_download(answer))
             }
             ins::DOWNLOAD => self.download(),
+            // Development builds only: stack size, deepest use, use now, largest free heap block.
+            #[cfg(feature = "measure")]
+            ins::MEMORY => {
+                let usage = crate::memory::usage();
+                if p1 == 1 {
+                    crate::memory::paint();
+                }
+                Ok(usage
+                    .iter()
+                    .flat_map(|value| (*value as u16).to_be_bytes())
+                    .collect())
+            }
             _ => Err(Refusal::Sequence),
         };
         let (data, status) = match result {
@@ -261,9 +273,20 @@ fn run(
 #[inline(never)]
 fn with_signer<T>(
     network: Network,
-    f: impl FnOnce(&mut Signer<'_, Bolos, VaultKey>) -> Result<T, Refusal>,
+    f: impl FnOnce(&mut Signer<'_, Bolos, VaultKey<'_>>) -> Result<T, Refusal>,
 ) -> Result<T, Refusal> {
     let (mut crypto, mut keys) = (Bolos, VaultKey::new(network));
+    f(&mut Signer::new(&mut crypto, &mut keys))
+}
+
+/// [`with_signer`] for signing: the device's events are serviced between signatures.
+#[inline(never)]
+fn with_signing_signer<T>(
+    comm: &mut Comm,
+    network: Network,
+    f: impl FnOnce(&mut Signer<'_, Bolos, VaultKey<'_>>) -> Result<T, Refusal>,
+) -> Result<T, Refusal> {
+    let (mut crypto, mut keys) = (Bolos, VaultKey::new(network).serviced_by(comm));
     f(&mut Signer::new(&mut crypto, &mut keys))
 }
 
@@ -318,7 +341,7 @@ fn policy(
         return Err(Refusal::Rejected);
     }
     NbglSpinner::new().show("Signing");
-    let (signatures, next) = *with_signer(network, |signer| {
+    let (signatures, next) = *with_signing_signer(comm, network, |signer| {
         Ok(Box::new(
             signer.sign_policy_request(&state, &request, None)?,
         ))
@@ -396,7 +419,7 @@ fn sweep(
         return Err(Refusal::Rejected);
     }
     NbglSpinner::new().show("Signing");
-    let signatures = with_signer(network, |signer| {
+    let signatures = with_signing_signer(comm, network, |signer| {
         Ok(signer.sign_sweep_request(&state, &request)?)
     })?;
     *notice = Some(c"Transfer approved");
@@ -437,7 +460,7 @@ fn offline_action(
         return Err(Refusal::Rejected);
     }
     NbglSpinner::new().show("Signing");
-    let signatures = with_signer(network, |signer| {
+    let signatures = with_signing_signer(comm, network, |signer| {
         Ok(signer.sign_offline_action_request(&state, &request)?)
     })?;
     *notice = Some(c"Approved");
@@ -466,7 +489,7 @@ fn rotation(
         return Err(Refusal::Rejected);
     }
     NbglSpinner::new().show("Signing");
-    let (signatures, next) = *with_signer(network, |signer| {
+    let (signatures, next) = *with_signing_signer(comm, network, |signer| {
         Ok(Box::new(
             signer.sign_rotation_request(&state, &request, None)?,
         ))
