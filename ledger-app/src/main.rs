@@ -3,8 +3,9 @@
 //! It holds each request in memory whole, so it signs at most
 //! [`anzen_signer::hardware::MAX_INPUTS`] (16) inputs per request: a vault with more deposits
 //! than that cannot renew its policy here. Phone rotation does not fit in memory at all yet, and
-//! the phone's recovery backup is not implemented. Streaming requests through the device is the
-//! planned fix for the limits. Only Flex and Stax are sized for it. See `README.md`.
+//! the phone's recovery backup is not implemented. Streaming requests through the device would
+//! lift the memory limits, and is deliberately not planned: it would reshape the code every
+//! signer shares for this one device. Only Flex and Stax are sized for it. See `README.md`.
 
 #![no_std]
 #![no_main]

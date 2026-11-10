@@ -20,9 +20,11 @@ Its limits:
 - **At most 16 inputs per request.** The device holds a whole request in its
   36 KB of RAM while it reviews and signs. Every vault deposit is an input and a
   policy renewal spends them all, so a vault with more than 16 deposits cannot
-  renew here. The fix is to stream requests through the device (fold inputs into
-  running hashes, build and sign one transaction at a time, return signatures as
-  they are made), which removes the limit; it is not built yet.
+  renew here. Streaming requests through the device (folding inputs into running
+  hashes, building and signing one transaction at a time) would remove the limit,
+  and is deliberately not planned: it would reshape the transaction builder every
+  signer shares for the sake of this one device. The other signers (the phone's
+  signer mode, Trezor, Passport) have memory to spare.
 - **Phone rotation does not fit in memory**, for the same reason.
 - **The phone's recovery backup is not implemented** (wrapping its key and
   releasing it to a replacement phone).

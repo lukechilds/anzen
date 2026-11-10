@@ -156,8 +156,8 @@ pub struct Signer<'a, C: Crypto + ?Sized, K: Keys + ?Sized> {
 //   - `#[inline(never)]` on the entry points keeps each one's locals in its own stack frame;
 //   - the `sign_*_request` methods return signatures without a copy of the request;
 //   - `sign_policy` consumes the graph, freeing each transaction once it is signed.
-// A signer that streams requests instead of holding them would need none of them. Search for
-// "Hardware signer memory:" to find every such accommodation in the shared crates.
+// Signers with memory to spare need none of them. Search for "Hardware signer memory:" to find
+// every such accommodation in the shared crates.
 impl<'a, C: Crypto + ?Sized, K: Keys + ?Sized> Signer<'a, C, K> {
     pub fn new(crypto: &'a mut C, keys: &'a mut K) -> Self {
         Self { crypto, keys }
