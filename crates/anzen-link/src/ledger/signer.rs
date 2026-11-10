@@ -2,6 +2,7 @@
 //! reviews it on the device, and downloads the signatures. Nothing here can approve anything.
 
 use super::{Answer, Exchange, apdu};
+use crate::bridge::{self, Device, Message, Rejected};
 use anyhow::{Context, Result, bail, ensure};
 use anzen_protocol::{
     address::Network,
@@ -20,18 +21,6 @@ use anzen_signer::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::time::Duration;
-
-/// The person rejected the review on the device.
-#[derive(Debug)]
-pub struct Rejected;
-
-impl std::fmt::Display for Rejected {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("rejected on the Ledger")
-    }
-}
-
-impl std::error::Error for Rejected {}
 
 /// Commands that never wait for a person.
 const QUICK: Duration = Duration::from_secs(20);
@@ -244,6 +233,48 @@ impl<T: Exchange> HardwareSigner<T> {
             0x6e00 | 0x6e01 | 0x6d00 | 0x6d02 => bail!("open the Anzen app on your Ledger"),
             other => bail!("the Ledger answered with status {other:#06x}"),
         }
+    }
+}
+
+impl<T: Exchange + Send> HardwareSigner<T> {
+    /// Answer one message from the phone app, as its signer ([`bridge::answer`]).
+    pub async fn answer(&mut self, message: &Message) -> Result<Message> {
+        bridge::answer(self, message).await
+    }
+}
+
+impl<T: Exchange + Send> Device for HardwareSigner<T> {
+    const NAME: &'static str = "Ledger";
+    const KEEPS_ONE_VAULT: bool = true;
+
+    async fn identity(&mut self, network: Network) -> Result<XOnlyKey> {
+        Self::identity(self, network).await
+    }
+
+    async fn state(&mut self, network: Network) -> Result<Option<State>> {
+        Self::state(self, network).await
+    }
+
+    async fn pair(&mut self, pair: &Pair) -> Result<()> {
+        Self::pair(self, pair).await
+    }
+
+    async fn approve_policy(
+        &mut self,
+        request: &PolicyRequest,
+    ) -> Result<Vec<CooperativeSignature>> {
+        Self::approve_policy(self, request).await
+    }
+
+    async fn approve_sweep(&mut self, request: &SweepRequest) -> Result<Vec<CooperativeSignature>> {
+        Self::approve_sweep(self, request).await
+    }
+
+    async fn approve_offline_action(
+        &mut self,
+        request: &OfflineActionRequest,
+    ) -> Result<Vec<Signature>> {
+        Self::approve_offline_action(self, request).await
     }
 }
 
