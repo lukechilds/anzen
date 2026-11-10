@@ -257,95 +257,103 @@ export default function Playground() {
   }
   // One line for the chain: the block height, or what the last action did.
   const chainStatus = !node ? '' : node.amount_sats !== undefined ? `Funded ₿${formatBtc(node.amount_sats)}` : node.height !== undefined ? `Block ${node.height}` : '';
-  return <ScrollView style={{ flex: 1, backgroundColor: '#121214' }} contentContainerStyle={{ padding: 32, alignItems: 'center' }}>
-    <View style={{ maxWidth: 1220, width: '100%' }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 18 }}>
-        <Text style={[s.brand, { fontSize: 28 }]}>anzen emulator</Text>
-        {/* The network switch. Each network keeps its own phone and signer. */}
-        {network && <View accessibilityRole="tablist" style={{ flexDirection: 'row', gap: 4, padding: 3, borderRadius: 18, backgroundColor: 'rgba(255,255,255,.05)' }}>
-          {networks.map(option => <Pressable key={option} accessibilityRole="tab" accessibilityLabel={networkNames[option]} aria-selected={option === network} disabled={busy} onPress={() => choose(option)}
-            style={({ pressed }) => ({ height: 30, paddingHorizontal: 14, borderRadius: 15, justifyContent: 'center', backgroundColor: option === network ? 'rgba(255,255,255,.12)' : 'transparent', opacity: pressed ? .7 : 1 })}>
-            <Text style={{ color: option === network ? colors.text : colors.muted, fontSize: 12.5, fontWeight: option === network ? '600' : '400' }}>{networkNames[option]}</Text>
-          </Pressable>)}
-        </View>}
-        {mainnet && <Text style={[s.errorText, { fontWeight: '600' }]}>Real bitcoin</Text>}
-        {network && !mainnet && devices.length > 0 && <Link title="Start over" onPress={() => void open(network, true)} disabled={busy}/>}
+  // Three columns when there's room: the emulator's controls, the phone, then the signer.
+  const wide = width >= 1180;
+  const sidebar = <View style={{ width: wide ? 260 : '100%', maxWidth: wide ? 260 : 420 }}>
+    <Text style={[s.brand, { fontSize: 28 }]}>anzen emulator</Text>
+    {/* The network switch. Each network keeps its own phone and signer. */}
+    {network && <Section title="Network">
+      <View accessibilityRole="tablist" style={{ flexDirection: 'row', alignSelf: 'flex-start', gap: 4, padding: 3, borderRadius: 18, backgroundColor: 'rgba(255,255,255,.05)' }}>
+        {networks.map(option => <Pressable key={option} accessibilityRole="tab" accessibilityLabel={networkNames[option]} aria-selected={option === network} disabled={busy} onPress={() => choose(option)}
+          style={({ pressed }) => ({ height: 30, paddingHorizontal: 14, borderRadius: 15, justifyContent: 'center', backgroundColor: option === network ? 'rgba(255,255,255,.12)' : 'transparent', opacity: pressed ? .7 : 1 })}>
+          <Text style={{ color: option === network ? colors.text : colors.muted, fontSize: 12.5, fontWeight: option === network ? '600' : '400' }}>{networkNames[option]}</Text>
+        </Pressable>)}
       </View>
-      {confirmMainnet ? <View style={{ maxWidth: 420, marginTop: 40 }}>
+      {mainnet && <Text style={[s.errorText, { fontWeight: '600', marginTop: 10 }]}>Real bitcoin</Text>}
+      {!regtest && <Text style={[s.tiny, { marginTop: 10 }]}>{mainnet ? 'Mainnet over electrum.lu.ke.' : 'Mutinynet: 30-second blocks, test bitcoin.'} Public servers see the addresses this wallet checks.</Text>}
+    </Section>}
+    {/* Simulate losing a device: the new one takes its place. */}
+    {network && !mainnet && devices.length > 0 && <Section title="Devices">
+      <Link title="New wallet phone" text="New phone" disabled={busy} onPress={() => newDevice('wallet', slots.indexOf('wallet'))} />
+      <Link title="New signer device" text="New signer" disabled={busy} onPress={() => newDevice('signer', slots.indexOf('signer'))} />
+      <Link title="Start over" text="Start over with a new pair" onPress={() => void open(network, true)} disabled={busy}/>
+    </Section>}
+    {regtest && devices.length > 0 && <Section title="Chain">
+      <TextInput accessibilityLabel="Funding address" placeholder="Address to fund" placeholderTextColor={colors.faint} value={fundAddress} onChangeText={setFundAddress} style={[s.input, { marginBottom: 8 }]} />
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <TextInput accessibilityLabel="Funding amount in sats" value={fundAmount} onChangeText={setFundAmount} style={[s.input, { flex: 1 }]} />
+        <Chip big title="Fund address" text="Fund" disabled={busy} onPress={() => control({ method: 'fund', address: fundAddress, amount_sats: Number(fundAmount) })} />
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+        <Chip title="Mine confirmation" text="Mine 1" disabled={busy} onPress={() => control({ method: 'mine', blocks: 1 })} />
+        <Chip title="Advance 1 week" text="+1 week" disabled={busy} onPress={() => control({ method: 'advance_time', seconds: 7 * 86400 + 512 })} />
+        <Chip title="Advance 31 days" text="+31 days" disabled={busy} onPress={() => control({ method: 'advance_time', seconds: 31 * 86400 })} />
+        {/* Past the signer's ~388-day time lock, as if a year's renewal were missed. */}
+        <Chip title="Advance 13 months" text="+13 months" disabled={busy} onPress={() => control({ method: 'advance_time', seconds: 396 * 86400 })} />
+        <Chip title="Refresh chain status" text="↻" disabled={busy} onPress={() => control({ method: 'status' })} />
+      </View>
+      <Text style={[s.tiny, { marginTop: 10, minHeight: 17 }]} accessibilityRole={controlNotice ? 'alert' : undefined}>{controlNotice || chainStatus}</Text>
+    </Section>}
+    {network && devices.length > 0 && <Section title="Cloud">
+      {cloudBackups.length === 0 && <Text style={[s.tiny, { paddingVertical: 8 }]}>No backups yet.</Text>}
+      {lastExportedBackup && <Link title="Load latest exported backup" text="Load latest backup" onPress={() => { void loadBackup(lastExportedBackup); }} />}
+      {cloudBackups.map(id => <View key={id} style={{ flexDirection: 'row', columnGap: 14 }}>
+        <Link title={`Load backup ${id.slice(0, 8)}`} onPress={() => { void loadBackup(id); }} />
+        {!regtest && <Link title={`Download backup ${id.slice(0, 8)}`} text="Download" onPress={() => { void downloadBackup(id).catch(e => setError(String(e))); }} />}
+      </View>)}
+      <Link title="Refresh cloud backups" text="Refresh" onPress={() => { void refreshCloud().catch(e => setError(String(e))); }} />
+      {!regtest && <>
+        <Text style={s.label}>Import encrypted cloud backup</Text>
+        <input aria-label="Import encrypted cloud backup" type="file" accept="application/json,.json" style={{ color: colors.muted, maxWidth: '100%', fontSize: 12 }} onChange={event => {
+          const file = event.target.files?.[0]; event.target.value = '';
+          if (!file) return;
+          void (async () => {
+            if (file.size > 8 * 1024 * 1024) throw new Error('Backup exceeds 8 MiB');
+            await saveBackup(parseEncryptedBackup(await file.text()));
+          })().catch(e => setError(String(e)));
+        }} />
+      </>}
+    </Section>}
+    {!!error && <Text selectable style={[s.errorText, { marginTop: 24 }]}>{error}</Text>}
+  </View>;
+  return <ScrollView style={{ flex: 1, backgroundColor: '#121214' }} contentContainerStyle={{ padding: 32, alignItems: 'center' }}>
+    <View style={{ flexDirection: wide ? 'row' : 'column', alignItems: wide ? 'flex-start' : 'center', gap: wide ? 56 : 32, maxWidth: 1220, width: wide ? undefined : '100%' }}>
+      {sidebar}
+      {confirmMainnet ? <View style={{ width: 420, maxWidth: '100%' }}>
         <Text style={s.heading}>Use real bitcoin?</Text>
         <Text style={s.subtext}>Mainnet uses real bitcoin in an experimental browser wallet. Don’t use it for savings.</Text>
         <Button title="Use mainnet" danger onPress={acceptMainnet}/>
         <Link title="Cancel" onPress={() => setConfirmMainnet(false)}/>
-      </View> : !network ? <View style={{ maxWidth: 420, marginTop: 40 }}>
+      </View> : !network ? <View style={{ width: 420, maxWidth: '100%' }}>
         {/* First visit: pick a network. Later visits open where you left off. */}
         <Text style={s.heading}>Choose a network</Text>
         <Button title="Mutinynet" primary onPress={() => void open('signet')}/>
         <Text style={[s.tiny, { marginBottom: 14 }]}>Test bitcoin, free to experiment with. Switch any time.</Text>
         <Button title="Mainnet" danger onPress={acceptMainnet}/>
         <Text style={s.tiny}>Real bitcoin, in an experimental browser wallet. Don’t use it for savings.</Text>
-      </View> : !devices.length ? <View style={{ maxWidth: 420, marginTop: 40 }}>
+      </View> : !devices.length ? <View style={{ width: 420, maxWidth: '100%' }}>
         {busy ? <Text style={s.tiny}>Opening…</Text> : <Button title="Try again" primary onPress={() => void open(network)}/>}
-      </View> : <View style={{ flexDirection: width >= 1180 ? 'row' : 'column', alignItems: 'center', justifyContent: 'center', gap: 32, marginTop: 24 }}>
-        <View style={{ flexDirection: width >= 850 ? 'row' : 'column', flexWrap: 'wrap', maxWidth: width >= 1180 ? 778 : width - 64, gap: 28, alignSelf: width >= 1180 ? 'flex-start' : 'center' }}>
-          {/* Keyed by position, so switching a device keeps its place. */}
-          {devices.map((transport, index) => <View key={index}>
-            {/* Phones get a phone frame; the hardware signer is shown on its own. */}
-            <View testID={`device-${transport.role}`} style={transport.role === 'signer'
-              ? { width: 375, height: sideBySide ? 812 : 450, maxWidth: width - 64 }
-              : { width: 375, height: 812, maxWidth: width - 64 }}>
-              <PhoneBody id={index} on={transport.role !== 'signer'}>
-                {switchingIndex === index ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Text style={s.tiny}>Opening…</Text></View> : <AnzenApp key={deviceIds[index] || transport.role} transport={transport} network={network!} incoming={inboxes[index]} dismissIncoming={() => setInboxes(current => current.map((item, i) => i === index ? null : item))}
-                  saveBackup={index === 0 ? saveBackup : undefined} cloudBackup={index === 0 ? cloudBackup : null}
-                  tap={link} deliver={message => deliverFrom(index, message)} benchmark={index === 0 ? browserBenchmark : undefined} />}
-              </PhoneBody>
-            </View>
-            {/* Simulate losing a device: the new one takes its place. */}
-            {!mainnet && <View style={{ width: 375, maxWidth: width - 64, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', columnGap: 14, paddingTop: 10 }}>
-              <Link title={transport.role === 'wallet' ? 'New wallet phone' : 'New signer device'} text={transport.role === 'wallet' ? 'New phone' : 'New signer'} disabled={busy} onPress={() => newDevice(transport.role, index)} />
-            </View>}
-          </View>)}
-        </View>
-        <View style={{ width: 280, alignSelf: width >= 1180 ? 'flex-start' : 'center', paddingTop: 42 }}>
-          {regtest && <>
-            <Text style={[s.eyebrow, { textAlign: 'left' }]}>Chain</Text>
-            <TextInput accessibilityLabel="Funding address" placeholder="Address to fund" placeholderTextColor={colors.faint} value={fundAddress} onChangeText={setFundAddress} style={[s.input, { marginBottom: 8 }]} />
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <TextInput accessibilityLabel="Funding amount in sats" value={fundAmount} onChangeText={setFundAmount} style={[s.input, { flex: 1 }]} />
-              <Chip big title="Fund address" text="Fund" disabled={busy} onPress={() => control({ method: 'fund', address: fundAddress, amount_sats: Number(fundAmount) })} />
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-              <Chip title="Mine confirmation" text="Mine 1" disabled={busy} onPress={() => control({ method: 'mine', blocks: 1 })} />
-              <Chip title="Advance 1 week" text="+1 week" disabled={busy} onPress={() => control({ method: 'advance_time', seconds: 7 * 86400 + 512 })} />
-              <Chip title="Advance 31 days" text="+31 days" disabled={busy} onPress={() => control({ method: 'advance_time', seconds: 31 * 86400 })} />
-              {/* Past the signer's ~388-day time lock, as if a year's renewal were missed. */}
-              <Chip title="Advance 13 months" text="+13 months" disabled={busy} onPress={() => control({ method: 'advance_time', seconds: 396 * 86400 })} />
-              <Chip title="Refresh chain status" text="↻" disabled={busy} onPress={() => control({ method: 'status' })} />
-            </View>
-            <Text style={[s.tiny, { marginTop: 10, minHeight: 17 }]} accessibilityRole={controlNotice ? 'alert' : undefined}>{controlNotice || chainStatus}</Text>
-          </>}
-          {!regtest && <Text style={s.tiny}>{mainnet ? 'Mainnet over electrum.lu.ke.' : 'Mutinynet: 30-second blocks, test bitcoin.'} Public servers see the addresses this wallet checks.</Text>}
-          <Text style={[s.eyebrow, { textAlign: 'left', marginTop: 28 }]}>Cloud</Text>
-          {cloudBackups.length === 0 && <Text style={s.tiny}>No backups yet.</Text>}
-          {lastExportedBackup && <Link title="Load latest exported backup" text="Load latest backup" onPress={() => { void loadBackup(lastExportedBackup); }} />}
-          {cloudBackups.map(id => <View key={id} style={{ flexDirection: 'row', columnGap: 14 }}>
-            <Link title={`Load backup ${id.slice(0, 8)}`} onPress={() => { void loadBackup(id); }} />
-            {!regtest && <Link title={`Download backup ${id.slice(0, 8)}`} text="Download" onPress={() => { void downloadBackup(id).catch(e => setError(String(e))); }} />}
-          </View>)}
-          <Link title="Refresh cloud backups" text="Refresh" onPress={() => { void refreshCloud().catch(e => setError(String(e))); }} />
-          {!regtest && <>
-            <Text style={s.label}>Import encrypted cloud backup</Text>
-            <input aria-label="Import encrypted cloud backup" type="file" accept="application/json,.json" style={{ color: colors.muted, maxWidth: '100%' }} onChange={event => {
-              const file = event.target.files?.[0]; event.target.value = '';
-              if (!file) return;
-              void (async () => {
-                if (file.size > 8 * 1024 * 1024) throw new Error('Backup exceeds 8 MiB');
-                await saveBackup(parseEncryptedBackup(await file.text()));
-              })().catch(e => setError(String(e)));
-            }} />
-          </>}
-        </View>
+      </View> : <View style={{ flexDirection: sideBySide ? 'row' : 'column', alignItems: sideBySide ? 'flex-start' : 'center', gap: 40 }}>
+        {/* Keyed by position, so switching a device keeps its place. */}
+        {devices.map((transport, index) => <View key={index} testID={`device-${transport.role}`} style={transport.role === 'signer'
+          ? { width: 375, height: sideBySide ? 812 : 450, maxWidth: width - 64 }
+          : { width: 375, height: 812, maxWidth: width - 64 }}>
+          {/* Phones get a phone frame; the hardware signer is shown on its own. */}
+          <PhoneBody id={index} on={transport.role !== 'signer'}>
+            {switchingIndex === index ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Text style={s.tiny}>Opening…</Text></View> : <AnzenApp key={deviceIds[index] || transport.role} transport={transport} network={network!} incoming={inboxes[index]} dismissIncoming={() => setInboxes(current => current.map((item, i) => i === index ? null : item))}
+              saveBackup={index === 0 ? saveBackup : undefined} cloudBackup={index === 0 ? cloudBackup : null}
+              tap={link} deliver={message => deliverFrom(index, message)} benchmark={index === 0 ? browserBenchmark : undefined} />}
+          </PhoneBody>
+        </View>)}
       </View>}
-      {!!error && <Text selectable style={s.errorText}>{error}</Text>}
     </View>
   </ScrollView>;
+}
+
+// A titled group in the emulator's side column.
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return <View style={{ marginTop: 32 }}>
+    <Text style={[s.eyebrow, { textAlign: 'left', marginBottom: 10 }]}>{title}</Text>
+    {children}
+  </View>;
 }
