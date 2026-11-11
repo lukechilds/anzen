@@ -9,7 +9,10 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.anzen.wallet",
-      "infoPlist": { "NSBluetoothAlwaysUsageDescription": "Anzen uses Bluetooth to reach your hardware signer." }
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "Anzen uses Bluetooth to reach your hardware signer.",
+        "NSFaceIDUsageDescription": "Anzen uses Face ID to open your wallet, open your vault and approve payments."
+      }
     },
     "android": { "package": "com.anzen.wallet", "allowBackup": false },
     "web": { "bundler": "metro" }

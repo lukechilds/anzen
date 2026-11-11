@@ -373,6 +373,33 @@ mode on launch. Regtest RPC must be reachable from the physical device; the Dock
 node is intentionally bound to host loopback by default. Mainnet connects directly
 to Electrum. A second phone is not equivalent to a hardware secure element.
 
+### Native interface
+
+On a device the app uses the system's own controls wherever iOS has one, and the browser
+emulator keeps the JavaScript versions as its fallback. Each pair lives side by side in
+`src/ui/` (`Sheet.tsx` and `Sheet.web.tsx`, and so on); Metro picks the `.web.tsx` file for
+the browser and the other for a device.
+
+| | On a device | In the browser |
+| --- | --- | --- |
+| Sheets | UIKit sheets (`react-native-screens`): grabber, swipe to dismiss, sized to their content, kept above the keyboard | The emulator's drawn sheet |
+| Wallet and Vault tabs | The system tab bar | The drawn glass pill |
+| Owner check | Face ID, Touch ID or the passcode (`expo-local-authentication`) | A simulated Face ID animation |
+| Settings | `Switch`, alerts and action sheets, which ask before they apply | Questions that open under the row |
+| Paste | The system paste button, which reads the clipboard without a permission prompt | A plain button |
+| Number pads and multi-line fields | A Done bar above the keyboard | The browser's own keyboard |
+| Feedback | Haptics for a sent payment, an approval, a failure, a tab change | None |
+| Safe areas, pull to refresh | From the device | Drawn status bar and home indicator |
+
+Text follows the person's text-size setting up to 1.3×, the largest the fixed layouts hold.
+The app asks for Face ID when it opens, when the vault opens and before money moves; that check
+guards what the app shows and starts, and is separate from how Rust and the keychain protect keys.
+
+To look at the native interface without a phone, build for the simulator
+(`xcodebuild -workspace ios/Anzen.xcworkspace -scheme Anzen -configuration Release -sdk iphonesimulator ONLY_ACTIVE_ARCH=YES ARCHS=arm64`;
+the Rust library has no x86-64 simulator slice). A simulator has no Bluetooth: there a Trezor
+signer is the Trezor emulator on the same Mac (`trezor-app/README.md`).
+
 You can check generated native configuration without compiling/installing an app:
 
 ```sh

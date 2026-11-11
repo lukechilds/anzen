@@ -1,5 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { Text, TextInput } from './ui/Text';
+import { Sheet } from './ui/Sheet';
+import { authenticate } from './ui/authenticate';
 import { requireOptionalNativeModule } from 'expo';
 import { File, Paths } from 'expo-file-system';
 import AnzenApp, { Button } from './AnzenApp';
@@ -46,7 +51,13 @@ function savePrefs(prefs: DevicePrefs) {
   catch { /* The choice still applies until the app closes. */ }
 }
 
+// The app, inside what every screen needs from the device: its safe areas.
 export default function NativeApp() {
+  return <SafeAreaProvider><StatusBar style="light"/><Device/></SafeAreaProvider>;
+}
+
+function Device() {
+  const insets = useSafeAreaInsets();
   const [prefs, setPrefs] = useState<DevicePrefs>(loadPrefs);
   const { network, role } = prefs;
   const updatePrefs = (next: DevicePrefs) => { savePrefs(next); setPrefs(next); setIncoming(null); setCloudBackup(null); setError(''); setFileNotice(''); };
@@ -141,38 +152,41 @@ export default function NativeApp() {
   if (!runtime) return <View style={[s.screen, { padding: 32, justifyContent: 'center' }]}>
     <Text style={s.brand}>anzen</Text><Text style={s.subtext}>The native Rust module is not installed in this build. Native integration is under implementation; this screen does not simulate a working wallet.</Text>
   </View>;
-  return <View style={[s.screen, { paddingTop: 50, paddingBottom: 20 }]}>
-    {exchange && <ScrollView contentContainerStyle={{ padding: 24 }}><Text style={s.heading}>Receive a file</Text>
-      <Text style={s.subtext}>Choose the protocol JSON shared by the other device. Importing it does not approve, sign, or broadcast anything.</Text>
-      <Button title="Choose protocol message file" primary disabled={fileBusy} onPress={() => void receiveFile()} />
-      {role === 'wallet' && <>
-        <Text style={s.label}>Encrypted recovery backup</Text>
-        <Text style={s.subtext}>Load a backup saved separately from the signer. Never send this file to your signer.</Text>
-        <Button title="Choose encrypted backup file" disabled={fileBusy} onPress={() => void receiveFile(true)} />
-      </>}
-      <Text style={s.label}>Or paste a protocol message</Text>
-      <Text style={s.tiny}>Protocol JSON only, never seed words or an encrypted recovery backup. Files are recommended for larger packages. Maximum 8 MiB.</Text>
-      <TextInput accessibilityLabel="Received protocol JSON" multiline style={[s.input, { minHeight: 180 }]} value={message} onChangeText={setMessage} autoCapitalize="none" autoCorrect={false} />
-      <Button title="Import message" disabled={fileBusy} onPress={() => {
-        try {
-          acceptMessage(parseProtocolMessage(message));
-        } catch (e) { setError(String(e)); }
-      }} /><Button title="Cancel import" disabled={fileBusy} onPress={() => { setExchange(false); setMessage(''); setError(''); }} />
-      {fileBusy && <ActivityIndicator color={colors.mint} />}
-    </ScrollView>}
-    {/* Importing a response must not unmount the app and discard an in-progress review. */}
-    <View style={{ flex: 1, display: exchange ? 'none' : 'flex' }}>
-      {/* A new network or role is another device: start it fresh. */}
-      <AnzenApp key={`${network}:${role}`} transport={transport!} network={network} incoming={incoming} dismissIncoming={() => setIncoming(null)}
-        cloudBackup={cloudBackup} saveBackup={backup => nativeFileExchange.saveBackup(role, backup)}
-        deliver={nativeFileExchange.sendMessage} benchmark={role === 'wallet' ? benchmark : undefined}
-        tap={tap} signerKeepsNoBackup={Boolean(tap)}
-        deviceSettings={<DeviceSettings prefs={prefs} onChange={updatePrefs} ledgerAvailable={Boolean(ledgerCall)} trezorAvailable={Boolean(trezorCall)}
-          onImport={() => { setExchange(true); setError(''); setFileNotice(''); }}/>} />
-    </View>
+  const closeExchange = () => { setExchange(false); setMessage(''); setError(''); };
+  // Receiving a file or a pasted message, from the other device. A sheet over the app, so an
+  // in-progress review underneath is not lost.
+  const exchangeSheet = exchange && <Sheet label="Receive a file" onClose={closeExchange}>
+    <Text style={[s.heading, { marginTop: 8 }]}>Receive a file</Text>
+    <Text style={s.subtext}>Choose the protocol JSON shared by the other device. Importing it does not approve, sign, or broadcast anything.</Text>
+    <Button title="Choose protocol message file" primary disabled={fileBusy} onPress={() => void receiveFile()} />
+    {role === 'wallet' && <>
+      <Text style={s.label}>Encrypted recovery backup</Text>
+      <Text style={s.subtext}>Load a backup saved separately from the signer. Never send this file to your signer.</Text>
+      <Button title="Choose encrypted backup file" disabled={fileBusy} onPress={() => void receiveFile(true)} />
+    </>}
+    <Text style={s.label}>Or paste a protocol message</Text>
+    <Text style={s.tiny}>Protocol JSON only, never seed words or an encrypted recovery backup. Files are recommended for larger packages. Maximum 8 MiB.</Text>
+    <TextInput accessibilityLabel="Received protocol JSON" multiline textAlignVertical="top" style={[s.input, { height: 140, marginTop: 10 }]} value={message} onChangeText={setMessage}
+      autoCapitalize="none" autoCorrect={false} spellCheck={false} autoComplete="off" />
+    <Button title="Import message" disabled={fileBusy || !message.trim()} onPress={() => {
+      try { acceptMessage(parseProtocolMessage(message)); }
+      catch (e) { setError(String(e)); }
+    }} />
+    <Button title="Cancel import" disabled={fileBusy} onPress={closeExchange} />
+    {fileBusy && <ActivityIndicator color={colors.mint} />}
+    {!!error && <Text accessibilityRole="alert" style={s.errorText}>{error}</Text>}
+  </Sheet>;
+  return <View style={s.screen}>
+    {/* A new network or role is another device: start it fresh. */}
+    <AnzenApp key={`${network}:${role}`} transport={transport!} network={network} incoming={incoming} dismissIncoming={() => setIncoming(null)}
+      cloudBackup={cloudBackup} saveBackup={backup => nativeFileExchange.saveBackup(role, backup)}
+      deliver={nativeFileExchange.sendMessage} benchmark={role === 'wallet' ? benchmark : undefined}
+      tap={tap} signerKeepsNoBackup={Boolean(tap)} authenticate={authenticate} sheets={exchangeSheet}
+      deviceSettings={<DeviceSettings prefs={prefs} onChange={updatePrefs} ledgerAvailable={Boolean(ledgerCall)} trezorAvailable={Boolean(trezorCall)}
+        onImport={() => { setExchange(true); setError(''); setFileNotice(''); }}/>} />
     {/* What a file import did, until dismissed. */}
     {!exchange && (!!fileNotice || !!error) && <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={() => { setFileNotice(''); setError(''); }}
-      style={{ position: 'absolute', left: 16, right: 16, bottom: 96, padding: 14, borderRadius: 16, backgroundColor: colors.surface }}>
+      style={{ position: 'absolute', left: 16, right: 16, bottom: insets.bottom + 76, padding: 14, borderRadius: 16, backgroundColor: colors.surface }}>
       {!!fileNotice && <Text style={s.tiny}>{fileNotice}</Text>}
       {!!error && <Text style={s.errorText}>{error}</Text>}
     </Pressable>}

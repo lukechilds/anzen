@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { Platform, StyleSheet, Text, View, ViewStyle } from 'react-native';
-import Svg, { Circle, Defs, FeTurbulence, Filter, Path, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Platform, StyleSheet, View, ViewStyle } from 'react-native';
+import { Text } from './ui/Text';
+import Svg, { Circle, Defs, FeTurbulence, Filter, LinearGradient, Path, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { colors } from './theme';
 
 export type IconName = 'wallet' | 'vault' | 'vaultFine' | 'send' | 'receive' | 'refresh' | 'close' | 'settings' | 'chevron' | 'clock' | 'key' | 'phone' | 'copy' | 'scan' | 'face' | 'cloud';
 // The app's glyphs. Stroke widths follow it: 2 for most icons, 2.2 for the send and
@@ -39,6 +41,26 @@ export function DarkBackground() {
       <Svg width={190} height={190} viewBox="25 30 190 180"><Path d="M120 30 L215 210 L169 210 L120 117.2 L71 210 L25 210 Z" fill="white"/></Svg>
     </View>
   </View>;
+}
+
+// On a device, what scrolls up the screen fades out under the status bar and the buttons at the top,
+// instead of running into them. Only once something has scrolled: at rest the screen is untouched.
+// (The browser blurs the same strip, in DarkEffects.)
+export function TopFade({ height, solid, shown }: { height: number; solid: number; shown: boolean }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(opacity, { toValue: shown ? 1 : 0, duration: 160, useNativeDriver: true }).start();
+  }, [shown]);
+  return <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, zIndex: 6, opacity }}>
+    <Svg width="100%" height={height} accessibilityElementsHidden>
+      <Defs><LinearGradient id="top-fade" x1="0" y1="0" x2="0" y2="1">
+        <Stop offset="0" stopColor={colors.background} stopOpacity={1}/>
+        <Stop offset={solid / height} stopColor={colors.background} stopOpacity={.94}/>
+        <Stop offset="1" stopColor={colors.background} stopOpacity={0}/>
+      </LinearGradient></Defs>
+      <Rect width="100%" height={height} fill="url(#top-fade)"/>
+    </Svg>
+  </Animated.View>;
 }
 
 // The reference's browser-only finishing layers. Native keeps its OS status/safe area;

@@ -1,11 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SavedMessages from './SavedMessages';
 import { parseEncryptedBackup } from './fileExchange';
-import { ActivityIndicator, AppState, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { ActivityIndicator, AppState, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useInsets } from './ui/insets';
+import { Text, TextInput } from './ui/Text';
+import { Sheet, SheetHost } from './ui/Sheet';
+import { TAB_BAR_CLEARANCE, TabBar } from './ui/Tabs';
+import { PasteButton } from './ui/PasteButton';
+import { haptics } from './ui/haptics';
+import { authenticationName } from './ui/authenticate';
 import Svg, { Path } from 'react-native-svg';
-import { DarkBackground, DarkEffects, DeviceStatus, Icon } from './DarkChrome';
-import { ActionPill, Activity, DarkSheet, IconButton, MenuRow, WalletHistory } from './DarkSurfaces';
+import { DarkBackground, DarkEffects, DeviceStatus, Icon, TopFade } from './DarkChrome';
+import { ActionPill, Activity, IconButton, MenuRow, WalletHistory } from './DarkSurfaces';
 import AddressCard, { AddressLines } from './AddressCard';
 import VaultSummary from './VaultSummary';
 import Descriptors from './Descriptors';
@@ -36,12 +42,14 @@ type Props = {
   cloudBackup?: JsonObject | null;
   // Asks the owner to confirm it's them (Face ID or passcode) before the app opens, the vault
   // opens or money moves. Without it, the browser emulator plays a simulated Face ID check.
-  authenticate?: () => Promise<boolean>;
+  authenticate?: (cover?: boolean) => Promise<boolean>;
   // GPU vanity-search benchmarks, shown in the wallet's settings.
   benchmark?: BenchmarkRunner;
   // This device's own settings (network, hardware wallet mode), from the native app: in the
   // wallet's settings, and behind a link on the signer.
   deviceSettings?: React.ReactNode;
+  // Sheets of the surrounding app's own, presented with this one's.
+  sheets?: React.ReactNode;
 };
 type Kind = ProtocolMessage['kind'];
 type ReviewKind = 'policy' | 'sweep' | 'backup' | 'offline-action' | 'restore' | 'rotation' | 'rotation-adoption' | 'share-vault';
@@ -50,6 +58,8 @@ const deferred: Kind[] = ['phone-rotation-completed'];
 const purposeOf = (kind: Kind): TapPurpose => kind === 'signer-hello' ? 'setup'
   : kind === 'recovery-vault-request' ? 'recover' : deferred.includes(kind) ? 'finish' : 'approve';
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+// How long the app can be away before its owner is asked for again.
+const RELOCK_AFTER_MS = 30_000;
 const btc = (sats: number = 0) => formatBtc(sats);
 // The signer's round display is small: the same review layout, set tighter.
 const r = { ...s, ...StyleSheet.create({
@@ -108,10 +118,11 @@ export function Button({ title, onPress, primary = false, danger = false, disabl
 }
 function Field({ label, value, onChange, numeric = false }: { label: string; value: string; onChange: (s: string) => void; numeric?: boolean }) {
   return <><Text style={s.label}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChange}
-    style={s.input} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} /></>;
+    style={s.input} keyboardType={numeric ? 'number-pad' : 'default'} autoCapitalize="none" autoCorrect={false} spellCheck={false} autoComplete="off"
+    returnKeyType="done" clearButtonMode="while-editing" /></>;
 }
 
-export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark, deviceSettings, signerKeepsNoBackup = false }: Props) {
+export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark, deviceSettings, sheets: hostSheets, signerKeepsNoBackup = false }: Props) {
   const signer = transport.role === 'signer';
   const [identity, setIdentity] = useState<JsonObject | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -123,8 +134,28 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const authenticate = deviceAuthenticate ?? (Platform.OS === 'web' ? faceId.authenticate : undefined);
   // An existing wallet stays covered until its owner is confirmed.
   const [locked, setLocked] = useState(!signer && Boolean(authenticate));
+  const [unlockFailed, setUnlockFailed] = useState(false);
+  // On a device the wallet is covered while the app is put away, so the app switcher's picture of
+  // it shows nothing, and it locks again once it has been away for a while.
+  const [away, setAway] = useState(false);
+  const leftAt = useRef(0);
+  // The device's own check takes the screen for a moment, which the app sees as being put
+  // away. While one is up, that is not a reason to hide the vault.
+  const authenticating = useRef(false);
+  const confirmOwner = async (cover?: boolean) => {
+    if (!authenticate) return true;
+    authenticating.current = true;
+    try { return await authenticate(cover); }
+    catch { return false; }
+    // The app is told it is active again a moment after the check closes.
+    finally { setTimeout(() => { authenticating.current = false; }, 600); }
+  };
+  const unlock = async () => {
+    setUnlockFailed(false);
+    if (await confirmOwner(true)) setLocked(false); else setUnlockFailed(true);
+  };
   // Moving money needs the owner too.
-  const secure = async (action: () => unknown) => { if (authenticate && !await authenticate()) return; await action(); };
+  const secure = async (action: () => unknown) => { if (!await confirmOwner()) return; await action(); };
   const opening = useRef(false);
   const [wallet, setWallet] = useState<JsonObject | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
@@ -169,6 +200,16 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const [notice, setNotice] = useState('');
   const privacyGeneration = useRef(0);
   const screenScroll = useRef<ScrollView>(null);
+  const insets = useInsets();
+  const web = Platform.OS === 'web';
+  // Pulling the wallet or the open vault down syncs it.
+  const [refreshing, setRefreshing] = useState(false);
+  // Whether the screen has scrolled, so its top fades what passes under the status bar.
+  const [scrolled, setScrolled] = useState(false);
+  // What this device calls its owner check, for the app's words about it.
+  const [ownerCheck, setOwnerCheck] = useState('Face ID');
+  useEffect(() => { void authenticationName().then(setOwnerCheck).catch(() => {}); }, []);
+  const destinationInput = useRef<React.ComponentRef<typeof TextInput>>(null);
   // The open tap, if any: on the phone its link to the signer, on the signer the phone's
   // request waiting for an answer.
   const link = useRef<SignerLink | null>(null);
@@ -199,7 +240,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     transport.execute({ method: 'session' }).then(session => {
       if (!active) return;
       setIdentity(session.identity);
-      if (!signer && session.identity && authenticate) void authenticate(true).then(() => { if (active) setLocked(false); });
+      if (!signer && session.identity && authenticate) void unlock();
       else setLocked(false);
       setPaired(Boolean(session.paired || session.config));
       setBackupStored(Boolean(session.backup_stored));
@@ -209,9 +250,21 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   }, [transport, sessionEpoch]);
 
   // Presentation privacy only. Wallet operations/authorization are exclusively Rust-owned.
-  const hideVault = () => { privacyGeneration.current += 1; setRevealError(''); setVaultVisible(false); setVault(null); setRecoveredPayment(null); setPage('home'); setTab('wallet'); setError(''); setNotice(''); };
+  const hideVault = () => { privacyGeneration.current += 1; setScrolled(false); setRevealError(''); setVaultVisible(false); setVault(null); setRecoveredPayment(null); setPage('home'); setTab('wallet'); setError(''); setNotice(''); };
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', state => { if (state !== 'active') hideVault(); });
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active' && !authenticating.current) hideVault();
+      if (signer || !deviceAuthenticate) return;
+      if (state === 'active') {
+        setAway(false);
+        if (leftAt.current && Date.now() - leftAt.current > RELOCK_AFTER_MS) { setPage('home'); setLocked(true); void unlock(); }
+        leftAt.current = 0;
+      } else if (!authenticating.current) {
+        setAway(true);
+        // From the first moment away: the app may be suspended before it hears it is in the background.
+        if (!leftAt.current) leftAt.current = Date.now();
+      }
+    });
     return () => subscription.remove();
   }, []);
 
@@ -265,6 +318,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       // Keep completed protocol results, but never reveal late private notices after hiding.
       if (!stillVisible()) { setNotice(''); setError(''); return result; }
       if (result.txid) {
+        haptics.success();
         setNotice(`Sent · ${result.txid.slice(0, 8)}`);
         if (!signer && tab === 'wallet') {
           try { setWallet(await transport.execute({ method: 'wallet_snapshot' })); }
@@ -272,7 +326,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
         }
       }
       return result;
-    } catch (e) { if (stillVisible()) setError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { haptics.failure(); if (stillVisible()) setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
   const call = (command: JsonObject) => transport.execute(command);
@@ -323,11 +377,12 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       }
       await handleMessage(tapReply.current);
       link.current?.close(); link.current = null; tapMessage.current = null; tapReply.current = null;
+      haptics.success();
       setTapState(purpose === 'setup' ? { purpose, phase: 'done' } : null);
       tapAfter.current?.();
     } catch (e) {
       link.current?.close(); link.current = null;
-      if (!abort.signal.aborted) setTapState({ purpose, phase: 'failed', error: message(e) });
+      if (!abort.signal.aborted) { haptics.failure(); setTapState({ purpose, phase: 'failed', error: message(e) }); }
     } finally { setBusy(false); }
   }
   function cancelTap() {
@@ -383,7 +438,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     opening.current = true; setBusy(true); setRevealError('');
     const generation = privacyGeneration.current;
     try {
-      if (authenticate && !await authenticate()) throw new Error('The vault stays locked.');
+      if (!await confirmOwner()) throw new Error('The vault stays locked.');
       const value = await call({ method: 'vault_snapshot' });
       if (generation === privacyGeneration.current) { setVault(value); setVaultVisible(true); }
     } catch (e) { if (generation === privacyGeneration.current) setRevealError(message(e)); }
@@ -573,7 +628,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
             <SyncStatus error={liveError.wallet} behind={wallet?.behind_blocks} busy={busy} onSync={() => void syncWallet()}/>
             {wallet && wallet.pending_sats > 0 && <Text style={s.tiny}>{btc(wallet.pending_sats)} BTC awaiting confirmation</Text>}
             {wallet && wallet.immature_sats > 0 && <Text style={s.tiny}>{btc(wallet.immature_sats)} BTC in immature mining rewards</Text>}
-            <View style={s.actions}><ActionPill title="Send" label="↑ Send" icon="send" onPress={() => setPage('send')} /><ActionPill title="Receive" label="↓ Receive" icon="receive" onPress={() => run({ method: 'receive_address' }, value => { setAddress(value.address); setPage('receive'); })} disabled={busy}/></View></View>
+            <View style={s.actions}><ActionPill title="Send" label="↑ Send" icon="send" onPress={() => { setError(''); setNotice(''); setPage('send'); }} /><ActionPill title="Receive" label="↓ Receive" icon="receive" onPress={() => run({ method: 'receive_address' }, value => { setAddress(value.address); setPage('receive'); })} disabled={busy}/></View></View>
             <WalletHistory items={wallet?.activity || []} loaded={Boolean(wallet)} onSelect={entry => { setSelectedActivity(entry); setPage('transaction'); }}/></>}
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
             {deviceSettings}
@@ -601,7 +656,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
           {tap ? <View style={{ marginTop: 34 }}>
             <Button title={paired ? 'Finish setup' : 'Set up vault'} primary onPress={setupVault} disabled={busy} />
             {paired ? <Button title="Open vault" onPress={() => void reveal()} disabled={busy} />
-              : <Pressable accessibilityRole="button" accessibilityLabel="Recover with your signer" disabled={busy} onPress={() => void toSigner(async () => ({ kind: 'recovery-vault-request', body: {} }))} style={({ pressed }) => ({ alignSelf: 'center', padding: 12, opacity: pressed ? .6 : 1 })}>
+              : <Pressable accessibilityRole="button" accessibilityLabel="Recover with your signer" disabled={busy} onPress={() => void toSigner(async () => ({ kind: 'recovery-vault-request', body: {} }))} hitSlop={8} style={({ pressed }) => ({ alignSelf: 'center', padding: 12, opacity: pressed ? .6 : 1 })}>
                 <Text style={[s.tiny, { color: colors.quiet }]}>Recover with your signer</Text>
               </Pressable>}
           </View> : <>
@@ -643,7 +698,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
           <Text style={s.heading}>Restore from cloud backup</Text>
           <Text style={s.tiny}>This phone’s identity · verify on the signer</Text><Text selectable style={s.mono}>{identity.vault_pubkey}</Text>
           <Text style={s.label}>Encrypted cloud backup JSON</Text>
-          <TextInput accessibilityLabel="Encrypted cloud backup JSON" multiline value={backupText} onChangeText={setBackupText} maxLength={8 * 1024 * 1024} autoCapitalize="none" autoCorrect={false} style={[s.input, { height: 90 }]} />
+          <TextInput accessibilityLabel="Encrypted cloud backup JSON" multiline value={backupText} onChangeText={setBackupText} maxLength={8 * 1024 * 1024} autoCapitalize="none" autoCorrect={false} spellCheck={false} autoComplete="off" textAlignVertical="top" style={[s.input, { height: 90 }]} />
           {!backupText && <Text style={s.tiny}>No cloud backup loaded.</Text>}
           <Button title="Request phone key recovery" disabled={busy || !backupText} onPress={requestRestore} />
           <Button title="Check restored key" disabled={busy} onPress={() => run({ method: 'restored_phone' }, setRestored)} />
@@ -779,47 +834,66 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     {(busy || !sessionLoaded) && <ActivityIndicator color={colors.mint} style={{ marginTop: 12 }}/>}
     {identity && <SavedMessages transport={transport} deliver={deliver}/>}
     {signerSettings ? <>{deviceSettings}{recoveryPhrase}</>
-      : <Pressable accessibilityRole="button" accessibilityLabel="Device settings" onPress={() => setSignerSettings(true)} style={{ alignSelf: 'center', marginTop: 18, padding: 8 }}>
+      : <Pressable accessibilityRole="button" accessibilityLabel="Device settings" onPress={() => setSignerSettings(true)} hitSlop={12} style={({ pressed }) => ({ alignSelf: 'center', marginTop: 18, padding: 8, opacity: pressed ? .6 : 1 })}>
         <Text style={[s.tiny, { color: colors.quiet }]}>Device settings</Text>
       </Pressable>}
   </>;
   if (signer) {
     const current = signerReview();
-    return <SignerDevice screen={(_, height) => current
+    return <SheetHost sheets={hostSheets}><View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom }}><SignerDevice screen={(_, height) => current
       ? <Pager key={review?.review_id ?? review?.request_id ?? reviewKind} review={current} busy={busy} inset={16}/>
       : <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets
         contentContainerStyle={{ minHeight: height, justifyContent: 'center', padding: 18 }}>
         {signerIdle}
-      </ScrollView>}/>;
+      </ScrollView>}/></View></SheetHost>;
   }
-  return <View style={s.screen} testID="device-screen" {...({ dataSet: { vaultHeight: vaultVisible && vault ? vault.chain_height : '' } } as object)}>
-    <DarkBackground/><DeviceStatus/><DarkEffects/>
-    {identity && !signer && <View style={{ position: 'absolute', top: Platform.OS === 'web' ? 56 : 14, left: 26, right: 26, flexDirection: 'row', justifyContent: 'space-between', zIndex: 10 }} pointerEvents="box-none">
+  const reviewPayment = () => void run({ method: 'review_payment', destination: destination.trim(), amount_sats: Number(payment) }, value => { setPaymentReview(value); setPage('confirm-send'); });
+  const changeTab = (value: 'wallet' | 'vault') => {
+    screenScroll.current?.scrollTo({ y: 0, animated: false });
+    if (value === 'wallet') hideVault(); else { setTab('vault'); setPage('home'); setError(''); setNotice(''); setScrolled(false); }
+  };
+  // Pull to refresh, on the wallet's home and on the open vault's.
+  const canRefresh = identity && page === 'home' && (tab === 'wallet' || vaultVisible);
+  const refresh = async () => {
+    setRefreshing(true);
+    try { await (tab === 'wallet' ? syncWallet() : syncVault()); } finally { setRefreshing(false); }
+  };
+  // A device keeps the screen clear of the status bar and lets it run under the system's tab bar;
+  // the emulator draws its own status bar and tab pill, and leaves room for them itself.
+  const screen = <>
+    <DarkBackground/>
+    {identity && <View style={{ position: 'absolute', top: web ? 56 : insets.top + 8, left: 26, right: 26, flexDirection: 'row', justifyContent: 'space-between', zIndex: 10 }} pointerEvents="box-none">
       {/* A closed vault has nothing to configure or hide yet. */}
       {tab === 'vault' && !vaultVisible && page === 'home' ? <View/> : <IconButton label={page !== 'home' && !anySheet ? (tab === 'wallet' ? 'Back to wallet' : 'Back to vault') : 'Settings'} name={page !== 'home' && !anySheet ? 'close' : 'settings'} onPress={() => go(page !== 'home' ? 'home' : 'settings')}/>}
       {tab === 'vault' && (vaultVisible || page !== 'home') && <IconButton label="Hide vault" name="close" onPress={hideVault}/>}
     </View>}
-    <ScrollView ref={screenScroll} contentContainerStyle={[s.content, tab === 'vault' && page !== 'home' && !vaultSheet && { paddingTop: 56 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} accessibilityElementsHidden={anySheet} importantForAccessibility={anySheet ? 'no-hide-descendants' : 'auto'}>
+    {!web && <TopFade height={insets.top + 84} solid={insets.top + 48} shown={scrolled}/>}
+    <ScrollView ref={screenScroll} style={!web && { marginTop: insets.top }}
+      onScroll={web ? undefined : event => setScrolled(event.nativeEvent.contentOffset.y > 6)} scrollEventThrottle={32}
+      contentContainerStyle={[s.content, !web && { paddingBottom: TAB_BAR_CLEARANCE + insets.bottom + 24 }, tab === 'vault' && page !== 'home' && !vaultSheet && { paddingTop: 56 }]}
+      keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets showsVerticalScrollIndicator={false}
+      refreshControl={canRefresh && !web ? <RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={colors.mint}/> : undefined}
+      accessibilityElementsHidden={anySheet} importantForAccessibility={anySheet ? 'no-hide-descendants' : 'auto'}>
       {screenContent}
     </ScrollView>
-    {!signer && identity && <View style={s.tabs}><BlurView pointerEvents="none" tint="dark" intensity={48} style={[StyleSheet.absoluteFill, { borderRadius: 30 }]}/>{(['wallet', 'vault'] as const).map(value => <Pressable key={value} accessibilityRole="tab" accessibilityLabel={value === 'wallet' ? 'Wallet' : 'Vault'} aria-selected={tab === value}
-      onPress={() => { screenScroll.current?.scrollTo({ y: 0, animated: false }); if (value === 'wallet') hideVault(); else { setTab('vault'); setPage('home'); setError(''); setNotice(''); } }} style={[s.tab, tab === value && s.selectedTab]}>
-      <Icon name={value} size={16} color={tab === value ? colors.text : colors.faint}/><Text style={[s.tabText, tab === value && s.selectedText]}>{value === 'wallet' ? 'Wallet' : 'Vault'}</Text>
-    </Pressable>)}</View>}
-    {Platform.OS === 'web' && <View pointerEvents="none" style={{ position: 'absolute', bottom: 9, left: '50%', marginLeft: -67, width: 134, height: 5, borderRadius: 3, backgroundColor: '#ffffff3d' }}/>}
-    {walletSheet && <DarkSheet label={page === 'receive' ? 'Receive bitcoin' : page === 'transaction' ? 'Transaction details' : 'Send bitcoin'} onClose={() => setPage('home')}>
+  </>;
+  const sheets = <>
+    {walletSheet && <Sheet label={page === 'receive' ? 'Receive bitcoin' : page === 'transaction' ? 'Transaction details' : 'Send bitcoin'} onClose={() => { setPage('home'); setError(''); }}>
       {page === 'receive' && <><Text style={s.sheetEyebrow}>Receive</Text><AddressCard address={address}/></>}
       {page === 'send' && <><Text style={s.sheetEyebrow}>Send</Text>
-        <TextInput accessibilityLabel="Amount in sats" value={payment} onChangeText={setPayment} keyboardType="number-pad" placeholder="0" placeholderTextColor={colors.quiet}
+        <TextInput accessibilityLabel="Amount in sats" value={payment} onChangeText={setPayment} keyboardType="number-pad" placeholder="0" placeholderTextColor={colors.quiet} selectTextOnFocus
           style={{ marginTop: 26, textAlign: 'center', fontFamily: fonts.number, fontSize: 38, fontWeight: '500', fontVariant: ['tabular-nums'], color: Number(payment) > 0 ? colors.text : colors.quiet }}/>
         <Text style={{ marginTop: 8, textAlign: 'center', fontFamily: fonts.number, fontSize: 12, color: colors.faint }}>sats · ₿{btc(Number(payment) || 0)}</Text>
-        <View style={{ marginTop: 24, marginHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 18, borderRadius: 26, backgroundColor: 'rgba(255,255,255,.07)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 0 0 .5px rgba(255,255,255,.05)' }}>
-          <Icon name="scan" size={15} color="rgba(255,255,255,.3)"/>
-          <TextInput accessibilityLabel="Destination address" value={destination} onChangeText={setDestination} placeholder="Address · paste or scan" placeholderTextColor={colors.quiet} autoCapitalize="none" autoCorrect={false}
+        <View style={{ marginTop: 24, marginHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 18, paddingRight: 10, borderRadius: 26, backgroundColor: 'rgba(255,255,255,.07)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 0 0 .5px rgba(255,255,255,.05)' }}>
+          <TextInput ref={destinationInput} accessibilityLabel="Destination address" value={destination} onChangeText={setDestination} placeholder="Bitcoin address" placeholderTextColor={colors.quiet}
+            autoCapitalize="none" autoCorrect={false} spellCheck={false} autoComplete="off" returnKeyType="done" onSubmitEditing={reviewPayment}
             style={{ flex: 1, paddingVertical: 15, color: colors.text, fontSize: 12.5, fontFamily: destination ? fonts.mono : undefined }}/>
+          {/* A payment link carries its address after "bitcoin:"; the address is what Rust takes. */}
+          {!destination && <PasteButton onPaste={text => setDestination(text.replace(/^bitcoin:/i, '').split('?')[0])}/>}
         </View>
         <View style={{ alignItems: 'center', marginTop: 16 }}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Review payment" disabled={busy} onPress={() => run({ method: 'review_payment', destination, amount_sats: Number(payment) }, value => { setPaymentReview(value); setPage('confirm-send'); })}
+          <Pressable accessibilityRole="button" accessibilityLabel="Review payment" disabled={busy} onPress={reviewPayment} hitSlop={4}
             style={({ pressed }) => ({ height: 40, paddingHorizontal: 22, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(255,255,255,.08)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14), 0 0 0 .5px rgba(255,255,255,.06)', opacity: busy ? .4 : 1, transform: [{ scale: pressed ? .95 : 1 }] })}>
             <Icon name="send" size={13} strokeWidth={2.2} color="rgba(255,255,255,.64)"/><Text style={{ color: colors.text, fontSize: 12.5, fontWeight: '500' }}>Review</Text>
           </Pressable>
@@ -832,8 +906,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
         <Text selectable style={s.mono}>{selectedActivity.txid}</Text><Button title="Back to wallet" onPress={() => setPage('home')}/>
       </>}
       {feedback}
-    </DarkSheet>}
-    {vaultSheet && vault && <DarkSheet label={vaultSheetLabels[page]} onClose={() => go('home')}>
+    </Sheet>}
+    {vaultSheet && vault && <Sheet label={vaultSheetLabels[page]} onClose={() => go('home')}>
       <Text style={s.sheetEyebrow}>{vaultSheetLabels[page]}</Text>
       {page === 'deposit' && <AddressCard address={vault.config.vault_address} vault/>}
       {page === 'withdraw' && <WithdrawalOptions go={go} vault={vault}/>}
@@ -861,7 +935,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
         <Text style={[s.balanceCaption, { marginBottom: 18 }]}>a month, to your wallet</Text>
         <Button title="Withdraw monthly allowance" primary disabled={busy} onPress={() => void secure(() => run({ method: 'monthly', step: Number(step), action: 'authorization' }))}/>
         <Button title="Revoke remaining allowances" danger disabled={busy} onPress={() => run({ method: 'monthly', step: Number(step), action: 'revocation' })}/>
-        {!moreMonthly ? <Pressable accessibilityRole="button" accessibilityLabel="More options" onPress={() => setMoreMonthly(true)} style={{ alignSelf: 'center', padding: 12 }}>
+        {!moreMonthly ? <Pressable accessibilityRole="button" accessibilityLabel="More options" onPress={() => setMoreMonthly(true)} hitSlop={8} style={({ pressed }) => ({ alignSelf: 'center', padding: 12, opacity: pressed ? .6 : 1 })}>
           <Text style={[s.tiny, { color: colors.quiet }]}>More options</Text></Pressable> : <>
           <Field label="Allowance step" value={step} onChange={setStep} numeric/>
           <Field label="Soft limit in sats" value={softLimit} onChange={setSoftLimit} numeric/>
@@ -883,22 +957,35 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
         <Button title="Cancel vault transfer" onPress={() => go('home')}/>
       </>}
       {feedback}
-    </DarkSheet>}
-    {welcome && <DarkSheet label="Welcome" onClose={() => setWelcome(false)}>
+    </Sheet>}
+    {welcome && <Sheet label="Welcome" onClose={() => setWelcome(false)}>
       <Text style={[s.balance, { fontSize: 24, lineHeight: 30, textAlign: 'center', marginTop: 26 }]}>Your wallet is ready</Text>
       <View style={{ gap: 18, marginTop: 26, marginHorizontal: 6 }}>
-        {([['face', 'Protected by Face ID', 'Only you can open it.'],
+        {([['face', `Protected by ${ownerCheck}`, 'Only you can open it.'],
           ['cloud', 'Backed up for you', 'Encrypted across your Apple devices. Nothing to write down.'],
-          ['phone', 'Lost your phone?', 'Recover on a new iPhone with your Face ID.']] as const).map(([icon, title, detail]) =>
+          ['phone', 'Lost your phone?', `Recover on a new iPhone with ${ownerCheck.startsWith('your') ? ownerCheck : `your ${ownerCheck}`}.`]] as const).map(([icon, title, detail]) =>
           <View key={icon} style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
             <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.06)' }}><Icon name={icon} size={18}/></View>
             <View style={{ flex: 1 }}><Text style={{ color: colors.text, fontSize: 14, fontWeight: '500' }}>{title}</Text><Text style={[s.tiny, { color: colors.quiet, marginTop: 2 }]}>{detail}</Text></View>
           </View>)}
       </View>
       <View style={{ marginTop: 28 }}><Button title="Get started" primary onPress={() => setWelcome(false)}/></View>
-    </DarkSheet>}
-    {locked && <View style={[StyleSheet.absoluteFill, { zIndex: 85, backgroundColor: colors.background }]}/>}
-    {faceId.prompt}
+    </Sheet>}
     {tapState && <TapSheet state={tapState} hint={tap?.hint} onCancel={cancelTap} onRetry={() => void connectAndSend()} onDone={() => setTapState(null)}/>}
+    {hostSheets}
+  </>;
+  return <View style={s.screen} testID="device-screen" {...({ dataSet: { vaultHeight: vaultVisible && vault ? vault.chain_height : '' } } as object)}>
+    <SheetHost sheets={sheets}>
+      <DeviceStatus/><DarkEffects/>
+      {/* Nothing of the wallet is on screen while it is locked, for a screen reader either. */}
+      <TabBar tab={tab} onChange={changeTab} hidden={!identity || locked}>{locked ? null : screen}</TabBar>
+      {web && <View pointerEvents="none" style={{ position: 'absolute', bottom: 9, left: '50%', marginLeft: -67, width: 134, height: 5, borderRadius: 3, backgroundColor: '#ffffff3d' }}/>}
+      {(locked || away) && <View style={[StyleSheet.absoluteFill, { zIndex: 85, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', padding: 40 }]}>
+        {/* The owner's check did not pass, or was put away: the wallet stays covered until it does. */}
+        {locked && unlockFailed && <><Text style={[s.balance, { fontSize: 28, lineHeight: 34 }]}>Locked</Text>
+          <View style={{ alignSelf: 'stretch', marginTop: 22 }}><Button title="Unlock" primary onPress={() => void unlock()}/></View></>}
+      </View>}
+      {faceId.prompt}
+    </SheetHost>
   </View>;
 }

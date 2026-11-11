@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
+import { Text } from './ui/Text';
 import { BlurView } from 'expo-blur';
 import Svg, { Path } from 'react-native-svg';
 import { colors } from './theme';

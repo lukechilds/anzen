@@ -1,5 +1,6 @@
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, View } from 'react-native';
+import { Text } from './ui/Text';
 import { Icon, IconName } from './DarkChrome';
 import { d } from './DarkSurfaces';
 import { colors, formatBtc } from './theme';
@@ -8,7 +9,7 @@ import { JsonObject } from './transport';
 function PolicyRow({ title, detail, value, icon, onPress }: {
   title: string; detail: string; value?: string; icon: IconName; onPress: () => void;
 }) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={title} onPress={onPress} style={[d.transaction, d.pending]}>
+  return <Pressable accessibilityRole="button" accessibilityLabel={title} onPress={onPress} style={({ pressed }) => [d.transaction, d.pending, pressed && { opacity: .6 }]}>
     <View style={d.avatar}><Icon name={icon} size={16}/></View>
     <View style={{ flex: 1 }}><Text style={d.title}>{title}</Text><Text style={d.subtitle}>{detail}</Text></View>
     {value && <Text style={[d.value, { color: colors.quiet }]}>{value}</Text>}

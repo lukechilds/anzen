@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Text, TextInput } from './ui/Text';
 import Svg, { Defs, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 import AnzenApp, { Button } from './AnzenApp';
 import { DeviceTransport, JsonObject, ProtocolMessage, Role, Tap, TapAnswer } from './transport';

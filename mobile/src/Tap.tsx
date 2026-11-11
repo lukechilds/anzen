@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Platform, Pressable, View } from 'react-native';
+import { Text } from './ui/Text';
 import Svg, { Path, Rect } from 'react-native-svg';
-import { DarkSheet } from './DarkSurfaces';
+import { Sheet } from './ui/Sheet';
 import { BODY, GLASS, GRID_H, GRID_W } from './SignerDevice';
 import { colors, glass, styles as s } from './theme';
 
@@ -91,7 +92,7 @@ export function TapSheet({ state, hint, onCancel, onRetry, onDone }: { state: Ta
     : phase === 'working' ? state.step
     : hint ?? waiting[purpose];
   const close = phase === 'done' ? onDone : onCancel;
-  return <DarkSheet label="Connect signer" onClose={close}>
+  return <Sheet label="Connect signer" onClose={close}>
     <View testID="tap-sheet" style={{ alignItems: 'center', paddingTop: 30 }}>
       <TapArt phase={phase}/>
       <Text accessibilityRole="header" style={{ color: colors.text, fontSize: 19, fontWeight: '500', letterSpacing: -.3, marginTop: 26, textAlign: 'center' }}>{title}</Text>
@@ -104,5 +105,5 @@ export function TapSheet({ state, hint, onCancel, onRetry, onDone }: { state: Ta
           : <Pill title="Cancel" onPress={onCancel}/>}
       </View>
     </View>
-  </DarkSheet>;
+  </Sheet>;
 }

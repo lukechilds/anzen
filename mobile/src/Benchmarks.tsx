@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Text } from './ui/Text';
 import { colors, fonts, glass, styles as s } from './theme';
 
 // Vanity-search benchmarks, on the GPU and on the CPU. Rust runs them on fixed public inputs (the
