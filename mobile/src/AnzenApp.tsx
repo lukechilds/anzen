@@ -3,7 +3,8 @@ import SavedMessages from './SavedMessages';
 import { parseEncryptedBackup } from './fileExchange';
 import { ActivityIndicator, AppState, BackHandler, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useInsets } from './ui/insets';
-import { Text, TextInput } from './ui/Text';
+import { FocusContext, Text, TextInput } from './ui/Text';
+import { useKeyboardReveal } from './ui/keyboardReveal';
 import { Sheet, SheetHost } from './ui/Sheet';
 import { TAB_BAR_CLEARANCE, TabBar } from './ui/Tabs';
 import { PasteButton } from './ui/PasteButton';
@@ -204,6 +205,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const privacyGeneration = useRef(0);
   const screenScroll = useRef<ScrollView>(null);
   const signerScroll = useRef<ScrollView>(null);
+  const keyboard = useKeyboardReveal(signer ? signerScroll : screenScroll);
   const insets = useInsets();
   const web = Platform.OS === 'web';
   // Pulling the wallet or the open vault down syncs it.
@@ -883,8 +885,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       ? <Pager key={review?.review_id ?? review?.request_id ?? reviewKind} review={current} busy={busy} inset={16}/>
       : <ScrollView ref={signerScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets
-        contentContainerStyle={{ minHeight: height, justifyContent: 'center', padding: 18 }}>
-        {signerIdle}
+        contentContainerStyle={{ minHeight: height, justifyContent: 'center', padding: 18, paddingBottom: 18 + keyboard.pad }}>
+        <FocusContext.Provider value={keyboard.focused}>{signerIdle}</FocusContext.Provider>
       </ScrollView>}/></View></SheetHost>;
   }
   const reviewPayment = () => void run({ method: 'review_payment', destination: destination.trim(), amount_sats: Number(payment) }, value => { setPaymentReview(value); setPage('confirm-send'); });
@@ -910,11 +912,11 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     {!web && <TopFade height={insets.top + 84} solid={insets.top + 48} shown={scrolled}/>}
     <ScrollView ref={screenScroll} style={!web && { marginTop: insets.top }}
       onScroll={web ? undefined : event => setScrolled(event.nativeEvent.contentOffset.y > 6)} scrollEventThrottle={32}
-      contentContainerStyle={[s.content, !web && { paddingBottom: TAB_BAR_CLEARANCE + insets.bottom + 24 }, tab === 'vault' && page !== 'home' && !vaultSheet && { paddingTop: 56 }]}
+      contentContainerStyle={[s.content, !web && { paddingBottom: TAB_BAR_CLEARANCE + insets.bottom + 24 + keyboard.pad }, tab === 'vault' && page !== 'home' && !vaultSheet && { paddingTop: 56 }]}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets showsVerticalScrollIndicator={false}
       refreshControl={canRefresh && !web ? <RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={colors.mint}/> : undefined}
       accessibilityElementsHidden={anySheet} importantForAccessibility={anySheet ? 'no-hide-descendants' : 'auto'}>
-      {screenContent}
+      <FocusContext.Provider value={keyboard.focused}>{screenContent}</FocusContext.Provider>
     </ScrollView>
   </>;
   // What the welcome says, and only what is true of this device: how it is locked, and where

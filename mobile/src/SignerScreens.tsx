@@ -24,7 +24,17 @@ export function Note({ children, warning = false }: { children: React.ReactNode;
 }
 // Addresses, keys and fingerprints: centred, wrapping anywhere, to compare with the phone.
 export function Code({ children }: { children: string }) {
-  return <Text selectable style={{ color: colors.secondary, fontFamily: fonts.mono, fontSize: 10, lineHeight: 15, letterSpacing: .4, textAlign: 'center', marginTop: 8, ...(Platform.OS === 'web' ? { wordBreak: 'break-all' } as object : {}) }}>{children}</Text>;
+  const style = { color: colors.secondary, fontFamily: fonts.mono, fontSize: 10, lineHeight: 15, letterSpacing: .4, textAlign: 'center' as const };
+  if (Platform.OS === 'web' || children.length <= 24) {
+    return <Text selectable style={[style, { marginTop: 8 }, Platform.OS === 'web' ? { wordBreak: 'break-all' } as object : null]}>{children}</Text>;
+  }
+  // An address or a key, as two lines of equal length. Left to wrap, the device's own monospace
+  // font decides where: Android's is wider, and left a last couple of characters on a third line.
+  const middle = Math.ceil(children.length / 2);
+  return <View style={{ marginTop: 8, alignSelf: 'stretch' }}>
+    {[children.slice(0, middle), children.slice(middle)].map((line, index) =>
+      <Text key={index} selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={.7} style={style}>{line}</Text>)}
+  </View>;
 }
 
 function Glyph({ name, color = colors.text }: { name: 'close' | 'next' | 'check'; color?: string }) {
