@@ -2,16 +2,26 @@
 // recent iOS), with its own selection, accessibility and safe-area handling. The browser emulator
 // draws its own (Tabs.web.tsx).
 import React, { useState } from 'react';
-import { NativeSyntheticEvent } from 'react-native';
+import { ImageSourcePropType, NativeSyntheticEvent } from 'react-native';
 import { Tabs, TabSelectedEvent } from 'react-native-screens';
 import { colors } from '../theme';
 import { haptics } from './haptics';
 
 export type TabKey = 'wallet' | 'vault';
-const tabs: { key: TabKey; title: string; icon: string; selected: string }[] = [
-  { key: 'wallet', title: 'Wallet', icon: 'bitcoinsign.circle', selected: 'bitcoinsign.circle.fill' },
-  { key: 'vault', title: 'Vault', icon: 'lock.shield', selected: 'lock.shield.fill' },
+// iOS draws its icons from the system's symbols; Android's tab bar takes images, drawn by
+// scripts/make-tab-icons.swift.
+const tabs: { key: TabKey; title: string; icon: string; selected: string; image: ImageSourcePropType }[] = [
+  { key: 'wallet', title: 'Wallet', icon: 'bitcoinsign.circle', selected: 'bitcoinsign.circle.fill', image: require('../../assets/tab-wallet.png') },
+  { key: 'vault', title: 'Vault', icon: 'lock.shield', selected: 'lock.shield.fill', image: require('../../assets/tab-vault.png') },
 ];
+// Android's bar, in the app's colours instead of the system's light ones.
+const androidBar = {
+  tabBarBackgroundColor: colors.surface,
+  tabBarItemActiveIndicatorColor: 'rgba(255,255,255,.14)',
+  tabBarItemRippleColor: 'rgba(255,255,255,.10)',
+  normal: { tabBarItemTitleFontColor: colors.quiet, tabBarItemIconColor: colors.quiet },
+  selected: { tabBarItemTitleFontColor: colors.text, tabBarItemIconColor: colors.text },
+};
 
 // `children` is the selected tab's screen; the other tab holds nothing while it is away, so the
 // vault is never laid out behind the wallet. With `hidden` there is no bar, only the screen.
@@ -29,8 +39,9 @@ export function TabBar({ tab, onChange, hidden, children }: {
       if (nativeEvent.actionOrigin === 'user') haptics.select();
       if (selected !== tab) onChange(selected);
     }}>
-    {tabs.map(({ key, title, icon, selected }) => <Tabs.Screen key={key} screenKey={key} title={title} tabBarItemTestID={`tab-${key}`}
+    {tabs.map(({ key, title, icon, selected, image }) => <Tabs.Screen key={key} screenKey={key} title={title} tabBarItemTestID={`tab-${key}`}
       style={{ backgroundColor: colors.background }}
+      android={{ icon: { type: 'imageSource', imageSource: image }, standardAppearance: androidBar }}
       ios={{ icon: { type: 'sfSymbol', name: icon }, selectedIcon: { type: 'sfSymbol', name: selected }, overrideScrollViewContentInsetAdjustmentBehavior: false }}>
       {tab === key ? children : null}
     </Tabs.Screen>)}

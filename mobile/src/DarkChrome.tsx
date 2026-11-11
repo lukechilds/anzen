@@ -35,7 +35,7 @@ export function DarkBackground() {
   // scrollable area, and focusing a sheet's edge control would scroll the whole screen sideways.
   return <View pointerEvents="none" style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}>
     <Svg width={460} height={320} viewBox="0 0 460 320" style={{ position: 'absolute', top: -90, left: '50%', marginLeft: -230 }}>
-      <Defs><RadialGradient id="glow"><Stop offset="0" stopColor="white" stopOpacity={.045}/><Stop offset=".72" stopColor="white" stopOpacity={0}/></RadialGradient></Defs>
+      <Defs><RadialGradient id="glow"><Stop offset="0" stopColor="white" stopOpacity={.045}/><Stop offset="0.72" stopColor="white" stopOpacity={0}/></RadialGradient></Defs>
       <Rect width="460" height="320" fill="url(#glow)"/>
     </Svg>
     <View style={{ position: 'absolute', top: 70, left: '50%', marginLeft: -95, opacity: .05 }}>

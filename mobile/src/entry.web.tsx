@@ -77,10 +77,10 @@ function PhoneBody({ id, on, children }: { id: number; on: boolean; children: Re
       <Svg width="100%" height="100%">
         <Defs>
           <LinearGradient id={`phone-metal-${id}`} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#26262c"/><Stop offset=".5" stopColor="#17171b"/><Stop offset="1" stopColor="#0f0f12"/>
+            <Stop offset="0" stopColor="#26262c"/><Stop offset="0.5" stopColor="#17171b"/><Stop offset="1" stopColor="#0f0f12"/>
           </LinearGradient>
           <RadialGradient id={`phone-glare-${id}`} cx="22%" cy="6%" r="70%">
-            <Stop offset="0" stopColor="#fff" stopOpacity={.06}/><Stop offset=".6" stopColor="#fff" stopOpacity={0}/>
+            <Stop offset="0" stopColor="#fff" stopOpacity={.06}/><Stop offset="0.6" stopColor="#fff" stopOpacity={0}/>
           </RadialGradient>
         </Defs>
         <Rect width="100%" height="100%" fill={`url(#phone-metal-${id})`}/>

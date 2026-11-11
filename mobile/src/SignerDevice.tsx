@@ -31,8 +31,8 @@ export default function SignerDevice({ screen: render }: { screen: (width: numbe
       <View pointerEvents="none" style={{ position: 'absolute', filter: 'drop-shadow(0 30px 34px rgba(0,0,0,.55)) drop-shadow(0 8px 10px rgba(0,0,0,.4))' } as object}>
         <Svg width={w} height={h} viewBox={`0 0 ${GRID_W} ${GRID_H}`}>
           <Defs>
-            <LinearGradient id="metal" x1="0" y1="0" x2="1" y2="1"><Stop offset="0" stopColor="#24242a"/><Stop offset=".5" stopColor="#16161a"/><Stop offset="1" stopColor="#101013"/></LinearGradient>
-            <RadialGradient id="glare" cx="22%" cy="6%" r="70%"><Stop offset="0" stopColor="#fff" stopOpacity={.07}/><Stop offset=".6" stopColor="#fff" stopOpacity={0}/></RadialGradient>
+            <LinearGradient id="metal" x1="0" y1="0" x2="1" y2="1"><Stop offset="0" stopColor="#24242a"/><Stop offset="0.5" stopColor="#16161a"/><Stop offset="1" stopColor="#101013"/></LinearGradient>
+            <RadialGradient id="glare" cx="22%" cy="6%" r="70%"><Stop offset="0" stopColor="#fff" stopOpacity={.07}/><Stop offset="0.6" stopColor="#fff" stopOpacity={0}/></RadialGradient>
           </Defs>
           {/* Anodised body with a bright machined edge, then the glass. */}
           <Path d={BODY} fill="url(#metal)" stroke="rgba(255,255,255,.16)" strokeWidth={3}/>

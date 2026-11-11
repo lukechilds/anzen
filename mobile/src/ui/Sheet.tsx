@@ -2,10 +2,11 @@
 // it holds, with the system's grabber, dimming and swipe-to-dismiss. The browser emulator draws
 // its own (Sheet.web.tsx).
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { Keyboard, Platform, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { BackHandler, Keyboard, Platform, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 import { FocusContext } from './Text';
+import { colors } from '../theme';
 
 // The app's screen, and the sheets over it. Sheets are presented by the native stack they are
 // children of, so they are passed apart from what they cover.
@@ -67,10 +68,19 @@ export function Sheet({ children, onClose, label }: { children: React.ReactNode;
     ];
     return () => listeners.forEach(listener => listener.remove());
   }, []);
+  // Android's Back closes the sheet on top, as swiping it away does. (The newest listener is asked first.)
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const back = BackHandler.addEventListener('hardwareBackPress', () => { close.current(); return true; });
+    return () => back.remove();
+  }, []);
   // Moving to another input with the keyboard already up: there is no keyboard event to wait for.
   const focused = (input: TextInput) => { now.current.input = input; setTimeout(reveal, 60); };
   return <ScreenStackItem screenId={id} activityState={2} stackPresentation="formSheet" sheetAllowedDetents="fitToContents"
     sheetGrabberVisible sheetCornerRadius={38} headerConfig={{ hidden: true }} onDismissed={onClose}
+    // iOS gives a sheet its own material. Android gives it nothing, and what is behind shows through.
+    contentStyle={Platform.OS === 'android' ? { backgroundColor: colors.surface } : undefined}
     accessibilityLabel={label} accessibilityViewIsModal>
     <ScrollView ref={scroll} style={content ? { height: Math.min(content, tallest) } : undefined} onContentSizeChange={(_, tall) => setContent(Math.ceil(tall))}
       // iOS takes the covered part as an inset; Android has no such inset, so there it is padding.

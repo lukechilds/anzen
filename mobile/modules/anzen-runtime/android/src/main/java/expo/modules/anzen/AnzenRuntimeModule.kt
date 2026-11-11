@@ -3,6 +3,7 @@ package expo.modules.anzen
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
+import android.view.WindowManager
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
@@ -20,6 +21,14 @@ class AnzenRuntimeModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("AnzenRuntime")
+    // A wallet's screens stay out of the recent-apps picture, screenshots and screen recordings.
+    // Android takes that picture before the app hears it is leaving, so covering the screen from
+    // JavaScript (as on iOS) would come too late.
+    OnActivityEntersForeground {
+      appContext.currentActivity?.let { activity ->
+        activity.runOnUiThread { activity.window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE) }
+      }
+    }
     AsyncFunction("execute") { role: String, command: String, settings: String ->
       executeRequest(role, command, settings)
     }
