@@ -400,7 +400,10 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     } finally { setBusy(false); }
   }
   function cancelTap() {
-    if (tapReply.current) setRetained(tapReply.current);
+    // The signer has already approved: keep its answer to finish with. A sheet the request came
+    // from would cover the offer to finish and invite asking the signer again, so it closes; a
+    // full page (signer recovery) shows the offer at its head and stays.
+    if (tapReply.current) { setRetained(tapReply.current); if (vaultSheetLabels[page]) setPage('home'); }
     tapAbort.current?.abort(); link.current?.close(); link.current = null; tapMessage.current = null; tapReply.current = null;
     setTapState(null); setBusy(false);
   }
