@@ -97,7 +97,7 @@ test('Android tool resolution covers both ABIs and sets target-specific C/C++/li
         expect(build.env).toEqual({ [`CARGO_TARGET_${suffix.toUpperCase()}_LINKER`]: compiler,
           [`CC_${suffix}`]: compiler, [`CXX_${suffix}`]: `${compiler}++`, [`AR_${suffix}`]: join(fixture.bin, 'llvm-ar') });
       }
-      expect(androidLinkArgs).toEqual(['-Wl,-z,max-page-size=16384', '-Wl,-z,common-page-size=16384']);
+      expect(androidLinkArgs).toEqual(['-Wl,-z,max-page-size=16384', '-Wl,-z,common-page-size=16384', '-Wl,-soname,libanzen_mobile.so']);
     } finally { fixture.close(); }
   }
 });

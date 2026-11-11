@@ -5,6 +5,10 @@ const targets = require('../native-targets.json');
 const androidLinkArgs = [
   `-Wl,-z,max-page-size=${targets.android.pageSize}`,
   `-Wl,-z,common-page-size=${targets.android.pageSize}`,
+  // Named, so the JNI bridge that links against it asks the device for "libanzen_mobile.so".
+  // A library with no name is recorded by the path it was linked from, on the build machine,
+  // and the app then fails to start with that path "not found".
+  '-Wl,-soname,libanzen_mobile.so',
 ];
 
 // Resolve tools before rustup/downloads/builds. Do not guess a missing NDK, install
