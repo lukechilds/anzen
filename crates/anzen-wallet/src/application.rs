@@ -259,6 +259,20 @@ pub struct VaultSnapshot {
     pub recovered_wallet_available: bool,
 }
 
+/// A failure the app shows, in words a person can act on where the cause is one they can.
+///
+/// A transaction sent before its time lock opens comes back from the node as "non-BIP68-final"
+/// (a relative lock) or "non-final" (an absolute one). That is not a fault: it is too early.
+fn in_plain_words(error: anyhow::Error) -> anyhow::Error {
+    let said = format!("{error:#}");
+    if said.contains("non-BIP68-final") || said.contains("non-final") {
+        return anyhow::anyhow!(
+            "It’s too early for this. Bitcoin will only accept it once its waiting period has passed."
+        );
+    }
+    error
+}
+
 /// An address a person typed or pasted, for the network this wallet is on. What is wrong with it
 /// is said in words they can act on, not the parser's.
 fn typed_address(text: &str, network: bitcoin::Network) -> Result<Address> {
@@ -288,7 +302,16 @@ impl WalletApplication {
         &self.data_dir
     }
 
+    /// Carry out one request from the app. What goes wrong is worded for the person using it.
     pub fn execute(
+        &self,
+        request: WalletRequest,
+        backend: Option<&dyn HotWalletBackend>,
+    ) -> Result<serde_json::Value> {
+        self.dispatch(request, backend).map_err(in_plain_words)
+    }
+
+    fn dispatch(
         &self,
         request: WalletRequest,
         backend: Option<&dyn HotWalletBackend>,
@@ -891,6 +914,21 @@ impl WalletApplication {
 mod tests {
     use super::typed_address;
     use bitcoin::Network;
+
+    #[test]
+    fn a_transaction_sent_before_its_time_lock_opens_is_too_early_not_a_fault() {
+        let from_node = |reason: &str| {
+            anyhow::anyhow!("RPC error response: RpcError {{ code: -26, message: {reason:?} }}")
+                .context("failed to broadcast Authorization for allowance step 1")
+        };
+        for reason in ["non-BIP68-final", "non-final"] {
+            let said = super::in_plain_words(from_node(reason)).to_string();
+            assert!(said.starts_with("It’s too early for this."), "{said}");
+        }
+        // Anything else is passed on as it was.
+        let other = super::in_plain_words(from_node("insufficient fee"));
+        assert!(format!("{other:#}").contains("insufficient fee"));
+    }
 
     #[test]
     fn a_typed_address_that_cannot_be_used_says_why_in_plain_words() {
