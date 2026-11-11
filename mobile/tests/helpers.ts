@@ -3,8 +3,9 @@ import { expect, Locator, Page } from '@playwright/test';
 export async function closeVaultPanel(wallet: Locator) {
   const panel = wallet.getByRole('dialog');
   if (await panel.count()) {
-    const label = await panel.getAttribute('aria-label');
-    // A tap sheet closes itself once the exchange finishes.
+    // A tap sheet closes itself once the exchange finishes, which can be between seeing it and
+    // reading its label.
+    const label = await panel.getAttribute('aria-label', { timeout: 2_000 }).catch(() => 'Connect signer');
     if (label === 'Connect signer') { await expect(panel).toHaveCount(0); return; }
     await wallet.getByRole('button', { name: `Close ${label}`, exact: true }).click();
     await expect(panel).toHaveCount(0);
