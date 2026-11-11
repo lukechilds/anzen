@@ -16,7 +16,7 @@ assert(app.expo.plugins?.includes('./plugins/withAnzenRuntime'), 'Register the A
 const project = mkdtempSync(join(tmpdir(), 'anzen-native-config-'));
 console.log(`Native configuration check directory: ${project}`);
 for (const file of ['package.json', 'app.json', 'native-targets.json', 'index.ts']) copyFileSync(join(mobile, file), join(project, file));
-for (const directory of ['node_modules', 'plugins', 'modules']) symlinkSync(join(mobile, directory), join(project, directory), 'dir');
+for (const directory of ['node_modules', 'plugins', 'modules', 'assets']) symlinkSync(join(mobile, directory), join(project, directory), 'dir');
 const result = spawnSync(process.execPath, [join(mobile, 'node_modules/expo/bin/cli'), 'prebuild',
   '--platform', process.platform === 'darwin' ? 'all' : 'android', '--no-install',
   '--skip-dependency-update', 'react,react-native'], {

@@ -5,6 +5,7 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
+    "icon": "./assets/icon.png",
     "plugins": ["./plugins/withAnzenRuntime"],
     "ios": {
       "supportsTablet": false,
@@ -14,7 +15,11 @@
         "NSFaceIDUsageDescription": "Anzen uses Face ID to open your wallet, open your vault and approve payments."
       }
     },
-    "android": { "package": "com.anzen.wallet", "allowBackup": false },
+    "android": {
+      "package": "com.anzen.wallet",
+      "allowBackup": false,
+      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#060607" }
+    },
     "web": { "bundler": "metro" }
   }
 }
