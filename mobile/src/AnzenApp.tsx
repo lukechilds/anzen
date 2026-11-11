@@ -621,6 +621,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       {!identity ? <View style={[s.hero, { paddingTop: 260 }]}>
         {error ? <Button title="Try again" primary onPress={initialize} disabled={busy}/> : <Text style={s.tiny}>Creating your wallet…</Text>}
       </View> : <>
+        {/* A notice at the head of the screen starts below the buttons that float over its top corners. */}
+        {(incoming || (retained && inPrivate)) && <View style={{ height: 40 }}/>}
         {incoming && <View style={s.notice}><Text style={s.noticeText}>Incoming · {incoming.kind.replaceAll('-', ' ')}</Text><Button title="Open received message" onPress={importMessage} disabled={busy} /></View>}
         {retained && inPrivate && <View style={s.notice}><Text style={s.noticeText}>Approved on your signer · not finished yet</Text><Button title="Finish" onPress={() => void finishRetained()} disabled={busy} /></View>}
         {tab === 'wallet' ? <>
@@ -628,8 +630,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
             <SyncStatus error={liveError.wallet} behind={wallet?.behind_blocks} busy={busy} onSync={() => void syncWallet()}/>
             {wallet && wallet.pending_sats > 0 && <Text style={s.tiny}>{btc(wallet.pending_sats)} BTC awaiting confirmation</Text>}
             {wallet && wallet.immature_sats > 0 && <Text style={s.tiny}>{btc(wallet.immature_sats)} BTC in immature mining rewards</Text>}
-            <View style={s.actions}><ActionPill title="Send" label="↑ Send" icon="send" onPress={() => { setError(''); setNotice(''); setPage('send'); }} /><ActionPill title="Receive" label="↓ Receive" icon="receive" onPress={() => run({ method: 'receive_address' }, value => { setAddress(value.address); setPage('receive'); })} disabled={busy}/></View></View>
-            <WalletHistory items={wallet?.activity || []} loaded={Boolean(wallet)} onSelect={entry => { setSelectedActivity(entry); setPage('transaction'); }}/></>}
+            <View style={s.actions}><ActionPill title="Send" label="↑ Send" icon="send" onPress={() => { setError(''); setNotice(''); setPage('send'); }} disabled={busy}/><ActionPill title="Receive" label="↓ Receive" icon="receive" onPress={() => run({ method: 'receive_address' }, value => { setAddress(value.address); setPage('receive'); })} disabled={busy}/></View></View>
+            <WalletHistory items={wallet?.activity || []} loaded={Boolean(wallet)} onSelect={entry => { setError(''); setNotice(''); setSelectedActivity(entry); setPage('transaction'); }}/></>}
           {page === 'settings' && <><View style={s.hero}><Text style={s.eyebrow}>Settings</Text></View>
             {deviceSettings}
             {recoveryPhrase}

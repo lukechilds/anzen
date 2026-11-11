@@ -40,7 +40,8 @@ export function SelectRow<Key extends string>({ title, subtitle, options, select
       ActionSheetIOS.showActionSheetWithOptions({ title, options: [...labels, 'Cancel'], cancelButtonIndex: labels.length, userInterfaceStyle: 'dark' },
         index => { if (index < options.length) onSelect(options[index].key); });
     } else {
-      Alert.alert(title, undefined, [...options.map(option => ({ text: option.label, onPress: () => onSelect(option.key) })), { text: 'Cancel', style: 'cancel' as const }]);
+      // An Android alert holds three buttons at most: the choices take them, and tapping beside it cancels.
+      Alert.alert(title, undefined, options.slice(0, 3).map(option => ({ text: option.label, onPress: () => onSelect(option.key) })), { cancelable: true });
     }
   };
   return <>

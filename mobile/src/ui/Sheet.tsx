@@ -2,7 +2,7 @@
 // it holds, with the system's grabber, dimming and swipe-to-dismiss. The browser emulator draws
 // its own (Sheet.web.tsx).
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { Keyboard, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { Keyboard, Platform, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenStack, ScreenStackItem } from 'react-native-screens';
 import { FocusContext } from './Text';
@@ -57,7 +57,8 @@ export function Sheet({ children, onClose, label }: { children: React.ReactNode;
         // The room to scroll arrives with the next render.
         setTimeout(reveal, 30);
       })),
-      Keyboard.addListener('keyboardWillHide', () => {
+      // (Android tells of the keyboard only once it has gone.)
+      Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => {
         const { offset, frame, content: tall } = now.current;
         now.current.covered = 0; setCovered(0);
         // Nothing is left scrolled past its end once the room to scroll is gone.
@@ -72,10 +73,11 @@ export function Sheet({ children, onClose, label }: { children: React.ReactNode;
     sheetGrabberVisible sheetCornerRadius={38} headerConfig={{ hidden: true }} onDismissed={onClose}
     accessibilityLabel={label} accessibilityViewIsModal>
     <ScrollView ref={scroll} style={content ? { height: Math.min(content, tallest) } : undefined} onContentSizeChange={(_, tall) => setContent(Math.ceil(tall))}
+      // iOS takes the covered part as an inset; Android has no such inset, so there it is padding.
       scrollEnabled={content > tallest || covered > 0} contentInset={{ bottom: covered }} scrollIndicatorInsets={{ bottom: covered }}
       onScroll={event => { now.current.offset = event.nativeEvent.contentOffset.y; }} scrollEventThrottle={32}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive"
-      showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 22, paddingTop: PADDING, paddingBottom: 22 }}>
+      showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 22, paddingTop: PADDING, paddingBottom: 22 + (Platform.OS === 'ios' ? 0 : covered) }}>
       <View ref={inner} collapsable={false}><FocusContext.Provider value={focused}>{children}</FocusContext.Provider></View>
     </ScrollView>
   </ScreenStackItem>;

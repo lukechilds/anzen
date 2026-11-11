@@ -28,7 +28,7 @@ export const styles = StyleSheet.create({
   subtext: { color: colors.muted, fontSize: 13, lineHeight: 21, marginVertical: 12 },
   actions: { flexDirection: 'row', gap: 12, marginTop: 54, width: '100%' },
   button: { backgroundColor: 'rgba(255,255,255,.08)', borderRadius: 26, paddingHorizontal: 19, minHeight: 48, alignItems: 'center', justifyContent: 'center', marginVertical: 5, boxShadow: 'inset 0 1px 0 rgba(255,255,255,.16), 0 0 0 .5px rgba(255,255,255,.07)' },
-  buttonText: { color: colors.text, fontWeight: '500', fontSize: 13 },
+  buttonText: { color: colors.text, fontWeight: '500', fontSize: 13, textAlign: 'center' },
   primary: { backgroundColor: 'rgba(255,255,255,.14)' },
   primaryText: { color: colors.text },
   danger: {},
