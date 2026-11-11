@@ -203,6 +203,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const [notice, setNotice] = useState('');
   const privacyGeneration = useRef(0);
   const screenScroll = useRef<ScrollView>(null);
+  const signerScroll = useRef<ScrollView>(null);
   const insets = useInsets();
   const web = Platform.OS === 'web';
   // Pulling the wallet or the open vault down syncs it.
@@ -234,6 +235,14 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     setPage(next); setMoreMonthly(false); setError(''); setNotice(''); screenScroll.current?.scrollTo({ y: 0, animated: false });
   };
   useEffect(() => { if (cloudBackup) setBackupText(JSON.stringify(cloudBackup)); }, [cloudBackup]);
+  // A received message is offered at the head of the screen. It is usually imported from
+  // settings, further down: go back up to it, or nothing appears to have happened.
+  useEffect(() => {
+    if (!incoming) return;
+    setSignerSettings(false);
+    screenScroll.current?.scrollTo({ y: 0, animated: true });
+    signerScroll.current?.scrollTo({ y: 0, animated: true });
+  }, [incoming]);
   // Switching devices away mid-tap moves the phone away from its signer.
   useEffect(() => () => { tapAbort.current?.abort(); link.current?.close(); }, []);
 
@@ -486,6 +495,11 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       if (nextPage) setPage(nextPage);
     };
     const body = received.body;
+    // A file can be opened on the wrong device. Say so, instead of whatever the other device's
+    // handling would make of it.
+    if (signer !== signerBound.includes(received.kind)) {
+      throw new Error(signer ? 'This message is for your wallet. Open it on the phone that holds your wallet.' : 'This message is for your signer. Open it there.');
+    }
     const reviewWith = async (method: string, kind: ReviewKind, args: JsonObject, keep = false) => {
       const value = await call({ method, ...args });
       setReview(value); setReviewKind(kind); if (keep) setReviewMessage(body);
@@ -867,7 +881,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     const current = signerReview();
     return <SheetHost sheets={hostSheets}><View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom }}><SignerDevice screen={(_, height) => current
       ? <Pager key={review?.review_id ?? review?.request_id ?? reviewKind} review={current} busy={busy} inset={16}/>
-      : <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+      : <ScrollView ref={signerScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive" automaticallyAdjustKeyboardInsets
         contentContainerStyle={{ minHeight: height, justifyContent: 'center', padding: 18 }}>
         {signerIdle}
