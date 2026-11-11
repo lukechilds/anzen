@@ -259,6 +259,22 @@ pub struct VaultSnapshot {
     pub recovered_wallet_available: bool,
 }
 
+/// An address a person typed or pasted, for the network this wallet is on. What is wrong with it
+/// is said in words they can act on, not the parser's.
+fn typed_address(text: &str, network: bitcoin::Network) -> Result<Address> {
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("Enter a Bitcoin address.");
+    }
+    let Ok(address) = Address::from_str(text) else {
+        bail!("That isn’t a Bitcoin address. Check it and try again.");
+    };
+    let Ok(address) = address.require_network(network) else {
+        bail!("That address is for a different Bitcoin network.");
+    };
+    Ok(address)
+}
+
 impl WalletApplication {
     pub fn new(data_dir: PathBuf, allow_mainnet: bool) -> Self {
         Self {
@@ -679,7 +695,7 @@ impl WalletApplication {
     ) -> Result<SweepRequest> {
         self.check_backend(backend)?;
         self.configuration()?;
-        let destination = Address::from_str(destination)?.require_network(backend.network())?;
+        let destination = typed_address(destination, backend.network())?;
         super::create_cooperative_sweep(&self.data_dir, backend, &destination)
     }
 
@@ -700,7 +716,7 @@ impl WalletApplication {
         amount_sats: u64,
     ) -> Result<PaymentReview> {
         self.check_backend(backend)?;
-        let destination = Address::from_str(destination)?.require_network(backend.network())?;
+        let destination = typed_address(destination, backend.network())?;
         let mut wallet = HotWallet::open_or_create(&self.data_dir)?;
         backend.sync_hot_wallet(&mut wallet)?;
         let (psbt, fee_sats) = wallet.prepare_payment(destination.script_pubkey(), amount_sats)?;
@@ -768,7 +784,7 @@ impl WalletApplication {
         amount_sats: u64,
     ) -> Result<Txid> {
         self.check_backend(backend)?;
-        let address = Address::from_str(destination)?.require_network(backend.network())?;
+        let address = typed_address(destination, backend.network())?;
         if amount_sats == 0 {
             bail!("payment amount must be greater than zero");
         }
@@ -868,5 +884,28 @@ impl WalletApplication {
             bail!("chain backend does not match this phone's network");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::typed_address;
+    use bitcoin::Network;
+
+    #[test]
+    fn a_typed_address_that_cannot_be_used_says_why_in_plain_words() {
+        let mainnet = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+        let address = typed_address(&format!("  {mainnet}\n"), Network::Bitcoin).unwrap();
+        assert_eq!(address.to_string(), mainnet);
+        let why = |text: &str, network| typed_address(text, network).unwrap_err().to_string();
+        assert_eq!(why("  ", Network::Bitcoin), "Enter a Bitcoin address.");
+        assert_eq!(
+            why("notanaddress", Network::Bitcoin),
+            "That isn’t a Bitcoin address. Check it and try again."
+        );
+        assert_eq!(
+            why(mainnet, Network::Signet),
+            "That address is for a different Bitcoin network."
+        );
     }
 }
