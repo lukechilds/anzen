@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SavedMessages from './SavedMessages';
 import { parseEncryptedBackup } from './fileExchange';
-import { ActivityIndicator, AppState, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useInsets } from './ui/insets';
 import { Text, TextInput } from './ui/Text';
 import { Sheet, SheetHost } from './ui/Sheet';
@@ -613,6 +613,19 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const vaultSheetLabels: Record<string, string> = { lost: 'Lost a device', 'saved-messages': 'Saved messages', settings: 'Vault settings', policy: 'Vault policy', withdraw: 'Withdraw', monthly: 'Monthly allowance', emergency: 'Emergency access', deposit: 'Vault deposit', sweep: 'Move vault funds' };
   const vaultSheet = Boolean(identity && !signer && tab === 'vault' && vaultVisible && vaultSheetLabels[page]);
   const anySheet = walletSheet || vaultSheet || Boolean(tapState) || welcome;
+  // Android's Back steps out of where the person is (a screen within a tab, then the vault)
+  // before it leaves the app. Listening from the start, so a sheet, which listens later, is asked first.
+  const onBack = useRef<() => boolean>(() => false);
+  onBack.current = () => {
+    if (signer || !identity) return false;
+    if (page !== 'home') { go('home'); return true; }
+    if (tab === 'vault') { hideVault(); return true; }
+    return false;
+  };
+  useEffect(() => {
+    const back = BackHandler.addEventListener('hardwareBackPress', () => onBack.current());
+    return () => back.remove();
+  }, []);
   // What an action leads to (its result, an error, the next step) is shown at the foot of the
   // screen. On a long screen that is below the fold: bring it into view when it appears.
   useEffect(() => {
@@ -710,7 +723,7 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
           <Text style={s.heading}>Restore from cloud backup</Text>
           <Text style={s.tiny}>This phone’s identity · verify on the signer</Text><Text selectable style={s.mono}>{identity.vault_pubkey}</Text>
           <Text style={s.label}>Encrypted cloud backup JSON</Text>
-          <TextInput accessibilityLabel="Encrypted cloud backup JSON" multiline value={backupText} onChangeText={setBackupText} maxLength={8 * 1024 * 1024} autoCapitalize="none" autoCorrect={false} spellCheck={false} autoComplete="off" textAlignVertical="top" style={[s.input, { height: 90 }]} />
+          <TextInput accessibilityLabel="Encrypted cloud backup JSON" multiline value={backupText} onChangeText={setBackupText} maxLength={8 * 1024 * 1024} autoCapitalize="none" autoCorrect={false} spellCheck={false} autoComplete="off" textAlignVertical="top" scrollEnabled={false} style={[s.input, { height: 90 }]} />
           {!backupText && <Text style={s.tiny}>No cloud backup loaded.</Text>}
           <Button title="Request phone key recovery" disabled={busy || !backupText} onPress={requestRestore} />
           <Button title="Check restored key" disabled={busy} onPress={() => run({ method: 'restored_phone' }, setRestored)} />

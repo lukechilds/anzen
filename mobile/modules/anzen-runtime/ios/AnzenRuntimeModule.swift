@@ -18,6 +18,14 @@ public final class AnzenRuntimeModule: Module {
     // (`xcrun devicectl device process launch --console ...`), the app runs that benchmark once
     // the scene is up, prints the result on stdout and exits. Public inputs only, as below.
     OnCreate {
+      // Text cursors and selections are the app's mint. Each field asks for it too, but a field
+      // focused as its sheet arrives sometimes shows the system's blue: this is what it falls
+      // back to, and what the system's own prompts (a pairing code, say) use.
+      DispatchQueue.main.async {
+        let mint = UIColor(red: 167 / 255, green: 227 / 255, blue: 187 / 255, alpha: 1)
+        UITextField.appearance().tintColor = mint
+        UITextView.appearance().tintColor = mint
+      }
       let arguments = ProcessInfo.processInfo.arguments
       guard let at = arguments.firstIndex(of: "--anzen-benchmark"), at + 1 < arguments.count else { return }
       let request = arguments[at + 1]

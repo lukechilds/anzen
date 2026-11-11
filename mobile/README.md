@@ -343,9 +343,11 @@ Browser mainnet mode remains experimental and is not a production wallet.
 ## Native builds
 
 Native builds link `mobile/rust` directly; they do not call the playground HTTP server.
-Expo Go cannot contain this custom Rust library. These build entry points are implemented
-but **iOS/Android app builds have not yet been verified on this machine**: Xcode requires
-its license to be reviewed, and an Android SDK/NDK has not been installed.
+Expo Go cannot contain this custom Rust library. The iOS app runs on phones and in the
+simulator. The Android app builds and runs in an emulator (Android 16, arm64): its screens,
+sheets, keyboard, Back button, alerts and PIN unlock have been walked there, but it has not
+been on a physical Android phone, and it has no Bluetooth signer (a Ledger or Trezor is iOS
+only for now).
 
 After installing/reviewing the platform tools:
 
@@ -355,12 +357,21 @@ npm run build:rust:ios
 npm run ios
 ```
 
-Or, with `ANZEN_ANDROID_NDK` pointing to your installed NDK:
+Or, with a JDK 17, the Android SDK (platform 36, build-tools 36.0.0) and `ANZEN_ANDROID_NDK`
+pointing to your installed NDK:
 
 ```sh
 cd mobile
 npm run build:rust:android
 npm run android
+```
+
+A release build for an arm64 emulator or phone, without Metro:
+
+```sh
+npx expo prebuild -p android --no-install
+cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 The iOS script prepares ARM64 device and Apple Silicon simulator libraries. Android
@@ -391,6 +402,14 @@ the browser and the other for a device.
 | Feedback | Haptics for a sent payment, an approval, a failure, a tab change | None |
 | Safe areas, pull to refresh | From the device | Drawn status bar and home indicator |
 
+Android uses the same native layer with its own parts where the two systems differ: Material's
+bottom navigation and bottom sheets (given the app's colours and drawn tab icons, since Android
+has no system symbols), its alert in place of the action sheet, the device credential prompt for
+the owner check, and the Back button, which closes the sheet on top, then steps out of a screen,
+then out of the vault, before it leaves the app. Its windows are marked secure, which keeps the
+wallet out of the recent-apps picture, screenshots and screen recordings (Android takes that
+picture before the app can cover itself, as it does on iOS).
+
 The welcome sheet says only what is true of the device it is on. The emulator stands in for a
 phone whose keys are backed up across its owner's Apple devices, and says so. A real phone keeps
 its keys in its own keychain and nowhere else, so there the sheet says that, points to the
@@ -420,11 +439,8 @@ ABI/API settings, disabled automatic backup, iOS deployment target (on macOS), a
 module discovery. It does not overwrite the project's native directories, install SDKs or
 prove that the Rust bridge runs on a device.
 
-On this Mac, iOS verification has two current prerequisites: accepting Xcode's license, and
-using the Expo SDK 57 patches/scene support required by Xcode 27. npm's configured seven-day
-release-age policy currently prevents installing those recommended patches. It has not been
-disabled; the current dependency set remains installable. Android additionally needs a JDK,
-SDK and NDK. Native device support is not yet verified.
+Android needs a JDK, the SDK and the NDK. Nothing here installs them or accepts their licences
+as a side effect of a build.
 
 Native builds do not have the Bluetooth link yet, so the app falls
 back to exchanging JSON files:
