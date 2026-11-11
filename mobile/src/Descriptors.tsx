@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, View } from 'react-native';
+import { Text } from './ui/Text';
 import * as Clipboard from 'expo-clipboard';
 import { MenuRow } from './DarkSurfaces';
 import { JsonObject } from './transport';
@@ -43,7 +44,7 @@ function Descriptor({ label, text, multiple }: { label: string; text: string; mu
   return <View style={{ marginTop: 12 }}>
     {multiple && <Text style={s.label}>{label}</Text>}
     <Text selectable testID={`descriptor-${label.toLowerCase()}`} style={[s.mono, { color: colors.text }]}>{text}</Text>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Copy ${label.toLowerCase()} descriptor`} onPress={() => void copy()}
+    <Pressable accessibilityRole="button" accessibilityLabel={`Copy ${label.toLowerCase()} descriptor`} onPress={() => void copy()} hitSlop={10}
       style={({ pressed }) => ({ alignSelf: 'flex-start', marginTop: 8, paddingVertical: 6, opacity: pressed ? .6 : 1 })}>
       <Text style={{ color: colors.mint, fontSize: 12.5, fontWeight: '500' }}>{copied ? 'Copied' : 'Copy'}</Text>
     </Pressable>

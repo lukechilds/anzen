@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Pressable, View } from 'react-native';
+import { Text } from './ui/Text';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { create } from 'qrcode';
 import * as Clipboard from 'expo-clipboard';
 import { Icon } from './DarkChrome';
+import { haptics } from './ui/haptics';
 import { colors, fonts, glass, styles as s } from './theme';
 
 const QR_SIZE = 182;
@@ -52,11 +54,17 @@ export default function AddressCard({ address, vault = false }: { address: strin
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
   const qr = useQr(address);
+  // "Copied" is about a moment ago, not for as long as the sheet stays open.
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
   async function copy() {
     setError('');
     try {
       if (!await Clipboard.setStringAsync(address)) throw new Error('Clipboard access was not granted');
-      setCopied(true);
+      setCopied(true); haptics.success();
     } catch { setError('Could not copy. Select the address below to copy it manually.'); }
   }
   return <View style={{ alignItems: 'center' }}>

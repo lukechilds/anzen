@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Text } from './ui/Text';
 import { Deliver, DeviceTransport, ProtocolMessage } from './transport';
 import { colors, styles as s } from './theme';
 
@@ -49,7 +50,7 @@ export default function SavedMessages({ transport, deliver, open: start = false 
   </Pressable>;
   return <View testID="saved-messages">
     {/* A fallback for carrying messages as files, so it stays out of the way. */}
-    {!open ? <Pressable accessibilityRole="button" accessibilityLabel="Saved messages" disabled={busy} onPress={show} style={({ pressed }) => ({ alignSelf: 'center', paddingVertical: 10, marginTop: 18, opacity: busy ? .4 : pressed ? .6 : 1 })}>
+    {!open ? <Pressable accessibilityRole="button" accessibilityLabel="Saved messages" disabled={busy} onPress={show} hitSlop={8} style={({ pressed }) => ({ alignSelf: 'center', paddingVertical: 10, marginTop: 18, opacity: busy ? .4 : pressed ? .6 : 1 })}>
       <Text style={{ color: colors.faint, fontSize: 11.5 }}>Saved messages</Text>
     </Pressable> : <>
       {items.length === 0 && <Text style={[s.tiny, { textAlign: 'center', marginTop: 18 }]}>No saved messages.</Text>}

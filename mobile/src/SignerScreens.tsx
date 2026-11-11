@@ -1,6 +1,8 @@
 import React, { useRef, useState } from 'react';
-import { Animated, Easing, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { Animated, Easing, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Text } from './ui/Text';
 import Svg, { Path } from 'react-native-svg';
+import { haptics } from './ui/haptics';
 import { colors, fonts } from './theme';
 
 const native = Platform.OS !== 'web';
@@ -48,8 +50,9 @@ function HoldButton({ label, onConfirm, disabled }: { label: string; onConfirm: 
   const done = useRef(false);
   const start = () => {
     done.current = false;
+    haptics.press();
     Animated.timing(fill, { toValue: 1, duration: HOLD_MS, easing: Easing.linear, useNativeDriver: native }).start(({ finished }) => {
-      if (finished && !done.current) { done.current = true; onConfirm(); fill.setValue(0); }
+      if (finished && !done.current) { done.current = true; haptics.success(); onConfirm(); fill.setValue(0); }
     });
   };
   const stop = () => { if (!done.current) { fill.stopAnimation(); Animated.timing(fill, { toValue: 0, duration: 180, useNativeDriver: native }).start(); } };

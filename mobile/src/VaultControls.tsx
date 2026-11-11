@@ -1,5 +1,6 @@
-import React from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import React, { useRef } from 'react';
+import { Pressable, View } from 'react-native';
+import { Text, TextInput } from './ui/Text';
 import { MenuRow, OptionCard } from './DarkSurfaces';
 import { colors, fonts, formatBtc, glass, styles as s } from './theme';
 import { JsonObject } from './transport';
@@ -51,11 +52,13 @@ function Chips({ options, value, onChange }: { options: { label: string; value: 
 }
 
 function Amount({ label, value, onChange, size }: { label: string; value: string; onChange: (value: string) => void; size: number }) {
-  return <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'baseline', marginTop: 10 }}>
+  const input = useRef<React.ComponentRef<typeof TextInput>>(null);
+  // The number is only as wide as its digits: the whole line takes the tap.
+  return <Pressable accessible={false} onPress={() => input.current?.focus()} style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'baseline', marginTop: 10 }}>
     <Text style={{ color: colors.quiet, fontSize: size * .7, fontFamily: fonts.number, marginRight: 3 }}>₿</Text>
-    <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={colors.quiet} selectTextOnFocus
+    <TextInput ref={input} accessibilityLabel={label} value={value} onChangeText={onChange} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={colors.quiet} selectTextOnFocus
       style={{ width: Math.min(230, Math.max(1, (value || '0').length) * size * .6 + 6), textAlign: 'center', fontFamily: fonts.number, fontSize: size, fontWeight: '500', fontVariant: ['tabular-nums'], color: toSats(value) > 0 ? colors.text : colors.quiet, padding: 0 }}/>
-  </View>;
+  </Pressable>;
 }
 
 // The two numbers a policy sets, in bitcoin, with suggestions sized to the vault. The signer
@@ -83,7 +86,7 @@ export function PolicyEditor({ vault, monthly, setMonthly, emergency, setEmergen
         style={({ pressed }) => ({ height: 46, paddingHorizontal: 28, borderRadius: 23, justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.14)', boxShadow: glass, opacity: disabled ? .4 : 1, transform: [{ scale: pressed ? .96 : 1 }] })}>
         <Text style={{ color: colors.text, fontSize: 13.5, fontWeight: '500' }}>Continue on signer</Text>
       </Pressable>
-      {!!vault.schedule && <Pressable accessibilityRole="button" accessibilityLabel="Renew for another year" disabled={disabled} onPress={onRenew} style={({ pressed }) => ({ paddingVertical: 8, opacity: disabled ? .4 : pressed ? .6 : 1 })}>
+      {!!vault.schedule && <Pressable accessibilityRole="button" accessibilityLabel="Renew for another year" disabled={disabled} onPress={onRenew} hitSlop={8} style={({ pressed }) => ({ paddingVertical: 8, opacity: disabled ? .4 : pressed ? .6 : 1 })}>
         <Text style={{ color: colors.secondary, fontSize: 12.5 }}>Renew for another year</Text>
       </Pressable>}
     </View>

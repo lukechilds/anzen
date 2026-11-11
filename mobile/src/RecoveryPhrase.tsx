@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Text, TextInput, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { AppState, View } from 'react-native';
+import { Text, TextInput } from './ui/Text';
 import { Button } from './AnzenApp';
 import { MenuRow } from './DarkSurfaces';
 import { JsonObject } from './transport';
@@ -22,6 +23,11 @@ export default function RecoveryPhrase({ signer, network, hasKeys, canImport, bu
   const [importing, setImporting] = useState(false);
   const [typed, setTyped] = useState('');
   const keys = signer ? 'signer’s key' : 'wallet';
+  // The words leave the screen with the app, so they are not in the app switcher's picture of it.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => { if (state !== 'active') setWords(null); });
+    return () => subscription.remove();
+  }, []);
   const show = () => words ? setWords(null)
     : void secure(() => run({ method: 'recovery_phrase' }, value => setWords(String(value.words).split(' '))));
   const importPhrase = () => void run({ method: 'import_recovery_phrase', network, words: typed }, identity => {
@@ -48,7 +54,7 @@ export default function RecoveryPhrase({ signer, network, hasKeys, canImport, bu
         </Text>
         <Text style={s.label}>Recovery phrase words</Text>
         <TextInput accessibilityLabel="Recovery phrase words" style={[s.input, { minHeight: 96, textAlignVertical: 'top' }]} value={typed} onChangeText={setTyped}
-          multiline autoCapitalize="none" autoCorrect={false} autoComplete="off" spellCheck={false} placeholder="12 or 24 words, separated by spaces" placeholderTextColor={colors.faint}/>
+          multiline autoFocus autoCapitalize="none" autoCorrect={false} autoComplete="off" spellCheck={false} textContentType="none" keyboardType="ascii-capable" placeholder="12 or 24 words, separated by spaces" placeholderTextColor={colors.faint}/>
         <Button title="Import" primary disabled={busy || !typed.trim()} onPress={importPhrase}/>
       </View>}
     </View>
