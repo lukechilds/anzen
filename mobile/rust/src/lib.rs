@@ -126,10 +126,10 @@ pub fn execute(
                     WalletApplication::new(directory.clone(), settings.dangerously_enable_mainnet);
                 let request: WalletRequest = serde_json::from_str(command)?;
                 let backend = if request.requires_chain() {
-                    Some(connect(
-                        settings,
-                        app.public_identity()?.bitcoin_network()?,
-                    )?)
+                    Some(
+                        connect(settings, app.public_identity()?.bitcoin_network()?)
+                            .map_err(anzen_wallet::application::in_plain_words)?,
+                    )
                 } else {
                     None
                 };

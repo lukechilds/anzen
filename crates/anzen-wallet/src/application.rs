@@ -260,14 +260,22 @@ pub struct VaultSnapshot {
 }
 
 /// A failure the app shows, in words a person can act on where the cause is one they can.
+/// Public for what fails before a request reaches `execute`, such as connecting to the chain.
 ///
 /// A transaction sent before its time lock opens comes back from the node as "non-BIP68-final"
 /// (a relative lock) or "non-final" (an absolute one). That is not a fault: it is too early.
-fn in_plain_words(error: anyhow::Error) -> anyhow::Error {
+pub fn in_plain_words(error: anyhow::Error) -> anyhow::Error {
     let said = format!("{error:#}");
     if said.contains("non-BIP68-final") || said.contains("non-final") {
         return anyhow::anyhow!(
             "It’s too early for this. Bitcoin will only accept it once its waiting period has passed."
+        );
+    }
+    // A regtest node that is not there, or not at the address in settings. (Electrum's failures
+    // name the servers tried, and are left as they are.)
+    if said.contains("Bitcoin Core") && said.contains("transport error") {
+        return anyhow::anyhow!(
+            "Can’t reach your Bitcoin Core node. Check it’s running, and its address in Settings."
         );
     }
     error
@@ -925,6 +933,15 @@ mod tests {
             let said = super::in_plain_words(from_node(reason)).to_string();
             assert!(said.starts_with("It’s too early for this."), "{said}");
         }
+        // A node that cannot be reached at all is said to be that.
+        let unreachable = super::in_plain_words(anyhow::anyhow!(
+            "Bitcoin Core getblockchaininfo failed: JSON-RPC error: transport error: Couldn't connect to host: Connection refused (os error 61)"
+        ));
+        assert!(
+            unreachable
+                .to_string()
+                .starts_with("Can’t reach your Bitcoin Core node.")
+        );
         // Anything else is passed on as it was.
         let other = super::in_plain_words(from_node("insufficient fee"));
         assert!(format!("{other:#}").contains("insufficient fee"));
