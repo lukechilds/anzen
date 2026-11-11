@@ -68,7 +68,12 @@ export function PolicyEditor({ vault, monthly, setMonthly, emergency, setEmergen
   disabled: boolean; onPropose: () => void; onRenew: () => void;
 }) {
   const balance = vault.balance_sats, perMonth = toSats(monthly), reserve = toSats(emergency);
-  const months = perMonth > 0 ? Math.floor(Math.max(0, balance - (reserve || 0)) / perMonth) : 12;
+  // An estimate, for the warning below; the signer shows the count Rust works out. Each month
+  // also carries a small fee and the policy keeps a little back, so a balance that divides
+  // exactly funds one month fewer than plain division says. Allowing for that keeps the phone
+  // from promising a month the signer then takes away.
+  const FEES_PER_MONTH = 1_000, KEPT_BACK = 10_000;
+  const months = perMonth > 0 ? Math.floor(Math.max(0, balance - (reserve || 0) - KEPT_BACK) / (perMonth + FEES_PER_MONTH)) : 12;
   const share = (fraction: number) => ({ label: `₿${formatBtc(Math.floor(balance * fraction / 10_000) * 10_000)}`, value: choice(balance * fraction) });
   return <View style={{ marginTop: 22 }}>
     <Text style={[s.tiny, { textAlign: 'center' }]}>Monthly allowance</Text>
@@ -80,7 +85,7 @@ export function PolicyEditor({ vault, monthly, setMonthly, emergency, setEmergen
     <Amount label="Emergency access in BTC" value={emergency} onChange={setEmergency} size={24}/>
     <Text style={[s.tiny, { textAlign: 'center', color: colors.quiet, marginTop: 4 }]}>{reserve > 0 ? 'Phone only, after a one-week delay' : 'Off'}</Text>
     {balance > 0 && <Chips options={[{ label: 'Off', value: '0' }, share(.1), share(.25)]} value={emergency} onChange={setEmergency}/>}
-    {perMonth > 0 && months < 12 && <Text style={[s.errorText, { textAlign: 'center', marginTop: 16 }]}>Your vault covers {months} of 12 months at this amount.</Text>}
+    {perMonth > 0 && months < 12 && <Text style={[s.errorText, { textAlign: 'center', marginTop: 16 }]}>Your vault covers about {months} of 12 months at this amount.</Text>}
     <View style={{ alignItems: 'center', gap: 10, marginTop: 26 }}>
       <Pressable accessibilityRole="button" accessibilityLabel="Continue on signer" disabled={disabled} onPress={onPropose}
         style={({ pressed }) => ({ height: 46, paddingHorizontal: 28, borderRadius: 23, justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.14)', boxShadow: glass, opacity: disabled ? .4 : 1, transform: [{ scale: pressed ? .96 : 1 }] })}>
