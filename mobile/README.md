@@ -391,6 +391,15 @@ the browser and the other for a device.
 | Feedback | Haptics for a sent payment, an approval, a failure, a tab change | None |
 | Safe areas, pull to refresh | From the device | Drawn status bar and home indicator |
 
+The welcome sheet says only what is true of the device it is on. The emulator stands in for a
+phone whose keys are backed up across its owner's Apple devices, and says so. A real phone keeps
+its keys in its own keychain and nowhere else, so there the sheet says that, points to the
+recovery phrase in Settings, and names the lock the owner has actually set up (Face ID, Touch ID,
+the passcode, or none).
+
+The app icon is the mark the screens show behind the balance, drawn by
+`scripts/make-icon.swift` into `assets/`.
+
 Text follows the person's text-size setting up to 1.3×, the largest the fixed layouts hold.
 The app asks for Face ID when it opens, when the vault opens and before money moves; that check
 guards what the app shows and starts, and is separate from how Rust and the keychain protect keys.

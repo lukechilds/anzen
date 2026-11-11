@@ -10,7 +10,7 @@ import { PasteButton } from './ui/PasteButton';
 import { haptics } from './ui/haptics';
 import { authenticationName } from './ui/authenticate';
 import Svg, { Path } from 'react-native-svg';
-import { DarkBackground, DarkEffects, DeviceStatus, Icon, TopFade } from './DarkChrome';
+import { DarkBackground, DarkEffects, DeviceStatus, Icon, IconName, TopFade } from './DarkChrome';
 import { ActionPill, Activity, IconButton, MenuRow, WalletHistory } from './DarkSurfaces';
 import AddressCard, { AddressLines } from './AddressCard';
 import VaultSummary from './VaultSummary';
@@ -50,6 +50,9 @@ type Props = {
   deviceSettings?: React.ReactNode;
   // Sheets of the surrounding app's own, presented with this one's.
   sheets?: React.ReactNode;
+  // The wallet's keys are backed up for its owner beyond this device (the emulator's stand-in for
+  // the owner's Apple devices). Without it they are only on this phone, and the app says so.
+  keysBackedUp?: boolean;
 };
 type Kind = ProtocolMessage['kind'];
 type ReviewKind = 'policy' | 'sweep' | 'backup' | 'offline-action' | 'restore' | 'rotation' | 'rotation-adoption' | 'share-vault';
@@ -122,7 +125,7 @@ function Field({ label, value, onChange, numeric = false }: { label: string; val
     returnKeyType="done" clearButtonMode="while-editing" /></>;
 }
 
-export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark, deviceSettings, sheets: hostSheets, signerKeepsNoBackup = false }: Props) {
+export default function AnzenApp({ transport, incoming, dismissIncoming, deliver, tap, saveBackup, cloudBackup, authenticate: deviceAuthenticate, network = 'regtest', benchmark, deviceSettings, sheets: hostSheets, keysBackedUp = false, signerKeepsNoBackup = false }: Props) {
   const signer = transport.role === 'signer';
   const [identity, setIdentity] = useState<JsonObject | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -610,6 +613,13 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
   const vaultSheetLabels: Record<string, string> = { lost: 'Lost a device', 'saved-messages': 'Saved messages', settings: 'Vault settings', policy: 'Vault policy', withdraw: 'Withdraw', monthly: 'Monthly allowance', emergency: 'Emergency access', deposit: 'Vault deposit', sweep: 'Move vault funds' };
   const vaultSheet = Boolean(identity && !signer && tab === 'vault' && vaultVisible && vaultSheetLabels[page]);
   const anySheet = walletSheet || vaultSheet || Boolean(tapState) || welcome;
+  // What an action leads to (its result, an error, the next step) is shown at the foot of the
+  // screen. On a long screen that is below the fold: bring it into view when it appears.
+  useEffect(() => {
+    if (signer || anySheet || !(outgoing || error || notice)) return;
+    const timer = setTimeout(() => screenScroll.current?.scrollToEnd({ animated: true }), 80);
+    return () => clearTimeout(timer);
+  }, [outgoing, error, notice]);
   const feedback = <>
     {(busy || !sessionLoaded) && <ActivityIndicator color={colors.mint} style={{ margin: 20 }} />}
     {!!notice && <View style={s.notice}><Text selectable style={s.noticeText}>{notice}</Text></View>}
@@ -880,6 +890,19 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
       {screenContent}
     </ScrollView>
   </>;
+  // What the welcome says, and only what is true of this device: how it is locked, and where
+  // nothing backs the keys up, that the recovery phrase is the way back.
+  const welcomeRows: [IconName, string, string][] = [
+    ownerCheck ? [ownerCheck === 'Face ID' ? 'face' : 'lock', `Protected by ${ownerCheck}`, 'Only you can open it.']
+      : ['lock', 'This phone has no lock', 'Anyone holding it can open your wallet. Set a passcode in the Settings app.'],
+    ...(keysBackedUp ? [
+      ['cloud', 'Backed up for you', 'Encrypted across your Apple devices. Nothing to write down.'],
+      ['phone', 'Lost your phone?', `Recover on a new iPhone with ${ownerCheck.startsWith('your') ? ownerCheck : `your ${ownerCheck}`}.`],
+    ] : [
+      ['phone', 'Kept on this phone', 'Your keys stay here. They aren’t backed up anywhere else.'],
+      ['key', 'Write down your recovery phrase', 'It’s in Settings, and it’s the only way back if you lose this phone.'],
+    ]) as [IconName, string, string][],
+  ];
   const sheets = <>
     {walletSheet && <Sheet label={page === 'receive' ? 'Receive bitcoin' : page === 'transaction' ? 'Transaction details' : 'Send bitcoin'} onClose={() => { setPage('home'); setError(''); }}>
       {page === 'receive' && <><Text style={s.sheetEyebrow}>Receive</Text><AddressCard address={address}/></>}
@@ -963,10 +986,8 @@ export default function AnzenApp({ transport, incoming, dismissIncoming, deliver
     {welcome && <Sheet label="Welcome" onClose={() => setWelcome(false)}>
       <Text style={[s.balance, { fontSize: 24, lineHeight: 30, textAlign: 'center', marginTop: 26 }]}>Your wallet is ready</Text>
       <View style={{ gap: 18, marginTop: 26, marginHorizontal: 6 }}>
-        {([['face', `Protected by ${ownerCheck}`, 'Only you can open it.'],
-          ['cloud', 'Backed up for you', 'Encrypted across your Apple devices. Nothing to write down.'],
-          ['phone', 'Lost your phone?', `Recover on a new iPhone with ${ownerCheck.startsWith('your') ? ownerCheck : `your ${ownerCheck}`}.`]] as const).map(([icon, title, detail]) =>
-          <View key={icon} style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
+        {welcomeRows.map(([icon, title, detail]) =>
+          <View key={title} style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
             <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.06)' }}><Icon name={icon} size={18}/></View>
             <View style={{ flex: 1 }}><Text style={{ color: colors.text, fontSize: 14, fontWeight: '500' }}>{title}</Text><Text style={[s.tiny, { color: colors.quiet, marginTop: 2 }]}>{detail}</Text></View>
           </View>)}

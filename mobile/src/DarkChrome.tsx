@@ -4,7 +4,7 @@ import { Text } from './ui/Text';
 import Svg, { Circle, Defs, FeTurbulence, Filter, LinearGradient, Path, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { colors } from './theme';
 
-export type IconName = 'wallet' | 'vault' | 'vaultFine' | 'send' | 'receive' | 'refresh' | 'close' | 'settings' | 'chevron' | 'clock' | 'key' | 'phone' | 'copy' | 'scan' | 'face' | 'cloud';
+export type IconName = 'wallet' | 'vault' | 'vaultFine' | 'send' | 'receive' | 'refresh' | 'close' | 'settings' | 'chevron' | 'clock' | 'key' | 'phone' | 'copy' | 'scan' | 'face' | 'cloud' | 'lock';
 // The app's glyphs. Stroke widths follow it: 2 for most icons, 2.2 for the send and
 // receive arrows on pills, finer strokes inside the wallet and vault marks.
 export function Icon({ name, size = 18, color = 'rgba(255,255,255,.68)', strokeWidth = 2 }: { name: IconName; size?: number; color?: string; strokeWidth?: number }) {
@@ -23,6 +23,7 @@ export function Icon({ name, size = 18, color = 'rgba(255,255,255,.68)', strokeW
     {name === 'phone' && <><Rect x="5" y="2" width="14" height="20" rx="3"/><Path d="M12 18h.01"/></>}
     {name === 'copy' && <><Rect x="9" y="9" width="11" height="11" rx="2.5"/><Path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></>}
     {name === 'face' && <><Path d="M4 8V6.5A2.5 2.5 0 0 1 6.5 4H8M16 4h1.5A2.5 2.5 0 0 1 20 6.5V8M20 16v1.5a2.5 2.5 0 0 1-2.5 2.5H16M8 20H6.5A2.5 2.5 0 0 1 4 17.5V16"/><Path d="M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.5 15.5a3.5 3.5 0 0 0 5 0"/></>}
+    {name === 'lock' && <><Rect x="5" y="11" width="14" height="10" rx="2.5"/><Path d="M8 11V8a4 4 0 0 1 8 0v3"/></>}
     {name === 'cloud' && <Path d="M7.5 18.5h9.5a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7 9.6a4.5 4.5 0 0 0 .5 8.9z"/>}
     {name === 'scan' && <Path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/>}
     {name === 'settings' && <><Circle cx="12" cy="12" r="3"/><Path d="m9 3-.5 2-2 1-2-.5-2 3 1.5 1.5v3L2.5 15l2 3 2-.5 2 1 .5 2h4l.5-2 2-1 2 .5 2-3-1.5-1.5v-3L21 9l-2-3-2 .5-2-1-.5-2z"/></>}

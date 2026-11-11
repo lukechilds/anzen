@@ -12,8 +12,12 @@ export async function authenticate(): Promise<boolean> {
   return result.success;
 }
 
-// What the device's check is called, for the app's words about it.
+// What the device's check is called, for the app's words about it: what its owner has actually set
+// up, not what the hardware could do. Empty where the phone has no lock at all.
 export async function authenticationName(): Promise<string> {
+  const level = await LocalAuthentication.getEnrolledLevelAsync();
+  if (level === LocalAuthentication.SecurityLevel.NONE) return '';
+  if (level === LocalAuthentication.SecurityLevel.SECRET) return 'your passcode';
   const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
   if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) return 'Face ID';
   if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) return 'Touch ID';

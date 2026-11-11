@@ -343,7 +343,7 @@ export default function Playground() {
           <PhoneBody id={index} on={transport.role !== 'signer'}>
             {switchingIndex === index ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Text style={s.tiny}>Opening…</Text></View> : <AnzenApp key={deviceIds[index] || transport.role} transport={transport} network={network!} incoming={inboxes[index]} dismissIncoming={() => setInboxes(current => current.map((item, i) => i === index ? null : item))}
               saveBackup={index === 0 ? saveBackup : undefined} cloudBackup={index === 0 ? cloudBackup : null}
-              tap={link} deliver={message => deliverFrom(index, message)} benchmark={index === 0 ? browserBenchmark : undefined} />}
+              tap={link} deliver={message => deliverFrom(index, message)} benchmark={index === 0 ? browserBenchmark : undefined} keysBackedUp />}
           </PhoneBody>
         </View>)}
       </View>}
